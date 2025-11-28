@@ -18,6 +18,11 @@ interface GlyphBundleInfo {
   locations: string[];
 }
 
+interface BackgroundInteractionConfig {
+  enabled: boolean;
+  toggleKey: string;
+}
+
 // Folder-based organization
 interface GlyphFolder {
   id: string;
@@ -91,6 +96,10 @@ interface LoomAPI {
   mouseEnterUI: () => void;
   mouseLeaveUI: () => void;
   
+  getBackgroundInteraction?: () => Promise<BackgroundInteractionConfig>;
+  toggleBackgroundInteraction?: (reason?: string) => Promise<BackgroundInteractionConfig>;
+  onBackgroundInteractionUpdate?: (callback: (state: BackgroundInteractionConfig) => void) => () => void;
+
   // Background window mouse capture (for interactive glyphs)
   backgroundMouseEnter: () => void;
   backgroundMouseLeave: () => void;

@@ -72,7 +72,253 @@ let overlayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let interactionEnabled = false;
 
+interface BackgroundInteractionConfig {
+  enabled: boolean;
+  toggleKey: string;
+}
+
+interface LoomSettings {
+  backgroundInteraction?: Partial<BackgroundInteractionConfig>;
+}
+
+const settingsPath = path.join(app.getPath('userData'), 'loom-settings.json');
+const DEFAULT_BACKGROUND_INTERACTION: BackgroundInteractionConfig = {
+  enabled: false,
+  toggleKey: '`',
+};
+const BACKGROUND_TOGGLE_DEBOUNCE_MS = 250;
+
+let settingsCache: LoomSettings | null = null;
+let backgroundInteractionState: BackgroundInteractionConfig = DEFAULT_BACKGROUND_INTERACTION;
+let lastBackgroundToggleTs = 0;
+let registeredBackgroundAccelerator: string | null = null;
+let backgroundReadyForAttach = false;
+let wallpaperAttached = false;
+let backgroundMouseCaptured = false;
+let backgroundMouseLeaveTimer: ReturnType<typeof setTimeout> | null = null;
+const MOUSE_LEAVE_DEBOUNCE_MS = 150;
+let backgroundDisplayId: string | null = null;
+let backgroundDisplayBounds: Electron.Rectangle | null = null;
+
 const log = (...args: any[]) => console.log('[LOOM]', ...args);
+
+function readSettingsFromDisk(): LoomSettings {
+  try {
+    if (!fs.existsSync(settingsPath)) {
+      return {};
+    }
+    const raw = fs.readFileSync(settingsPath, 'utf-8');
+    if (!raw.trim()) return {};
+    return JSON.parse(raw);
+  } catch (error) {
+    log('⚠️ Failed to read settings file:', error);
+    return {};
+  }
+}
+
+function getSettings(): LoomSettings {
+  if (!settingsCache) {
+    settingsCache = readSettingsFromDisk();
+  }
+  return settingsCache;
+}
+
+function persistSettings(next: LoomSettings) {
+  try {
+    ensureDirectoryExists(path.dirname(settingsPath));
+    fs.writeFileSync(settingsPath, JSON.stringify(next, null, 2));
+    settingsCache = next;
+  } catch (error) {
+    log('⚠️ Failed to write settings file:', error);
+  }
+}
+
+function updateSettings(patch: Partial<LoomSettings>): LoomSettings {
+  const updated = { ...getSettings(), ...patch };
+  persistSettings(updated);
+  return updated;
+}
+
+function normalizeBackgroundInteractionConfig(raw?: Partial<BackgroundInteractionConfig>): BackgroundInteractionConfig {
+  return {
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : DEFAULT_BACKGROUND_INTERACTION.enabled,
+    toggleKey:
+      typeof raw?.toggleKey === 'string' && raw.toggleKey.trim().length > 0
+        ? raw.toggleKey.trim()
+        : DEFAULT_BACKGROUND_INTERACTION.toggleKey,
+  };
+}
+
+backgroundInteractionState = normalizeBackgroundInteractionConfig(getSettings().backgroundInteraction);
+
+function keyToAccelerator(rawKey?: string | null): string | null {
+  const normalized = (rawKey || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const alias: Record<string, string> = {
+    '`': '`',
+    backquote: '`',
+    tilde: '`',
+  };
+  if (alias[normalized]) return alias[normalized];
+  if (normalized.length === 1 && /[a-z]/.test(normalized)) {
+    return normalized.toUpperCase();
+  }
+  return rawKey || null;
+}
+
+function refreshBackgroundShortcutBinding() {
+  if (!app || !app.isReady()) return;
+  if (!globalShortcut) return;
+  if (registeredBackgroundAccelerator) {
+    globalShortcut.unregister(registeredBackgroundAccelerator);
+    registeredBackgroundAccelerator = null;
+  }
+  const accelerator = keyToAccelerator(backgroundInteractionState.toggleKey);
+  if (!accelerator) return;
+  try {
+    const success = globalShortcut.register(accelerator, () => {
+      log('[BackgroundInteraction] global shortcut pressed');
+      toggleBackgroundInteraction({ reason: 'global-shortcut' });
+    });
+    if (success) {
+      registeredBackgroundAccelerator = accelerator;
+      log('[BackgroundInteraction] shortcut registered', accelerator);
+    } else {
+      log('⚠️ Failed to register background interaction shortcut', accelerator);
+    }
+  } catch (error) {
+    log('⚠️ Error registering background shortcut', { accelerator, error });
+  }
+}
+
+function attachBackgroundToDesktop({ force = false }: { force?: boolean } = {}) {
+  if (process.platform !== 'win32') return;
+  if (!backgroundReadyForAttach) return;
+  if (!backgroundWindow || backgroundWindow.isDestroyed()) return;
+  if (wallpaperAttached && !force) return;
+
+  if (wallpaperAttached) {
+    detachBackgroundFromDesktop();
+  }
+
+  try {
+    attach(backgroundWindow, {
+      transparent: true,
+      forwardKeyboardInput: backgroundInteractionState.enabled,
+      forwardMouseInput: backgroundInteractionState.enabled,
+    });
+    wallpaperAttached = true;
+    const targetBounds =
+      backgroundDisplayBounds || screen.getPrimaryDisplay().bounds || { x: 0, y: 0, width: 800, height: 600 };
+    const targetDisplayId =
+      backgroundDisplayId || String(screen.getPrimaryDisplay()?.id ?? 'primary');
+    applyBounds(backgroundWindow, targetDisplayId, targetBounds);
+    setTimeout(() => {
+      if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+        applyBounds(backgroundWindow, targetDisplayId, targetBounds);
+      }
+    }, 50);
+    log('🔮 BACKGROUND ATTACHED AS WALLPAPER', {
+      interactive: backgroundInteractionState.enabled,
+      displayId: targetDisplayId,
+      bounds: targetBounds,
+    });
+  } catch (error) {
+    log('attach-error', error);
+  }
+}
+
+function detachBackgroundFromDesktop() {
+  if (process.platform !== 'win32') return;
+  if (!backgroundWindow || backgroundWindow.isDestroyed()) return;
+  if (!wallpaperAttached) return;
+  try {
+    detach(backgroundWindow);
+  } catch (error) {
+    log('detach-error', error);
+  } finally {
+    wallpaperAttached = false;
+  }
+}
+
+function broadcastBackgroundInteractionState() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('background-interaction-update', backgroundInteractionState);
+  }
+  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+    backgroundWindow.webContents.send('background-interaction-update', backgroundInteractionState);
+  }
+}
+
+function applyBackgroundInteractionState({ reason }: { reason?: string } = {}) {
+  const enabled = backgroundInteractionState.enabled;
+  log('[BackgroundInteraction] apply', { enabled, reason });
+
+  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+    try {
+      if (enabled) {
+        backgroundWindow.setIgnoreMouseEvents(false);
+        if (typeof backgroundWindow.setFocusable === 'function') {
+          backgroundWindow.setFocusable(true);
+        }
+        backgroundWindow.webContents.focus();
+      } else {
+        backgroundWindow.setIgnoreMouseEvents(true, { forward: true });
+        if (typeof backgroundWindow.setFocusable === 'function') {
+          backgroundWindow.setFocusable(false);
+        }
+        if (backgroundWindow.isFocused()) {
+          backgroundWindow.blur();
+        }
+      }
+    } catch (error) {
+      log('⚠️ Failed to apply background interaction state', error);
+    }
+
+    attachBackgroundToDesktop({ force: true });
+  }
+
+  if (backgroundMouseLeaveTimer) {
+    clearTimeout(backgroundMouseLeaveTimer);
+    backgroundMouseLeaveTimer = null;
+  }
+  backgroundMouseCaptured = enabled;
+
+  broadcastBackgroundInteractionState();
+}
+
+function setBackgroundInteractionConfig(
+  next: BackgroundInteractionConfig,
+  { reason }: { reason?: string } = {}
+) {
+  backgroundInteractionState = next;
+  updateSettings({ backgroundInteraction: next });
+  applyBackgroundInteractionState({ reason });
+  refreshBackgroundShortcutBinding();
+  return backgroundInteractionState;
+}
+
+function updateBackgroundInteractionConfig(
+  patch: Partial<BackgroundInteractionConfig>,
+  { reason }: { reason?: string } = {}
+) {
+  const next = normalizeBackgroundInteractionConfig({ ...backgroundInteractionState, ...patch });
+  return setBackgroundInteractionConfig(next, { reason });
+}
+
+function setBackgroundInteractionEnabledFlag(enabled: boolean, { reason }: { reason?: string } = {}) {
+  return updateBackgroundInteractionConfig({ enabled }, { reason });
+}
+
+function toggleBackgroundInteraction({ reason }: { reason?: string } = {}) {
+  const now = Date.now();
+  if (now - lastBackgroundToggleTs < BACKGROUND_TOGGLE_DEBOUNCE_MS) {
+    log('[BackgroundInteraction] toggle ignored (debounce)', { reason });
+    return backgroundInteractionState;
+  }
+  lastBackgroundToggleTs = now;
+  return setBackgroundInteractionEnabledFlag(!backgroundInteractionState.enabled, { reason });
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // 🔧 DIAGNOSTIC IPC HANDLERS
@@ -1632,6 +1878,9 @@ function createBackgroundWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { bounds } = primaryDisplay;
   const displayId = String(primaryDisplay.id);
+  backgroundReadyForAttach = false;
+  backgroundDisplayId = displayId;
+  backgroundDisplayBounds = { ...bounds };
   
   log('creating-background-window', {
     displayId,
@@ -1666,8 +1915,7 @@ function createBackgroundWindow() {
 
   log('background-window-created', { id: backgroundWindow.id });
 
-  // Background is ALWAYS click-through
-  backgroundWindow.setIgnoreMouseEvents(true, { forward: true });
+  applyBackgroundInteractionState({ reason: 'background-window-created' });
 
   const isDev = !app.isPackaged;
   
@@ -1681,6 +1929,7 @@ function createBackgroundWindow() {
 
   backgroundWindow.once('ready-to-show', () => {
     if (!backgroundWindow) return;
+    backgroundReadyForAttach = true;
     
     log('background-ready-to-show', { bounds: backgroundWindow.getBounds() });
     log('background webContents id:', backgroundWindow.webContents.id);
@@ -1696,44 +1945,29 @@ function createBackgroundWindow() {
     applyBounds(backgroundWindow, displayId, bounds);
     backgroundWindow.showInactive();
 
-    if (process.platform === 'win32') {
-      try {
-        attach(backgroundWindow, {
-          transparent: true,
-          forwardKeyboardInput: false,
-          forwardMouseInput: false,
-        });
-        log('🔮 BACKGROUND ATTACHED AS WALLPAPER');
-        
-        setTimeout(() => {
-          if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-            applyBounds(backgroundWindow, displayId, bounds);
-          }
-        }, 100);
-      } catch (err) {
-        log('attach-error', err);
-      }
-    } else {
+    attachBackgroundToDesktop({ force: true });
+    if (process.platform !== 'win32') {
       log('🪄 BACKGROUND LAYERED (macOS/Linux mode)');
     }
+    applyBackgroundInteractionState({ reason: 'background-ready' });
   });
 
   screen.on('display-metrics-changed', () => {
     if (!backgroundWindow || backgroundWindow.isDestroyed()) return;
-    const newBounds = screen.getPrimaryDisplay().bounds;
+    const primary = screen.getPrimaryDisplay();
+    const newBounds = primary.bounds;
+    backgroundDisplayId = String(primary.id);
+    backgroundDisplayBounds = { ...newBounds };
     log('display-metrics-changed', { newBounds });
-    applyBounds(backgroundWindow, displayId, newBounds);
+    applyBounds(backgroundWindow, backgroundDisplayId || displayId, newBounds);
   });
 
   backgroundWindow.on('closed', () => {
-    if (backgroundWindow) {
-      try {
-        detach(backgroundWindow);
-      } catch (err) {
-        log('detach-error', err);
-      }
-    }
+    backgroundReadyForAttach = false;
+    detachBackgroundFromDesktop();
     backgroundWindow = null;
+    backgroundDisplayBounds = null;
+    backgroundDisplayId = null;
   });
 }
 
@@ -2329,6 +2563,23 @@ ipcMain.on('glyph-error', (event, data: { prompt: string; code: string; error: s
   log('❌ ═══════════════════════════════════════════════════════════');
 });
 
+ipcMain.handle('background-interaction:get', async () => {
+  log('[BackgroundInteraction] get-config', backgroundInteractionState);
+  return backgroundInteractionState;
+});
+
+ipcMain.handle('background-interaction:toggle', async (_event, payload: { reason?: string } = {}) => {
+  return toggleBackgroundInteraction({ reason: payload?.reason || 'ipc-request' });
+});
+
+ipcMain.on('background-interaction:debug', (_event, payload) => {
+  try {
+    log('[BackgroundInteraction] renderer-log', payload);
+  } catch (_) {
+    // renderer logging only
+  }
+});
+
 // Mouse capture for overlay UI hover
 ipcMain.on('overlay-mouse-enter', () => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
@@ -2348,11 +2599,22 @@ ipcMain.on('overlay-mouse-leave', () => {
 // 🎯 BACKGROUND WINDOW INTERACTIVE CAPTURE
 // When mouse enters an interactive glyph, capture mouse events so state.pointer works
 // When mouse leaves, restore click-through so desktop icons work
+// 
+// IMPORTANT: We debounce the mouse leave to prevent flickering caused by rapid
+// setIgnoreMouseEvents toggles on wallpaper-attached windows
 // ═══════════════════════════════════════════════════════════════════════════
 
-let backgroundMouseCaptured = false;
-
 ipcMain.on('background-mouse-enter', () => {
+  // Cancel any pending release
+  if (backgroundMouseLeaveTimer) {
+    clearTimeout(backgroundMouseLeaveTimer);
+    backgroundMouseLeaveTimer = null;
+  }
+
+  if (backgroundInteractionState.enabled) {
+    return;
+  }
+  
   if (backgroundWindow && !backgroundWindow.isDestroyed() && !backgroundMouseCaptured) {
     log('🎯 Background: Mouse entered interactive area - capturing mouse events');
     backgroundMouseCaptured = true;
@@ -2361,11 +2623,24 @@ ipcMain.on('background-mouse-enter', () => {
 });
 
 ipcMain.on('background-mouse-leave', () => {
-  if (backgroundWindow && !backgroundWindow.isDestroyed() && backgroundMouseCaptured) {
-    log('🎯 Background: Mouse left interactive area - restoring click-through');
-    backgroundMouseCaptured = false;
-    backgroundWindow.setIgnoreMouseEvents(true, { forward: true });
+  // Cancel any existing timer
+  if (backgroundMouseLeaveTimer) {
+    clearTimeout(backgroundMouseLeaveTimer);
   }
+
+  if (backgroundInteractionState.enabled) {
+    return;
+  }
+  
+  // Debounce the leave to prevent flickering from rapid enter/leave cycles
+  backgroundMouseLeaveTimer = setTimeout(() => {
+    backgroundMouseLeaveTimer = null;
+    if (backgroundWindow && !backgroundWindow.isDestroyed() && backgroundMouseCaptured) {
+      log('🎯 Background: Mouse left interactive area - restoring click-through');
+      backgroundMouseCaptured = false;
+      backgroundWindow.setIgnoreMouseEvents(true, { forward: true });
+    }
+  }, MOUSE_LEAVE_DEBOUNCE_MS);
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2753,6 +3028,8 @@ app.whenReady().then(() => {
   } else {
     log('❌ Failed to register Ctrl+Shift+C');
   }
+
+  refreshBackgroundShortcutBinding();
   
   // Create system tray
   createTray();
@@ -2782,23 +3059,11 @@ app.on('will-quit', () => {
 
 app.on('window-all-closed', () => {
   log('window-all-closed');
-  if (backgroundWindow) {
-    try {
-      detach(backgroundWindow);
-    } catch (err) {
-      log('detach-error-on-quit', err);
-    }
-  }
+  detachBackgroundFromDesktop();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
   log('before-quit');
-  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-    try {
-      detach(backgroundWindow);
-    } catch (err) {
-      log('detach-error-before-quit', err);
-    }
-  }
+  detachBackgroundFromDesktop();
 });

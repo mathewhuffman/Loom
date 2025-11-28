@@ -157,10 +157,13 @@ export default function GlyphIframe({
     ? undefined
     : "allow-scripts allow-pointer-lock allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-top-navigation allow-top-navigation-by-user-activation allow-presentation";
 
+  // Use a stable key based on glyphId and mode only - avoid code.length which causes unnecessary re-renders
+  const stableKey = `${glyphId || 'glyph'}-${iframeDoc.mode}`;
+
   return (
     <iframe
       ref={iframeRef}
-      key={`${glyphId || 'glyph'}-${iframeDoc.mode}-${code.length}`}
+      key={stableKey}
       srcDoc={iframeDoc.srcDoc}
       title={title || glyphId || 'glyph'}
       className={className}

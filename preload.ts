@@ -8,6 +8,11 @@ import { contextBridge, ipcRenderer } from 'electron';
 const params = new URLSearchParams(window.location.search);
 const layer = params.get('layer') || 'background';
 
+type BackgroundInteractionConfig = {
+  enabled: boolean;
+  toggleKey: string;
+};
+
 console.log(`🔮 Loom preload ready [${layer}]`);
 console.log('⌨️  Press Ctrl+Alt+S to toggle Summoner');
 console.log('⌨️  Press Ctrl+Alt+L to open Loom Panel');
@@ -196,6 +201,17 @@ contextBridge.exposeInMainWorld('loom', {
   
   mouseLeaveUI: () => {
     ipcRenderer.send('overlay-mouse-leave');
+  },
+
+  getBackgroundInteraction: () => ipcRenderer.invoke('background-interaction:get'),
+
+  toggleBackgroundInteraction: (reason?: string) =>
+    ipcRenderer.invoke('background-interaction:toggle', { reason: reason || 'renderer-request' }),
+
+  onBackgroundInteractionUpdate: (callback: (data: BackgroundInteractionConfig) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: BackgroundInteractionConfig) => callback(data);
+    ipcRenderer.on('background-interaction-update', listener);
+    return () => ipcRenderer.removeListener('background-interaction-update', listener);
   },
   
   // Background window mouse capture (for interactive glyphs)

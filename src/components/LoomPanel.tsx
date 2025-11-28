@@ -576,8 +576,7 @@ const styles: Record<string, LoomStyle> = {
   
   panel: {
     position: 'absolute',
-    background: 'linear-gradient(135deg, rgba(10, 10, 25, 0.95) 0%, rgba(15, 15, 35, 0.92) 100%)',
-    backdropFilter: 'blur(40px)',
+    background: 'linear-gradient(135deg, #0a0a19 0%, #0f0f23 100%)',
     borderRadius: '24px',
     border: '1px solid rgba(0, 255, 255, 0.15)',
     overflow: 'hidden',
@@ -585,6 +584,7 @@ const styles: Record<string, LoomStyle> = {
     flexDirection: 'column',
     transition: 'opacity 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.4s ease',
     animation: 'floatGlow 4s ease-in-out infinite',
+    boxShadow: '0 25px 80px rgba(0, 0, 0, 0.8), 0 0 60px rgba(0, 255, 255, 0.08)',
   },
   
   // Resize handles
