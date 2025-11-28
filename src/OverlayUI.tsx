@@ -27,6 +27,7 @@ interface WidgetGlyph {
   code: string;
   createdAt: number;
   layer: WidgetLayer; // New: which layer the widget is on
+  zIndex?: number;
 }
 
 interface SummonState {
@@ -65,9 +66,10 @@ interface WidgetContainerProps {
   onUpdate: (id: string, updates: Partial<WidgetGlyph>) => void;
   onRemove: (id: string) => void;
   onLayerToggle: (id: string) => void; // Toggle between foreground/background
+  onFocus: (id: string) => void;
 }
 
-function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetContainerProps) {
+function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }: WidgetContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [editMode, setEditMode] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -81,7 +83,8 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
   // Notify overlay that mouse is over interactive widget (disables click-through)
   const handleWidgetMouseEnter = useCallback(() => {
     window.loom?.mouseEnterUI();
-  }, []);
+    onFocus(widget.id);
+  }, [onFocus, widget.id]);
 
   const handleWidgetMouseLeave = useCallback(() => {
     window.loom?.mouseLeaveUI();
@@ -182,7 +185,7 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
   return (
     <div
       ref={containerRef}
-      onMouseDown={handleDragStart}
+      onMouseDownCapture={() => onFocus(widget.id)}
       onMouseEnter={handleWidgetMouseEnter}
       onMouseLeave={handleWidgetMouseLeave}
       className="ui-interactive"
@@ -196,7 +199,7 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
         borderRadius: '12px',
         overflow: 'visible',
         cursor: editMode ? (isDragging ? 'grabbing' : 'grab') : 'default',
-        zIndex: 1000,
+        zIndex: widget.zIndex ?? 1000,
       }}
     >
       {/* Main content container */}
@@ -207,10 +210,8 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
             height: '100%',
             borderRadius: '12px',
             overflow: 'hidden',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-            boxShadow: '0 4px 24px rgba(0, 0, 0, 0.5)',
-            background: '#050510',
-            pointerEvents: 'auto',
+            position: 'relative',
+            zIndex: 1,
           }}
         >
           <GlyphIframe
@@ -218,6 +219,7 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
             glyphId={widget.glyphId}
             glyphType="widget"
             title={widget.prompt}
+            allowPointerEvents={!editMode}
             allowExternalUrls={widget.code.includes('iframe') || widget.code.includes('src=')}
           />
         </div>
@@ -229,9 +231,29 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
           height: '100%',
           borderRadius: '12px',
           border: editMode ? '2px dashed rgba(180, 100, 255, 0.4)' : 'none',
-          background: 'transparent', // ← No pink, no ghost, just transparent
+          background: 'transparent',
           pointerEvents: 'auto',
+          position: 'relative',
+          zIndex: 1,
         }} />
+      )}
+
+      {editMode && (
+        <div
+          onMouseDown={handleDragStart}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            borderRadius: '12px',
+            cursor: isDragging ? 'grabbing' : 'grab',
+            pointerEvents: 'auto',
+            zIndex: 10,
+            background: 'transparent',
+          }}
+        />
       )}
 
       {/* Edit mode controls - layer toggle and close button */}
@@ -430,9 +452,31 @@ export default function OverlayUI() {
   const pendingRefinementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const awaitingCompileRef = useRef(false); // Track if we're waiting for background to compile
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Success timeout handle
-  const widgetSyncDebounceRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map()); // Debounce widget layer sync
+  const widgetSyncFrameRef = useRef<Map<string, number>>(new Map()); // Throttle widget sync to animation frames
+  const widgetSyncLatestRef = useRef<Map<string, WidgetGlyph>>(new Map()); // Track latest widget state per id for syncing
+  const zStackCounterRef = useRef(2000);
+  const [loomPanelZ, setLoomPanelZ] = useState(() => zStackCounterRef.current++);
   const summonBarRef = useRef<HTMLDivElement>(null); // Reference to summon bar for animation
   const editorOpenedForStreamRef = useRef(false); // Track if we've opened editor for current stream session
+  const bringLoomPanelToFront = useCallback(() => {
+    setLoomPanelZ(zStackCounterRef.current++);
+  }, []);
+
+  const bringWidgetToFront = useCallback((id: string) => {
+    const nextZ = zStackCounterRef.current++;
+    setWidgets(prev => prev.map(w => (w.id === id ? { ...w, zIndex: nextZ } : w)));
+  }, []);
+
+  useEffect(() => {
+    setWidgets(prev => prev.map(w => (w.zIndex !== undefined ? w : { ...w, zIndex: zStackCounterRef.current++ })));
+  }, []);
+
+  useEffect(() => {
+    if (showLoomPanel) {
+      bringLoomPanelToFront();
+    }
+  }, [showLoomPanel, bringLoomPanelToFront]);
+
 
   const clearPendingRefinementTimer = useCallback(() => {
     if (pendingRefinementTimerRef.current) {
@@ -803,6 +847,7 @@ export default function OverlayUI() {
           code: data.code,
           createdAt: Date.now(),
           layer: 'background', // Default: behind desktop icons
+          zIndex: zStackCounterRef.current++,
         };
         
         // Immediately sync to background window (since default layer is 'background')
@@ -924,6 +969,37 @@ export default function OverlayUI() {
   }, []);
 
   // Widget management
+  const queueWidgetLayerSync = useCallback((widget: WidgetGlyph) => {
+    if (!window.loom?.sendWidgetToLayer) return;
+
+    widgetSyncLatestRef.current.set(widget.id, widget);
+
+    if (widgetSyncFrameRef.current.has(widget.id)) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      widgetSyncFrameRef.current.delete(widget.id);
+      const latest = widgetSyncLatestRef.current.get(widget.id);
+      if (!latest) return;
+      widgetSyncLatestRef.current.delete(widget.id);
+
+      window.loom.sendWidgetToLayer(widget.id, {
+        id: latest.id,
+        glyphId: latest.glyphId,
+        x: latest.x,
+        y: latest.y,
+        width: latest.width,
+        height: latest.height,
+        prompt: latest.prompt,
+        code: latest.code,
+        layer: latest.layer,
+      });
+    });
+
+    widgetSyncFrameRef.current.set(widget.id, frameId);
+  }, []);
+
   const updateWidget = useCallback((id: string, updates: Partial<WidgetGlyph>) => {
     setWidgets(prev => {
       const updated = prev.map(w => {
@@ -931,38 +1007,24 @@ export default function OverlayUI() {
         const newWidget = { ...w, ...updates };
         
         // If this is a background widget and position/size changed, sync to background window
-        // DEBOUNCED to avoid spamming during drag/resize
         if (newWidget.layer === 'background' && 
             (updates.x !== undefined || updates.y !== undefined || 
              updates.width !== undefined || updates.height !== undefined)) {
-          // Clear any pending sync for this widget
-          const existingTimeout = widgetSyncDebounceRef.current.get(id);
-          if (existingTimeout) {
-            clearTimeout(existingTimeout);
-          }
-          
-          // Schedule debounced sync (100ms after last change)
-          const timeoutId = setTimeout(() => {
-            widgetSyncDebounceRef.current.delete(id);
-            window.loom?.sendWidgetToLayer?.(id, {
-              id: newWidget.id,
-              glyphId: newWidget.glyphId,
-              x: newWidget.x,
-              y: newWidget.y,
-              width: newWidget.width,
-              height: newWidget.height,
-              prompt: newWidget.prompt,
-              code: newWidget.code,
-              layer: newWidget.layer,
-            });
-          }, 100);
-          widgetSyncDebounceRef.current.set(id, timeoutId);
+          queueWidgetLayerSync(newWidget);
         }
         
         return newWidget;
       });
       return updated;
     });
+  }, [queueWidgetLayerSync]);
+
+  useEffect(() => {
+    return () => {
+      widgetSyncFrameRef.current.forEach((frameId) => cancelAnimationFrame(frameId));
+      widgetSyncFrameRef.current.clear();
+      widgetSyncLatestRef.current.clear();
+    };
   }, []);
 
   const removeWidget = useCallback((id: string) => {
@@ -997,7 +1059,11 @@ export default function OverlayUI() {
         };
         window.loom?.sendWidgetToLayer?.(id, widgetData);
         
-        return { ...w, layer: newLayer };
+        return { 
+          ...w, 
+          layer: newLayer,
+          zIndex: newLayer === 'foreground' ? zStackCounterRef.current++ : w.zIndex,
+        };
       });
       return updated;
     });
@@ -1107,6 +1173,7 @@ export default function OverlayUI() {
           onUpdate={updateWidget}
           onRemove={removeWidget}
           onLayerToggle={toggleWidgetLayer}
+          onFocus={bringWidgetToFront}
         />
       ))}
 
@@ -1119,6 +1186,8 @@ export default function OverlayUI() {
           streamingCode={loomStreamingCode}
           isStreaming={loomIsStreaming}
           transitionFromSummonBar={loomTransition === 'morphing' || loomTransition === 'complete'}
+          zIndex={loomPanelZ}
+          onRequestFront={bringLoomPanelToFront}
         />
       )}
 

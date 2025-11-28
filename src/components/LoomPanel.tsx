@@ -23,6 +23,8 @@ interface LoomPanelProps {
   streamingCode?: string;
   isStreaming?: boolean;
   transitionFromSummonBar?: boolean; // For goopy morph animation
+  zIndex?: number;
+  onRequestFront?: () => void;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -38,6 +40,8 @@ export default function LoomPanel({
   streamingCode,
   isStreaming,
   transitionFromSummonBar = false,
+  zIndex,
+  onRequestFront,
 }: LoomPanelProps) {
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection);
   const [isVisible, setIsVisible] = useState(false);
@@ -235,7 +239,7 @@ export default function LoomPanel({
 
   // Handle mouse enter/leave to enable clicking only when hovering over panel
   const handleMouseEnter = useCallback(() => {
-    window.loom?.mouseEnterUI();
+    (window as any).loom?.mouseEnterUI?.();
   }, []);
 
   const handleMouseLeave = useCallback((event: React.MouseEvent) => {
@@ -253,7 +257,7 @@ export default function LoomPanel({
     }
     // Only restore click-through if not dragging
     if (!isDragging) {
-      window.loom?.mouseLeaveUI();
+      (window as any).loom?.mouseLeaveUI?.();
     }
   }, [isDragging]);
 
@@ -263,14 +267,11 @@ export default function LoomPanel({
       className="loom-panel ui-interactive"
       style={{
         ...styles.container,
+        zIndex,
         opacity: isExiting ? 0 : 1,
         transform: isExiting ? 'scale(0.9) translateY(20px)' : 'none',
       }}
     >
-      {/* Animated background layers for depth */}
-      <div style={styles.bgLayer1} />
-      <div style={styles.bgLayer2} />
-      
       {/* Main panel with goopy animation - enhanced for summon bar transition */}
       <div 
         style={{
@@ -292,9 +293,11 @@ export default function LoomPanel({
           cursor: isDragging ? 'grabbing' : isResizing ? 'default' : 'default',
           // Enhanced goopy transition from summon bar
           animation: transitionFromSummonBar && isVisible ? 'goopyMorphIn 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) forwards' : undefined,
+          pointerEvents: 'auto',
         }}
         ref={panelRef}
         onMouseDown={handleDragStart}
+        onMouseDownCapture={onRequestFront}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
@@ -568,27 +571,6 @@ const styles: Record<string, LoomStyle> = {
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace",
     transition: 'opacity 0.4s ease, transform 0.4s ease',
     // No flex centering - we'll position the panel absolutely
-  },
-  
-  // Animated background layers
-  bgLayer1: {
-    position: 'absolute',
-    top: '-20%',
-    left: '-20%',
-    right: '-20%',
-    bottom: '-20%',
-    background: 'radial-gradient(ellipse at 30% 20%, rgba(0, 255, 255, 0.08) 0%, transparent 50%)',
-    animation: 'bgShift1 20s ease-in-out infinite',
-    pointerEvents: 'none',
-  },
-  bgLayer2: {
-    position: 'absolute',
-    top: '-20%',
-    left: '-20%',
-    right: '-20%',
-    bottom: '-20%',
-    background: 'radial-gradient(ellipse at 70% 80%, rgba(255, 0, 255, 0.06) 0%, transparent 50%)',
-    animation: 'bgShift2 25s ease-in-out infinite',
     pointerEvents: 'none',
   },
   

@@ -46,9 +46,7 @@ function BackgroundWidgetContainer({ widget }: { widget: BackgroundWidget }) {
         borderRadius: 12,
         overflow: 'hidden',
         pointerEvents: 'auto',
-        boxShadow: '0 10px 50px rgba(0,0,0,0.35)',
-        border: '1px solid rgba(255,255,255,0.05)',
-        background: 'rgba(5,5,15,0.8)',
+        background: 'transparent',
       }}
     >
       <GlyphIframe
