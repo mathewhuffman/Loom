@@ -4,10 +4,11 @@
 // Ctrl+Alt+L to open the Loom Panel
 // SECURE: All API keys live here, never exposed to renderer
 
-import { app, BrowserWindow, screen, globalShortcut, ipcMain, IpcMainInvokeEvent, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, screen, globalShortcut, ipcMain, IpcMainInvokeEvent, Tray, Menu, nativeImage, safeStorage } from 'electron';
 import path from 'path';
 import { attach, detach } from 'electron-as-wallpaper';
 import fs from 'fs';
+import type { LoomUIState, LoomUiStatePatch } from './src/types/ui-state';
 
 // ════════════════════════════════════════════════════════════════════════════
 // 📁 DYNAMIC GLYPH FILE SYSTEM
@@ -137,6 +138,116 @@ function updateSettings(patch: Partial<LoomSettings>): LoomSettings {
   const updated = { ...getSettings(), ...patch };
   persistSettings(updated);
   return updated;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 💾 UI STATE PERSISTENCE
+// ════════════════════════════════════════════════════════════════════════════
+
+const uiStatePath = path.join(app.getPath('userData'), 'loom-ui-state.json');
+let uiStateCache: LoomUIState | null = null;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function deepMergeUiState(target: unknown, patch: unknown): unknown {
+  if (Array.isArray(patch)) {
+    return patch.map(item => (isPlainObject(item) ? deepMergeUiState({}, item) : item));
+  }
+  if (isPlainObject(patch)) {
+    const base: Record<string, unknown> = isPlainObject(target) ? { ...target } : {};
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value === undefined) {
+        return;
+      }
+      base[key] = deepMergeUiState(base[key], value);
+    });
+    return base;
+  }
+  return patch;
+}
+
+function readUiStateFromDisk(): LoomUIState {
+  try {
+    if (!fs.existsSync(uiStatePath)) {
+      return {};
+    }
+    const raw = fs.readFileSync(uiStatePath, 'utf-8');
+    if (!raw.trim()) {
+      return {};
+    }
+    return JSON.parse(raw);
+  } catch (error) {
+    log('⚠️ Failed to read UI state file:', error);
+    return {};
+  }
+}
+
+function getUiStateSnapshot(): LoomUIState {
+  if (!uiStateCache) {
+    uiStateCache = readUiStateFromDisk();
+  }
+  return uiStateCache;
+}
+
+function persistUiState(next: LoomUIState) {
+  try {
+    ensureDirectoryExists(path.dirname(uiStatePath));
+    fs.writeFileSync(uiStatePath, JSON.stringify(next, null, 2));
+    uiStateCache = next;
+  } catch (error) {
+    log('⚠️ Failed to write UI state file:', error);
+  }
+}
+
+function mergeUiState(patch: LoomUiStatePatch | undefined): LoomUIState {
+  const current = getUiStateSnapshot();
+  const merged = patch ? (deepMergeUiState(current, patch) as LoomUIState) : current;
+  persistUiState(merged);
+  return merged;
+}
+
+function getPersistedWallpaper() {
+  return getUiStateSnapshot().background?.wallpaper || null;
+}
+
+function restoreBackgroundWallpaper() {
+  const wallpaper = getPersistedWallpaper();
+  if (
+    !wallpaper ||
+    !wallpaper.code ||
+    !backgroundWindow ||
+    backgroundWindow.isDestroyed()
+  ) {
+    return;
+  }
+  backgroundWindow.webContents.send('summon-inject', {
+    code: wallpaper.code,
+    prompt: wallpaper.prompt,
+    glyphId: wallpaper.glyphId,
+    type: wallpaper.type,
+    mode: 'background' as const,
+  });
+  log('[UIState] Restored persisted wallpaper');
+}
+
+function persistWallpaperState(payload: { code: string; prompt?: string; glyphId?: string; type?: string; inputs?: Record<string, unknown> }) {
+  if (!payload.code) {
+    return;
+  }
+  mergeUiState({
+    background: {
+      wallpaper: {
+        code: payload.code,
+        prompt: payload.prompt,
+        glyphId: payload.glyphId,
+        type: payload.type,
+        inputs: payload.inputs,
+        persistedAt: Date.now(),
+      },
+    },
+  });
 }
 
 function normalizeBackgroundInteractionConfig(raw?: Partial<BackgroundInteractionConfig>): BackgroundInteractionConfig {
@@ -455,6 +566,7 @@ interface GlyphManifest {
   inputs?: GlyphInput[];
   files: Record<string, string>;
   folderId?: string; // For folder-based organization
+  linkedKeys?: string[]; // IDs of user keys linked to this glyph (from secure key vault)
 }
 
 const GLYPH_SYSTEM_PROMPT = `You are LOOM — a code generator for standalone HTML/CSS/JS glyphs that run inside sandboxed iframes.
@@ -612,6 +724,42 @@ USE CASES:
 
 IMPORTANT: These APIs bypass CORS restrictions since they go through Electron's main process.
 Do NOT use fetch() for local files - use window.loom.readLocalFile() instead.
+
+═══════════════════════════════════════════════════════════════════════════════
+🔐 USER KEY VAULT — Secure API keys and credentials linked to glyphs
+═══════════════════════════════════════════════════════════════════════════════
+
+Users have a secure key vault where they store API keys, tokens, and credentials.
+When creating glyphs that need external API access (GitHub, OpenWeather, Spotify, etc.):
+
+1. ADD AN INPUT OF TYPE "apiKey" in the manifest for each key the glyph needs
+2. If the user mentions they want to use a specific key from their vault, 
+   we will automatically link it and inject it into window.GLYPH_INPUTS
+
+The manifest supports a "linkedKeys" array that references user vault key IDs:
+{
+  "name": "GitHub Dashboard",
+  "linkedKeys": ["github-token", "backup-token"],  // Keys from user's vault
+  "inputs": [
+    { "id": "githubToken", "type": "apiKey", "label": "GitHub Token", "service": "github", "required": true }
+  ],
+  ...
+}
+
+IMPORTANT RULES FOR API KEYS:
+- Always create an apiKey input in the "inputs" array for any secret/token
+- The input ID should be descriptive (e.g., "githubToken", "openweatherKey")
+- Set "required": true for essential API keys
+- Include a "description" explaining what scope/permissions are needed
+- Access in code via: const token = window.GLYPH_INPUTS.githubToken;
+
+Example with multiple keys:
+{
+  "inputs": [
+    { "id": "githubToken", "type": "apiKey", "label": "GitHub Token", "service": "github", "required": true, "description": "Personal access token with repo scope" },
+    { "id": "slackWebhook", "type": "apiKey", "label": "Slack Webhook", "service": "slack", "description": "Webhook URL for notifications" }
+  ]
+}
 
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1944,6 +2092,7 @@ function createBackgroundWindow() {
     
     applyBounds(backgroundWindow, displayId, bounds);
     backgroundWindow.showInactive();
+    restoreBackgroundWallpaper();
 
     attachBackgroundToDesktop({ force: true });
     if (process.platform !== 'win32') {
@@ -2212,6 +2361,14 @@ ipcMain.handle('save-glyph-chat-message', async (event, glyphId: string, message
 // 📁 GLYPH FILE SYSTEM IPC HANDLERS
 // ════════════════════════════════════════════════════════════════════════════
 
+ipcMain.handle('ui-state:load', async () => {
+  return getUiStateSnapshot();
+});
+
+ipcMain.handle('ui-state:save', async (_event, patch: LoomUiStatePatch) => {
+  return mergeUiState(patch);
+});
+
 // Load all glyphs from both dynamic and library paths
 ipcMain.handle('load-glyphs', async () => {
   const glyphs: any[] = [];
@@ -2370,6 +2527,64 @@ ipcMain.on('invoke-glyph', async (event, data: { glyphId: string; mode: 'backgro
       log(`📄 Manifest name: ${manifest.name}, type: ${manifest.type}`);
       log(`📄 Manifest prompt length: ${manifest.prompt?.length || 0}`);
       
+      // 🔐 Resolve inputs from manifest and linked keys
+      const inputs: Record<string, unknown> = {};
+      
+      // First, extract values from manifest inputs (defaults and saved values)
+      if (manifest.inputs && Array.isArray(manifest.inputs)) {
+        for (const input of manifest.inputs) {
+          if (input.value !== undefined) {
+            inputs[input.id] = input.value;
+          } else if (input.defaultValue !== undefined) {
+            inputs[input.id] = input.defaultValue;
+          }
+        }
+      }
+      
+      // Then, resolve linked keys from the secure vault
+      if (manifest.linkedKeys && Array.isArray(manifest.linkedKeys) && manifest.linkedKeys.length > 0) {
+        const keyValues = loadSecureKeysData();
+        const keyMetadata = loadSecureKeysMetadata();
+        
+        // Get apiKey inputs from manifest for smart matching
+        const apiKeyInputs = (manifest.inputs || []).filter((i: GlyphInput) => i.type === 'apiKey');
+        
+        for (const keyId of manifest.linkedKeys) {
+          if (keyValues[keyId]) {
+            const meta = keyMetadata.find(k => k.id === keyId);
+            const keyName = meta?.name || keyId;
+            const keyNameLower = keyName.toLowerCase().replace(/\s+/g, '');
+            
+            // Try to find a matching apiKey input in the manifest
+            let matchedInputId: string | null = null;
+            
+            for (const apiInput of apiKeyInputs) {
+              const inputIdLower = apiInput.id.toLowerCase();
+              const inputLabelLower = (apiInput.label || '').toLowerCase().replace(/\s+/g, '');
+              const inputService = ((apiInput as any).service || '').toLowerCase();
+              
+              // Match by: input id contains key name, or key name contains input id,
+              // or service matches, or label matches
+              if (inputIdLower.includes(keyNameLower) || 
+                  keyNameLower.includes(inputIdLower) ||
+                  inputIdLower.includes(inputService) ||
+                  inputLabelLower.includes(keyNameLower) ||
+                  keyNameLower.includes(inputLabelLower)) {
+                matchedInputId = apiInput.id;
+                break;
+              }
+            }
+            
+            // Use matched input ID, or fall back to key name
+            const inputKey = matchedInputId || keyNameLower;
+            inputs[inputKey] = keyValues[keyId];
+            log(`🔐 Resolved linked key: ${keyName} → ${inputKey}${matchedInputId ? ' (matched to manifest input)' : ''}`);
+          }
+        }
+      }
+      
+      log(`📦 Resolved ${Object.keys(inputs).length} inputs for glyph`);
+      
       if (mode === 'widget') {
         // Send widgets to OVERLAY for rendering (overlay is on top, interactive)
         if (overlayWindow && !overlayWindow.isDestroyed()) {
@@ -2378,6 +2593,7 @@ ipcMain.on('invoke-glyph', async (event, data: { glyphId: string; mode: 'backgro
             code,
             prompt: manifest.prompt || manifest.name,
             glyphId,
+            inputs, // Include resolved inputs
           });
           log(`✨ Widget ${glyphId} sent to overlay`);
         }
@@ -2391,8 +2607,16 @@ ipcMain.on('invoke-glyph', async (event, data: { glyphId: string; mode: 'backgro
             mode: 'background',
             glyphId,
             type: manifest.type,
+            inputs, // Include resolved inputs
           });
           log(`✨ Glyph ${glyphId} sent to background`);
+          persistWallpaperState({
+            code,
+            prompt: manifest.prompt || manifest.name,
+            glyphId,
+            type: manifest.type,
+            inputs, // Include resolved inputs
+          });
         }
       }
       return;
@@ -2540,6 +2764,14 @@ ipcMain.on('summon-inject', (event, data: { code: string; prompt: string; type?:
     log('💉 ✅ summon-inject SENT to background!');
   } else {
     log('💉 ❌ Cannot forward - background window not available!');
+  }
+  if (!data.mode || data.mode === 'background') {
+    persistWallpaperState({
+      code: data.code,
+      prompt: data.prompt,
+      glyphId: data.glyphId,
+      type: data.type,
+    });
   }
   log('💉 ═══════════════════════════════════════════════════════════');
 });
@@ -2715,6 +2947,324 @@ ipcMain.handle('delete-glyph-api-key', async (event, glyphId: string, keyName: s
     log(`🔐 Deleted API key "${keyName}" for glyph ${glyphId}`);
   }
   return { success: true };
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔐 SECURE USER KEY STORAGE — Using Windows DPAPI via safeStorage
+// ════════════════════════════════════════════════════════════════════════════
+
+interface StoredKeyMetadata {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// Metadata file (not the actual secrets)
+const secureKeysMetadataPath = path.join(app.getPath('userData'), 'secure-keys-metadata.json');
+// Encrypted secrets file
+const secureKeysDataPath = path.join(app.getPath('userData'), 'secure-keys-data.enc');
+
+function loadSecureKeysMetadata(): StoredKeyMetadata[] {
+  try {
+    if (fs.existsSync(secureKeysMetadataPath)) {
+      const data = fs.readFileSync(secureKeysMetadataPath, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    log('⚠️ Failed to load secure keys metadata:', err);
+  }
+  return [];
+}
+
+function saveSecureKeysMetadata(metadata: StoredKeyMetadata[]): void {
+  try {
+    fs.writeFileSync(secureKeysMetadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
+    log('🔐 Secure keys metadata saved');
+  } catch (err) {
+    log('❌ Failed to save secure keys metadata:', err);
+  }
+}
+
+// Load encrypted key values (the actual secrets)
+function loadSecureKeysData(): Record<string, string> {
+  try {
+    if (fs.existsSync(secureKeysDataPath) && safeStorage.isEncryptionAvailable()) {
+      const encryptedBuffer = fs.readFileSync(secureKeysDataPath);
+      const decrypted = safeStorage.decryptString(encryptedBuffer);
+      return JSON.parse(decrypted);
+    }
+  } catch (err) {
+    log('⚠️ Failed to load secure keys data:', err);
+  }
+  return {};
+}
+
+// Save encrypted key values
+function saveSecureKeysData(data: Record<string, string>): void {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      log('⚠️ safeStorage encryption not available');
+      return;
+    }
+    const encrypted = safeStorage.encryptString(JSON.stringify(data));
+    fs.writeFileSync(secureKeysDataPath, encrypted);
+    log('🔐 Secure keys data encrypted and saved');
+  } catch (err) {
+    log('❌ Failed to save secure keys data:', err);
+  }
+}
+
+// Get all stored keys (metadata only, no values)
+ipcMain.handle('get-stored-keys', async () => {
+  const metadata = loadSecureKeysMetadata();
+  log(`🔐 Retrieved ${metadata.length} stored keys (metadata only)`);
+  return metadata;
+});
+
+// Save a secure key (encrypts with Windows DPAPI)
+ipcMain.handle('save-secure-key', async (event, keyId: string, keyData: {
+  name: string;
+  value: string;
+  description?: string;
+  category?: string;
+}) => {
+  try {
+    // Load existing data
+    const metadata = loadSecureKeysMetadata();
+    const values = loadSecureKeysData();
+    
+    // Update or add metadata
+    const existingIndex = metadata.findIndex(k => k.id === keyId);
+    const now = Date.now();
+    const keyMeta: StoredKeyMetadata = {
+      id: keyId,
+      name: keyData.name,
+      description: keyData.description,
+      category: keyData.category,
+      createdAt: existingIndex >= 0 ? metadata[existingIndex].createdAt : now,
+      updatedAt: now,
+    };
+    
+    if (existingIndex >= 0) {
+      metadata[existingIndex] = keyMeta;
+    } else {
+      metadata.push(keyMeta);
+    }
+    
+    // Save the encrypted value
+    values[keyId] = keyData.value;
+    
+    // Persist both
+    saveSecureKeysMetadata(metadata);
+    saveSecureKeysData(values);
+    
+    log(`🔐 Saved secure key "${keyData.name}" (${keyId})`);
+    return { success: true };
+  } catch (err) {
+    log('❌ Failed to save secure key:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Get a specific key value (decrypted)
+ipcMain.handle('get-secure-key-value', async (event, keyId: string) => {
+  try {
+    const values = loadSecureKeysData();
+    const value = values[keyId];
+    if (value) {
+      log(`🔐 Retrieved secure key value for ${keyId}`);
+      return { success: true, value };
+    }
+    return { success: false, error: 'Key not found' };
+  } catch (err) {
+    log('❌ Failed to get secure key value:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Get multiple key values at once (for prompt context)
+ipcMain.handle('get-secure-key-values-batch', async (event, keyIds: string[]) => {
+  try {
+    const values = loadSecureKeysData();
+    const metadata = loadSecureKeysMetadata();
+    const result: Record<string, { name: string; value: string }> = {};
+    
+    for (const keyId of keyIds) {
+      if (values[keyId]) {
+        const meta = metadata.find(k => k.id === keyId);
+        result[keyId] = {
+          name: meta?.name || keyId,
+          value: values[keyId],
+        };
+      }
+    }
+    
+    log(`🔐 Retrieved ${Object.keys(result).length} secure key values (batch)`);
+    return { success: true, keys: result };
+  } catch (err) {
+    log('❌ Failed to get secure key values batch:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Delete a secure key
+ipcMain.handle('delete-secure-key', async (event, keyId: string) => {
+  try {
+    // Load existing data
+    const metadata = loadSecureKeysMetadata();
+    const values = loadSecureKeysData();
+    
+    // Remove from both
+    const filteredMetadata = metadata.filter(k => k.id !== keyId);
+    delete values[keyId];
+    
+    // Persist both
+    saveSecureKeysMetadata(filteredMetadata);
+    saveSecureKeysData(values);
+    
+    log(`🔐 Deleted secure key ${keyId}`);
+    return { success: true };
+  } catch (err) {
+    log('❌ Failed to delete secure key:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔗 GLYPH KEY LINKING — Connect secure vault keys to glyphs
+// ════════════════════════════════════════════════════════════════════════════
+
+// Get linked keys for a glyph (returns metadata only, no values)
+ipcMain.handle('get-glyph-linked-keys', async (event, glyphId: string) => {
+  try {
+    const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+    
+    for (const basePath of searchPaths) {
+      const manifestPath = path.join(basePath, glyphId, 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const linkedKeyIds = manifest.linkedKeys || [];
+        
+        // Get metadata for these keys
+        const allMetadata = loadSecureKeysMetadata();
+        const linkedKeys = linkedKeyIds
+          .map((keyId: string) => allMetadata.find(k => k.id === keyId))
+          .filter(Boolean);
+        
+        return { success: true, linkedKeys };
+      }
+    }
+    
+    return { success: false, error: 'Glyph not found' };
+  } catch (err) {
+    log('❌ Failed to get glyph linked keys:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Link a key from the vault to a glyph
+ipcMain.handle('link-key-to-glyph', async (event, glyphId: string, keyId: string) => {
+  try {
+    const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+    
+    for (const basePath of searchPaths) {
+      const manifestPath = path.join(basePath, glyphId, 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        
+        // Initialize linkedKeys if needed
+        if (!manifest.linkedKeys) {
+          manifest.linkedKeys = [];
+        }
+        
+        // Add key if not already linked
+        if (!manifest.linkedKeys.includes(keyId)) {
+          manifest.linkedKeys.push(keyId);
+          fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+          log(`🔗 Linked key ${keyId} to glyph ${glyphId}`);
+        }
+        
+        return { success: true };
+      }
+    }
+    
+    return { success: false, error: 'Glyph not found' };
+  } catch (err) {
+    log('❌ Failed to link key to glyph:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Unlink a key from a glyph
+ipcMain.handle('unlink-key-from-glyph', async (event, glyphId: string, keyId: string) => {
+  try {
+    const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+    
+    for (const basePath of searchPaths) {
+      const manifestPath = path.join(basePath, glyphId, 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        
+        // Remove key from linkedKeys
+        if (manifest.linkedKeys) {
+          manifest.linkedKeys = manifest.linkedKeys.filter((k: string) => k !== keyId);
+          fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+          log(`🔓 Unlinked key ${keyId} from glyph ${glyphId}`);
+        }
+        
+        return { success: true };
+      }
+    }
+    
+    return { success: false, error: 'Glyph not found' };
+  } catch (err) {
+    log('❌ Failed to unlink key from glyph:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Get resolved key values for a glyph (used when invoking)
+ipcMain.handle('get-glyph-resolved-keys', async (event, glyphId: string) => {
+  try {
+    const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+    
+    for (const basePath of searchPaths) {
+      const manifestPath = path.join(basePath, glyphId, 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const linkedKeyIds = manifest.linkedKeys || [];
+        
+        if (linkedKeyIds.length === 0) {
+          return { success: true, keys: {} };
+        }
+        
+        // Get values for linked keys
+        const values = loadSecureKeysData();
+        const metadata = loadSecureKeysMetadata();
+        const resolvedKeys: Record<string, { name: string; value: string }> = {};
+        
+        for (const keyId of linkedKeyIds) {
+          if (values[keyId]) {
+            const meta = metadata.find(k => k.id === keyId);
+            resolvedKeys[keyId] = {
+              name: meta?.name || keyId,
+              value: values[keyId],
+            };
+          }
+        }
+        
+        return { success: true, keys: resolvedKeys };
+      }
+    }
+    
+    return { success: false, error: 'Glyph not found' };
+  } catch (err) {
+    log('❌ Failed to get glyph resolved keys:', err);
+    return { success: false, error: String(err) };
+  }
 });
 
 // ════════════════════════════════════════════════════════════════════════════

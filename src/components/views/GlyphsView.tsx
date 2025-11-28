@@ -44,6 +44,14 @@ interface GlyphManifest {
   entry?: string;
   icon?: string;
   inputs?: GlyphInput[];
+  linkedKeys?: string[]; // IDs of linked keys from user's vault
+}
+
+interface LinkedKeyInfo {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
 }
 
 interface GlyphFolder {
@@ -118,6 +126,12 @@ export default function GlyphsView() {
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderIcon, setNewFolderIcon] = useState('📁');
   
+  // Linked keys state
+  const [linkedKeys, setLinkedKeys] = useState<LinkedKeyInfo[]>([]);
+  const [availableKeys, setAvailableKeys] = useState<LinkedKeyInfo[]>([]);
+  const [isKeyPickerOpen, setIsKeyPickerOpen] = useState(false);
+  const [isLoadingKeys, setIsLoadingKeys] = useState(false);
+  
   // Drag and drop state
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<'glyph' | 'folder' | null>(null);
@@ -180,6 +194,8 @@ export default function GlyphsView() {
     setIsDetailPromptExpanded(false);
     setIsEditingName(false);
     setIsIconPickerOpen(false);
+    setIsKeyPickerOpen(false);
+    setLinkedKeys([]);
 
     if (!selectedGlyph) {
       setIsPreviewLoading(false);
@@ -237,7 +253,24 @@ export default function GlyphsView() {
       }
     };
 
+    // Load linked keys for this glyph
+    const loadLinkedKeys = async () => {
+      setIsLoadingKeys(true);
+      try {
+        const result = await window.loom?.getGlyphLinkedKeys?.(selectedGlyph.id);
+        if (isCancelled) return;
+        if (result?.success && result.linkedKeys) {
+          setLinkedKeys(result.linkedKeys);
+        }
+      } catch (error) {
+        console.error('Failed to load linked keys:', error);
+      } finally {
+        if (!isCancelled) setIsLoadingKeys(false);
+      }
+    };
+
     loadPreview();
+    loadLinkedKeys();
 
     return () => {
       isCancelled = true;
@@ -512,6 +545,76 @@ export default function GlyphsView() {
     };
     reader.readAsDataURL(file);
   }, [selectedGlyph, handleInputChange]);
+
+  // Load available keys from vault (for key picker)
+  const loadAvailableKeys = useCallback(async () => {
+    try {
+      const storedKeys = await window.loom?.getStoredKeys?.();
+      if (Array.isArray(storedKeys)) {
+        setAvailableKeys(storedKeys);
+      }
+    } catch (error) {
+      console.error('Failed to load available keys:', error);
+    }
+  }, []);
+
+  // Open key picker
+  const handleOpenKeyPicker = useCallback(() => {
+    loadAvailableKeys();
+    setIsKeyPickerOpen(true);
+  }, [loadAvailableKeys]);
+
+  // Link a key to the glyph
+  const handleLinkKey = useCallback(async (keyId: string) => {
+    if (!selectedGlyph) return;
+    
+    try {
+      const result = await window.loom?.linkKeyToGlyph?.(selectedGlyph.id, keyId);
+      if (result?.success) {
+        // Add to local state
+        const keyInfo = availableKeys.find(k => k.id === keyId);
+        if (keyInfo) {
+          setLinkedKeys(prev => [...prev, keyInfo]);
+        }
+        setIsKeyPickerOpen(false);
+        
+        // Update the glyph in local state to include the linked key
+        setGlyphs(prev => prev.map(g => {
+          if (g.id === selectedGlyph.id) {
+            return { ...g, linkedKeys: [...(g.linkedKeys || []), keyId] };
+          }
+          return g;
+        }));
+        setSelectedGlyph(prev => prev ? { ...prev, linkedKeys: [...(prev.linkedKeys || []), keyId] } : null);
+      }
+    } catch (error) {
+      console.error('Failed to link key:', error);
+    }
+  }, [selectedGlyph, availableKeys]);
+
+  // Unlink a key from the glyph
+  const handleUnlinkKey = useCallback(async (keyId: string) => {
+    if (!selectedGlyph) return;
+    
+    try {
+      const result = await window.loom?.unlinkKeyFromGlyph?.(selectedGlyph.id, keyId);
+      if (result?.success) {
+        // Remove from local state
+        setLinkedKeys(prev => prev.filter(k => k.id !== keyId));
+        
+        // Update the glyph in local state
+        setGlyphs(prev => prev.map(g => {
+          if (g.id === selectedGlyph.id) {
+            return { ...g, linkedKeys: (g.linkedKeys || []).filter(id => id !== keyId) };
+          }
+          return g;
+        }));
+        setSelectedGlyph(prev => prev ? { ...prev, linkedKeys: (prev.linkedKeys || []).filter(id => id !== keyId) } : null);
+      }
+    } catch (error) {
+      console.error('Failed to unlink key:', error);
+    }
+  }, [selectedGlyph]);
 
   const handleGlyphSelection = useCallback((glyph: GlyphManifest) => {
     setSelectedGlyph((current) => (current?.id === glyph.id ? null : glyph));
@@ -1260,6 +1363,95 @@ export default function GlyphsView() {
                 </div>
               )}
             </div>
+
+            {/* Linked Keys Section */}
+            <div style={styles.detailSection}>
+              <div style={styles.inputsHeader}>
+                <h3 style={styles.sectionTitle}>🔐 Linked Keys</h3>
+                <button
+                  style={styles.addInputBtn}
+                  onClick={handleOpenKeyPicker}
+                  title="Link a key from your vault"
+                >
+                  + Link Key
+                </button>
+              </div>
+              
+              {isLoadingKeys ? (
+                <div style={styles.noInputs}>Loading keys...</div>
+              ) : linkedKeys.length === 0 ? (
+                <div style={styles.noInputs}>
+                  No keys linked to this glyph.
+                  <br />
+                  <span style={styles.noInputsHint}>
+                    Link keys from your vault to provide API access.
+                  </span>
+                </div>
+              ) : (
+                <div style={styles.inputsList}>
+                  {linkedKeys.map(key => (
+                    <div key={key.id} style={linkedKeyStyles.keyItem}>
+                      <div style={linkedKeyStyles.keyInfo}>
+                        <span style={linkedKeyStyles.keyIcon}>🔑</span>
+                        <div style={linkedKeyStyles.keyDetails}>
+                          <span style={linkedKeyStyles.keyName}>{key.name}</span>
+                          {key.description && (
+                            <span style={linkedKeyStyles.keyDescription}>{key.description}</span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        style={linkedKeyStyles.unlinkBtn}
+                        onClick={() => handleUnlinkKey(key.id)}
+                        title="Unlink this key"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Key Picker Dropdown */}
+              {isKeyPickerOpen && (
+                <div style={linkedKeyStyles.keyPicker}>
+                  <div style={linkedKeyStyles.keyPickerHeader}>
+                    <span>Select a key to link</span>
+                    <button
+                      style={linkedKeyStyles.keyPickerClose}
+                      onClick={() => setIsKeyPickerOpen(false)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div style={linkedKeyStyles.keyPickerList}>
+                    {availableKeys.filter(k => !linkedKeys.some(lk => lk.id === k.id)).length === 0 ? (
+                      <div style={linkedKeyStyles.noKeysAvailable}>
+                        {availableKeys.length === 0 
+                          ? 'No keys in vault. Add keys in Settings → Keys.'
+                          : 'All keys are already linked.'}
+                      </div>
+                    ) : (
+                      availableKeys
+                        .filter(k => !linkedKeys.some(lk => lk.id === k.id))
+                        .map(key => (
+                          <button
+                            key={key.id}
+                            style={linkedKeyStyles.keyOption}
+                            onClick={() => handleLinkKey(key.id)}
+                          >
+                            <span style={linkedKeyStyles.keyIcon}>🔑</span>
+                            <span style={linkedKeyStyles.keyName}>{key.name}</span>
+                            {key.category && (
+                              <span style={linkedKeyStyles.keyCategory}>{key.category}</span>
+                            )}
+                          </button>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             
             <div style={styles.detailActions}>
               <div style={styles.invokeButtons}>
@@ -1668,6 +1860,115 @@ const inputFieldStyles: Record<string, React.CSSProperties> = {
   fileMeta: {
     fontSize: '11px',
     color: 'rgba(255, 255, 255, 0.4)',
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔐 LINKED KEY STYLES
+// ═══════════════════════════════════════════════════════════════════════════
+
+const linkedKeyStyles: Record<string, React.CSSProperties> = {
+  keyItem: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '10px 12px',
+    background: 'rgba(0, 255, 255, 0.03)',
+    borderRadius: '8px',
+    border: '1px solid rgba(0, 255, 255, 0.1)',
+    marginBottom: '8px',
+  },
+  keyInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    flex: 1,
+  },
+  keyIcon: {
+    fontSize: '16px',
+    opacity: 0.8,
+  },
+  keyDetails: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '2px',
+  },
+  keyName: {
+    fontSize: '13px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.9)',
+  },
+  keyDescription: {
+    fontSize: '11px',
+    color: 'rgba(255, 255, 255, 0.4)',
+  },
+  keyCategory: {
+    fontSize: '10px',
+    padding: '2px 6px',
+    background: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: '4px',
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginLeft: 'auto',
+  },
+  unlinkBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: 'rgba(255, 100, 100, 0.6)',
+    fontSize: '14px',
+    cursor: 'pointer',
+    padding: '4px 8px',
+    borderRadius: '4px',
+    transition: 'all 0.2s',
+  },
+  keyPicker: {
+    marginTop: '12px',
+    background: 'rgba(0, 0, 0, 0.4)',
+    borderRadius: '10px',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    overflow: 'hidden',
+  },
+  keyPickerHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '10px 12px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+    fontSize: '12px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  keyPickerClose: {
+    background: 'transparent',
+    border: 'none',
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: '14px',
+    cursor: 'pointer',
+    padding: '2px 6px',
+  },
+  keyPickerList: {
+    maxHeight: '200px',
+    overflowY: 'auto' as const,
+  },
+  keyOption: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    width: '100%',
+    padding: '10px 12px',
+    background: 'transparent',
+    border: 'none',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: '13px',
+    cursor: 'pointer',
+    transition: 'background 0.2s',
+    textAlign: 'left' as const,
+  },
+  noKeysAvailable: {
+    padding: '16px',
+    fontSize: '12px',
+    color: 'rgba(255, 255, 255, 0.4)',
+    textAlign: 'center' as const,
   },
 };
 

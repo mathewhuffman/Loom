@@ -10,25 +10,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import LoomPanel from './components/LoomPanel';
 import GlyphIframe from './components/GlyphIframe';
+import type { CodeEditorState, LoomPanelState, OverlayUiState, PersistedWidgetState, WidgetLayer } from './types/ui-state';
+import { loadUiState, queueUiStatePatch } from './utils/uiState';
 
-
-// Widget layer - foreground (above icons) or background (behind icons)
-type WidgetLayer = 'foreground' | 'background';
 
 // Widget glyph for desktop placement
-interface WidgetGlyph {
-  id: string;
-  glyphId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  prompt: string;
-  code: string;
-  createdAt: number;
-  layer: WidgetLayer; // New: which layer the widget is on
-  zIndex?: number;
-}
+type WidgetGlyph = PersistedWidgetState;
 
 interface SummonState {
   phase: 'idle' | 'streaming' | 'compiling' | 'injecting' | 'complete' | 'error' | 'refining';
@@ -221,6 +208,7 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
             title={widget.prompt}
             allowPointerEvents={!editMode}
             allowExternalUrls={widget.code.includes('iframe') || widget.code.includes('src=')}
+            inputs={widget.inputs}
           />
         </div>
       ) : (
@@ -429,6 +417,9 @@ export default function OverlayUI() {
   const [selectedModel, setSelectedModel] = useState<string>('grok');
   const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showKeysMenu, setShowKeysMenu] = useState(false); // Key selector visibility
+  const [availableKeys, setAvailableKeys] = useState<Array<{ id: string; name: string; category?: string }>>([]);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]); // Selected key IDs to include in prompt
   const [lastError, setLastError] = useState<string | null>(null);
   const [canCancel, setCanCancel] = useState(false);
   const [showLoomPanel, setShowLoomPanel] = useState(false); // Loom Panel visibility
@@ -444,6 +435,7 @@ export default function OverlayUI() {
   const promptRef = useRef(''); // Ref to capture prompt for async callbacks
   const originalPromptRef = useRef(''); // PRESERVED prompt for entire summon session (survives errors/refinements)
   const modelMenuRef = useRef<HTMLDivElement>(null);
+  const keysMenuRef = useRef<HTMLDivElement>(null);
   const currentCodeRef = useRef(''); // Track current code for refinement
   const attemptRef = useRef(0); // Track current refinement attempt
   const selectedModelRef = useRef(selectedModel);
@@ -458,24 +450,142 @@ export default function OverlayUI() {
   const [loomPanelZ, setLoomPanelZ] = useState(() => zStackCounterRef.current++);
   const summonBarRef = useRef<HTMLDivElement>(null); // Reference to summon bar for animation
   const editorOpenedForStreamRef = useRef(false); // Track if we've opened editor for current stream session
-  const bringLoomPanelToFront = useCallback(() => {
-    setLoomPanelZ(zStackCounterRef.current++);
+  const [storedPanelState, setStoredPanelState] = useState<LoomPanelState | undefined>(undefined);
+  const [storedEditorState, setStoredEditorState] = useState<CodeEditorState | undefined>(undefined);
+  const hasHydratedStateRef = useRef(false);
+
+  const persistOverlayState = useCallback((patch: Partial<OverlayUiState>) => {
+    if (!hasHydratedStateRef.current) {
+      return;
+    }
+    queueUiStatePatch({ overlay: patch });
   }, []);
 
-  const bringWidgetToFront = useCallback((id: string) => {
-    const nextZ = zStackCounterRef.current++;
-    setWidgets(prev => prev.map(w => (w.id === id ? { ...w, zIndex: nextZ } : w)));
-  }, []);
+  const allocateZIndex = useCallback(() => {
+    const next = zStackCounterRef.current++;
+    persistOverlayState({ zIndexCounter: zStackCounterRef.current });
+    return next;
+  }, [persistOverlayState]);
+
+  const handlePanelStateChange = useCallback(
+    (state: LoomPanelState) => {
+      setStoredPanelState(state);
+      persistOverlayState({ loomPanel: state });
+    },
+    [persistOverlayState]
+  );
+
+  const handleEditorStateChange = useCallback(
+    (state: CodeEditorState) => {
+      setStoredEditorState(state);
+      persistOverlayState({ codeEditor: state });
+    },
+    [persistOverlayState]
+  );
+  const bringLoomPanelToFront = useCallback(() => {
+    setLoomPanelZ(allocateZIndex());
+  }, [allocateZIndex]);
+
+  const bringWidgetToFront = useCallback(
+    (id: string) => {
+      const nextZ = allocateZIndex();
+      setWidgets(prev => prev.map(w => (w.id === id ? { ...w, zIndex: nextZ } : w)));
+    },
+    [allocateZIndex]
+  );
 
   useEffect(() => {
-    setWidgets(prev => prev.map(w => (w.zIndex !== undefined ? w : { ...w, zIndex: zStackCounterRef.current++ })));
-  }, []);
+    setWidgets(prev => prev.map(w => (w.zIndex !== undefined ? w : { ...w, zIndex: allocateZIndex() })));
+  }, [allocateZIndex]);
 
   useEffect(() => {
     if (showLoomPanel) {
       bringLoomPanelToFront();
     }
   }, [showLoomPanel, bringLoomPanelToFront]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const storedState = await loadUiState();
+      if (!mounted) return;
+      const overlayState = storedState?.overlay;
+      if (overlayState) {
+        if (typeof overlayState.prompt === 'string') {
+          setPrompt(overlayState.prompt);
+          promptRef.current = overlayState.prompt;
+        }
+        if (overlayState.selectedModel) {
+          setSelectedModel(overlayState.selectedModel);
+          selectedModelRef.current = overlayState.selectedModel;
+        }
+        if (Array.isArray(overlayState.recentGlyphs)) {
+          setRecentGlyphs(overlayState.recentGlyphs);
+        }
+        if (typeof overlayState.showLoomPanel === 'boolean') {
+          setShowLoomPanel(overlayState.showLoomPanel);
+        }
+        if (Array.isArray(overlayState.widgets) && overlayState.widgets.length > 0) {
+          widgetCountRef.current = overlayState.widgets.length;
+          const rehydrated: WidgetGlyph[] = overlayState.widgets.map(widget => ({
+            ...widget,
+            createdAt: widget.createdAt || Date.now(),
+          }));
+          setWidgets(rehydrated);
+          rehydrated
+            .filter(widget => widget.layer === 'background')
+            .forEach(widget => {
+              window.loom?.sendWidgetToLayer?.(widget.id, {
+                id: widget.id,
+                glyphId: widget.glyphId,
+                x: widget.x,
+                y: widget.y,
+                width: widget.width,
+                height: widget.height,
+                prompt: widget.prompt,
+                code: widget.code,
+                layer: widget.layer,
+                inputs: widget.inputs,
+              });
+            });
+        }
+        if (typeof overlayState.zIndexCounter === 'number') {
+          zStackCounterRef.current = overlayState.zIndexCounter;
+          setLoomPanelZ(allocateZIndex());
+        }
+        if (overlayState.loomPanel) {
+          setStoredPanelState(overlayState.loomPanel);
+        }
+        if (overlayState.codeEditor) {
+          setStoredEditorState(overlayState.codeEditor);
+        }
+      }
+      hasHydratedStateRef.current = true;
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [allocateZIndex]);
+
+  useEffect(() => {
+    persistOverlayState({ prompt });
+  }, [prompt, persistOverlayState]);
+
+  useEffect(() => {
+    persistOverlayState({ selectedModel });
+  }, [selectedModel, persistOverlayState]);
+
+  useEffect(() => {
+    persistOverlayState({ recentGlyphs });
+  }, [recentGlyphs, persistOverlayState]);
+
+  useEffect(() => {
+    persistOverlayState({ showLoomPanel });
+  }, [showLoomPanel, persistOverlayState]);
+
+  useEffect(() => {
+    persistOverlayState({ widgets });
+  }, [widgets, persistOverlayState]);
 
 
   const clearPendingRefinementTimer = useCallback(() => {
@@ -576,10 +686,32 @@ export default function OverlayUI() {
       if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
         setShowModelMenu(false);
       }
+      if (keysMenuRef.current && !keysMenuRef.current.contains(e.target as Node)) {
+        setShowKeysMenu(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Load available keys on mount and when keys menu opens
+  useEffect(() => {
+    const loadKeys = async () => {
+      if (window.loom?.getStoredKeys) {
+        try {
+          const keys = await window.loom.getStoredKeys();
+          setAvailableKeys(keys.map((k: any) => ({ id: k.id, name: k.name, category: k.category })));
+        } catch (err) {
+          console.error('[Overlay] Failed to load keys:', err);
+        }
+      }
+    };
+    loadKeys();
+    // Refresh keys whenever keys menu opens
+    if (showKeysMenu) {
+      loadKeys();
+    }
+  }, [showKeysMenu]);
 
   useEffect(() => {
     return () => {
@@ -820,7 +952,7 @@ export default function OverlayUI() {
     if (!widgetListenerRegistered.current) {
       widgetListenerRegistered.current = true;
       
-      window.loom.onWidgetInject?.((data: { code: string; prompt: string; glyphId: string }) => {
+      window.loom.onWidgetInject?.((data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => {
         console.log('[Overlay] 🔮 Widget inject received:', data.prompt);
         
         // Prevent duplicate injections within 1000ms (double-click / StrictMode protection)
@@ -847,7 +979,8 @@ export default function OverlayUI() {
           code: data.code,
           createdAt: Date.now(),
           layer: 'background', // Default: behind desktop icons
-          zIndex: zStackCounterRef.current++,
+          zIndex: allocateZIndex(),
+          inputs: data.inputs, // Include resolved inputs (API keys, etc.)
         };
         
         // Immediately sync to background window (since default layer is 'background')
@@ -861,6 +994,7 @@ export default function OverlayUI() {
           prompt: newWidget.prompt,
           code: newWidget.code,
           layer: newWidget.layer,
+          inputs: newWidget.inputs,
         };
         console.log('[Overlay] 📤 Sending widget to background:', JSON.stringify({
           id: widgetSyncData.id,
@@ -994,6 +1128,7 @@ export default function OverlayUI() {
         prompt: latest.prompt,
         code: latest.code,
         layer: latest.layer,
+        inputs: latest.inputs,
       });
     });
 
@@ -1056,26 +1191,26 @@ export default function OverlayUI() {
           prompt: w.prompt,
           code: w.code,
           layer: newLayer,
+          inputs: w.inputs,
         };
         window.loom?.sendWidgetToLayer?.(id, widgetData);
         
         return { 
           ...w, 
           layer: newLayer,
-          zIndex: newLayer === 'foreground' ? zStackCounterRef.current++ : w.zIndex,
+          zIndex: newLayer === 'foreground' ? allocateZIndex() : w.zIndex,
         };
       });
       return updated;
     });
   }, []);
 
-  const handleSubmit = useCallback((e: React.FormEvent) => {
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (prompt.trim() && summonState.phase === 'idle' && window.loom) {
       // Reset state for new summon
       attemptRef.current = 0;
       currentCodeRef.current = '';
-      originalPromptRef.current = prompt.trim(); // PRESERVE original prompt for entire session
       editorOpenedForStreamRef.current = true; // Mark as opened (we're opening NOW)
       setLastError(null);
       setCanCancel(false);
@@ -1085,7 +1220,23 @@ export default function OverlayUI() {
       setLoomStreamingCode(''); // Clear any previous streaming code
       setLoomInitialGlyphId(undefined); // Clear previous glyph selection
       
+      // Build prompt with selected key names (not values!)
+      let finalPrompt = prompt.trim();
+      if (selectedKeys.length > 0) {
+        const keyNames = selectedKeys
+          .map(keyId => availableKeys.find(k => k.id === keyId)?.name)
+          .filter(Boolean);
+        if (keyNames.length > 0) {
+          finalPrompt += `\n\n[User has provided these credentials/keys: ${keyNames.join(', ')}. Use window.GLYPH_INPUTS to access them by their input ID.]`;
+        }
+      }
+      
+      originalPromptRef.current = finalPrompt; // PRESERVE original prompt for entire session
+      
       console.log('[Overlay] 🚀 Starting summon with prompt:', originalPromptRef.current);
+      if (selectedKeys.length > 0) {
+        console.log('[Overlay] 🔑 Selected keys:', selectedKeys.map(id => availableKeys.find(k => k.id === id)?.name));
+      }
       
       // IMMEDIATELY open the editor with goopy animation - don't wait for first chunk
       console.log('[Overlay] 🌊 Opening editor IMMEDIATELY on submit...');
@@ -1100,15 +1251,24 @@ export default function OverlayUI() {
       }, 300); // Faster transition since user is waiting
       
       // Start secure summon via main process with selected model
-      window.loom.summonRequest(prompt.trim(), selectedModel);
+      window.loom.summonRequest(finalPrompt, selectedModel);
       setSummonState({ phase: 'streaming', attempt: 1 });
       setShowModelMenu(false);
+      setShowKeysMenu(false);
     }
-  }, [prompt, summonState.phase, selectedModel, clearPendingRefinementTimer]);
+  }, [prompt, summonState.phase, selectedModel, selectedKeys, availableKeys, clearPendingRefinementTimer]);
 
   const handleModelSelect = useCallback((modelId: string) => {
     setSelectedModel(modelId);
     setShowModelMenu(false);
+  }, []);
+
+  const handleKeyToggle = useCallback((keyId: string) => {
+    setSelectedKeys(prev => 
+      prev.includes(keyId) 
+        ? prev.filter(k => k !== keyId)
+        : [...prev, keyId]
+    );
   }, []);
 
   const getCurrentModel = useCallback(() => {
@@ -1188,6 +1348,10 @@ export default function OverlayUI() {
           transitionFromSummonBar={loomTransition === 'morphing' || loomTransition === 'complete'}
           zIndex={loomPanelZ}
           onRequestFront={bringLoomPanelToFront}
+          initialState={storedPanelState}
+          onStateChange={handlePanelStateChange}
+          editorState={storedEditorState}
+          onEditorStateChange={handleEditorStateChange}
         />
       )}
 
@@ -1294,6 +1458,85 @@ export default function OverlayUI() {
             </button>
           </div>
           
+          {/* Key selector - Select credentials to provide to AI */}
+          <div style={styles.keySelectorWrapper} ref={keysMenuRef}>
+            <button 
+              type="button" 
+              onClick={() => setShowKeysMenu(!showKeysMenu)}
+              style={{
+                ...styles.keyBtn,
+                borderColor: showKeysMenu || selectedKeys.length > 0 
+                  ? 'rgba(0, 255, 200, 0.6)' 
+                  : 'rgba(0, 255, 200, 0.25)',
+                background: showKeysMenu || selectedKeys.length > 0 
+                  ? 'rgba(0, 255, 200, 0.15)' 
+                  : 'rgba(0, 255, 200, 0.05)',
+              }}
+              title={selectedKeys.length > 0 
+                ? `${selectedKeys.length} key(s) selected` 
+                : 'Select keys to provide'}
+            >
+              <span style={styles.keyIcon}>🔑</span>
+              {selectedKeys.length > 0 && (
+                <span style={styles.keyBadge}>{selectedKeys.length}</span>
+              )}
+            </button>
+            
+            {/* Keys dropdown menu - opens UPWARD */}
+            {showKeysMenu && (
+              <div style={styles.keysMenu}>
+                <div style={styles.keysMenuTitle}>PROVIDE KEYS TO AI</div>
+                <div style={styles.keysMenuDescription}>
+                  Select credentials to include. Only names are shared with AI.
+                </div>
+                <div style={styles.keysMenuScroll}>
+                  {availableKeys.length === 0 ? (
+                    <div style={styles.keysEmpty}>
+                      <span style={styles.keysEmptyIcon}>🔐</span>
+                      <span style={styles.keysEmptyText}>No keys stored</span>
+                      <span style={styles.keysEmptyHint}>Add keys in Settings → Keys</span>
+                    </div>
+                  ) : (
+                    availableKeys.map((key) => (
+                      <button
+                        key={key.id}
+                        onClick={() => handleKeyToggle(key.id)}
+                        style={{
+                          ...styles.keyMenuItem,
+                          background: selectedKeys.includes(key.id)
+                            ? 'rgba(0, 255, 200, 0.15)'
+                            : 'transparent',
+                          borderColor: selectedKeys.includes(key.id)
+                            ? 'rgba(0, 255, 200, 0.4)'
+                            : 'rgba(255, 255, 255, 0.08)',
+                        }}
+                      >
+                        <span style={styles.keyMenuIcon}>
+                          {key.category === 'api' ? '🔑' : 
+                           key.category === 'token' ? '🎫' :
+                           key.category === 'password' ? '🔒' :
+                           key.category === 'credential' ? '👤' : '📦'}
+                        </span>
+                        <span style={styles.keyMenuName}>{key.name}</span>
+                        {selectedKeys.includes(key.id) && (
+                          <span style={styles.keyMenuCheck}>✓</span>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+                {selectedKeys.length > 0 && (
+                  <button 
+                    onClick={() => setSelectedKeys([])}
+                    style={styles.clearKeysBtn}
+                  >
+                    Clear selection
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Model selector - OUTSIDE input wrapper */}
           <div style={styles.modelSelectorWrapper} ref={modelMenuRef}>
             <button 
@@ -1715,6 +1958,146 @@ const styles: Record<string, any> = {
     transition: 'all 0.2s ease',
     fontFamily: 'inherit',
   },
+  // Key selector styles - positioned outside input container
+  keySelectorWrapper: {
+    position: 'relative',
+    zIndex: 101,
+    flexShrink: 0,
+  },
+  keyBtn: {
+    background: 'rgba(8, 8, 18, 0.92)',
+    backdropFilter: 'blur(24px)',
+    border: '1px solid rgba(0, 255, 200, 0.25)',
+    borderRadius: '14px',
+    width: '56px',
+    height: '56px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+    position: 'relative',
+  },
+  keyIcon: {
+    fontSize: '24px',
+    filter: 'drop-shadow(0 0 6px rgba(0, 255, 200, 0.5))',
+  },
+  keyBadge: {
+    position: 'absolute',
+    top: '-4px',
+    right: '-4px',
+    width: '20px',
+    height: '20px',
+    background: 'linear-gradient(135deg, #00ffc8, #00cc99)',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '11px',
+    fontWeight: 700,
+    color: '#000',
+    boxShadow: '0 2px 8px rgba(0, 255, 200, 0.4)',
+  },
+  keysMenu: {
+    position: 'absolute',
+    bottom: '65px',
+    right: '0',
+    background: 'rgba(12, 12, 24, 0.98)',
+    backdropFilter: 'blur(24px)',
+    borderRadius: '14px',
+    border: '1px solid rgba(0, 255, 200, 0.4)',
+    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), 0 0 60px rgba(0, 255, 200, 0.1)',
+    padding: '12px',
+    minWidth: '260px',
+    animation: 'fadeIn 0.2s ease',
+  },
+  keysMenuTitle: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: '10px',
+    fontWeight: 700,
+    letterSpacing: '1px',
+    textTransform: 'uppercase',
+    marginBottom: '4px',
+  },
+  keysMenuDescription: {
+    color: 'rgba(255, 255, 255, 0.35)',
+    fontSize: '11px',
+    lineHeight: 1.4,
+    marginBottom: '12px',
+    paddingBottom: '10px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+  },
+  keysMenuScroll: {
+    maxHeight: '250px',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  keysEmpty: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    padding: '20px',
+    gap: '8px',
+  },
+  keysEmptyIcon: {
+    fontSize: '28px',
+    opacity: 0.4,
+  },
+  keysEmptyText: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: '13px',
+    fontWeight: 500,
+  },
+  keysEmptyHint: {
+    color: 'rgba(255, 255, 255, 0.3)',
+    fontSize: '11px',
+  },
+  keyMenuItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    width: '100%',
+    padding: '10px 12px',
+    background: 'transparent',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: '10px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    fontFamily: 'inherit',
+    textAlign: 'left',
+  },
+  keyMenuIcon: {
+    fontSize: '16px',
+  },
+  keyMenuName: {
+    color: '#ffffff',
+    fontSize: '13px',
+    fontWeight: 500,
+    flex: 1,
+  },
+  keyMenuCheck: {
+    color: '#00ffc8',
+    fontSize: '14px',
+    fontWeight: 'bold',
+  },
+  clearKeysBtn: {
+    marginTop: '10px',
+    padding: '8px 12px',
+    background: 'transparent',
+    border: '1px solid rgba(255, 100, 100, 0.3)',
+    borderRadius: '8px',
+    color: 'rgba(255, 100, 100, 0.7)',
+    fontSize: '11px',
+    cursor: 'pointer',
+    width: '100%',
+    fontFamily: 'inherit',
+    transition: 'all 0.2s ease',
+  },
+
   // Model selector styles - positioned outside input container
   modelSelectorWrapper: {
     position: 'relative',

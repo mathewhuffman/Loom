@@ -8,6 +8,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import * as Diff from 'diff';
 import GlyphIframe from '../GlyphIframe';
+import type { CodeEditorState } from '../../types/ui-state';
 
 /**
  * Extract HTML content from streaming JSON manifest
@@ -85,6 +86,18 @@ interface GlyphManifest {
   entry?: string;
   model?: string; // Model used to generate this glyph
   icon?: string; // Custom glyph icon
+  linkedKeys?: string[]; // IDs of linked keys from user's vault
+  inputs?: Array<{
+    id: string;
+    type: string;
+    label: string;
+    description?: string;
+    required?: boolean;
+    value?: unknown;
+    defaultValue?: unknown;
+    service?: string;
+    placeholder?: string;
+  }>;
 }
 
 interface AIModel {
@@ -265,18 +278,22 @@ interface CodeEditorViewProps {
   initialGlyphId?: string;
   streamingCode?: string;
   isStreaming?: boolean;
+  persistedState?: CodeEditorState;
+  onStateChange?: (state: CodeEditorState) => void;
 }
 
 export default function CodeEditorView({ 
   initialGlyphId,
   streamingCode: externalStreamingCode,
   isStreaming: externalIsStreaming,
+  persistedState,
+  onStateChange,
 }: CodeEditorViewProps) {
   const [glyphs, setGlyphs] = useState<GlyphManifest[]>([]);
   const [folders, setFolders] = useState<GlyphFolder[]>([]);
   const [unassignedOrder, setUnassignedOrder] = useState<string[]>([]);
   const [selectedGlyph, setSelectedGlyph] = useState<GlyphManifest | null>(null);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<string | null>(persistedState?.selectedFile ?? null);
   const [fileContent, setFileContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
   const [errors, setErrors] = useState<EditorError[]>([]);
@@ -302,10 +319,17 @@ export default function CodeEditorView({
   const modelMenuRef = useRef<HTMLDivElement>(null);
   
   // Preview panel state
-  const [previewHeight, setPreviewHeight] = useState(250); // Default preview height
+  const [previewHeight, setPreviewHeight] = useState(persistedState?.previewHeight ?? 250); // Default preview height
   const [isResizingPreview, setIsResizingPreview] = useState(false);
-  const [previewTab, setPreviewTab] = useState<'preview' | 'errors'>('preview');
+  const [previewTab, setPreviewTab] = useState<'preview' | 'errors' | 'devtools'>(persistedState?.previewTab ?? 'preview');
   const [estimatedRam, setEstimatedRam] = useState<string>('--');
+  
+  // Resolved inputs for glyph preview (includes linked keys)
+  const [resolvedInputs, setResolvedInputs] = useState<Record<string, unknown>>({});
+  
+  // DevTools state
+  const [consoleLogs, setConsoleLogs] = useState<Array<{ type: 'log' | 'warn' | 'error' | 'info'; message: string; timestamp: number }>>([]);
+  const [networkRequests, setNetworkRequests] = useState<Array<{ url: string; status: number | 'pending' | 'error'; method: string; timestamp: number }>>([]);
   
   // Glyph error state (separate from editor syntax errors)
   const [glyphErrors, setGlyphErrors] = useState<string[]>([]);
@@ -317,9 +341,9 @@ export default function CodeEditorView({
   const resizeStartHeight = useRef(0);
   
   // Sidebar resize state
-  const [glyphSidebarWidth, setGlyphSidebarWidth] = useState(180);
-  const [fileSidebarWidth, setFileSidebarWidth] = useState(150);
-  const [chatSidebarWidth, setChatSidebarWidth] = useState(320); // Increased by ~15%
+  const [glyphSidebarWidth, setGlyphSidebarWidth] = useState(persistedState?.glyphSidebarWidth ?? 180);
+  const [fileSidebarWidth, setFileSidebarWidth] = useState(persistedState?.fileSidebarWidth ?? 150);
+  const [chatSidebarWidth, setChatSidebarWidth] = useState(persistedState?.chatSidebarWidth ?? 320); // Increased by ~15%
   const [isResizingGlyphSidebar, setIsResizingGlyphSidebar] = useState(false);
   const [isResizingFileSidebar, setIsResizingFileSidebar] = useState(false);
   const [isResizingChatSidebar, setIsResizingChatSidebar] = useState(false);
@@ -327,10 +351,42 @@ export default function CodeEditorView({
   const resizeStartWidth = useRef(0);
   
   // Editor open/close state
-  const [isEditorOpen, setIsEditorOpen] = useState(true);
+  const [isEditorOpen, setIsEditorOpen] = useState(persistedState?.isEditorOpen ?? true);
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const persistedGlyphIdRef = useRef<string | null>(persistedState?.selectedGlyphId ?? null);
+  const persistedFileRef = useRef<string | null>(persistedState?.selectedFile ?? null);
+  const persistedStateAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (persistedStateAppliedRef.current) return;
+    if (!persistedState) return;
+    if (persistedState.selectedFile) {
+      setSelectedFile(persistedState.selectedFile);
+    }
+    if (typeof persistedState.glyphSidebarWidth === 'number') {
+      setGlyphSidebarWidth(persistedState.glyphSidebarWidth);
+    }
+    if (typeof persistedState.fileSidebarWidth === 'number') {
+      setFileSidebarWidth(persistedState.fileSidebarWidth);
+    }
+    if (typeof persistedState.chatSidebarWidth === 'number') {
+      setChatSidebarWidth(persistedState.chatSidebarWidth);
+    }
+    if (typeof persistedState.previewHeight === 'number') {
+      setPreviewHeight(persistedState.previewHeight);
+    }
+    if (persistedState.previewTab) {
+      setPreviewTab(persistedState.previewTab);
+    }
+    if (typeof persistedState.isEditorOpen === 'boolean') {
+      setIsEditorOpen(persistedState.isEditorOpen);
+    }
+    persistedGlyphIdRef.current = persistedState.selectedGlyphId ?? null;
+    persistedFileRef.current = persistedState.selectedFile ?? null;
+    persistedStateAppliedRef.current = true;
+  }, [persistedState]);
 
   // Create a lookup map for glyphs
   const glyphMap = useMemo(() => {
@@ -382,16 +438,22 @@ export default function CodeEditorView({
   }, [folders, unassignedOrder]);
 
   // Handler for selecting a glyph (shared between folder and flat views)
-  const handleGlyphSelect = useCallback(async (glyph: GlyphManifest) => {
+  const handleGlyphSelect = useCallback(async (glyph: GlyphManifest, preferredFile?: string | null) => {
     setSelectedGlyph(glyph);
     setIsEditorOpen(true); // Open editor when selecting glyph
     // Clear any pending refinements from previous glyph
     setPendingRefinements({});
+    // Clear devtools state
+    setConsoleLogs([]);
+    setNetworkRequests([]);
+    setResolvedInputs({});
     
     // Default to index.html for editing/preview, fallback to first file
-    const defaultFile = glyph.files?.includes('index.html') 
-      ? 'index.html' 
-      : glyph.files?.[0] || 'index.html';
+    const defaultFile = preferredFile && glyph.files?.includes(preferredFile)
+      ? preferredFile
+      : glyph.files?.includes('index.html')
+        ? 'index.html'
+        : glyph.files?.[0] || 'index.html';
     setSelectedFile(defaultFile);
     
     // Load chat history for this glyph
@@ -401,6 +463,68 @@ export default function CodeEditorView({
     } catch (err) {
       console.error('Failed to load chat history:', err);
       setChatMessages([]);
+    }
+    
+    // 🔐 Resolve inputs: manifest values + linked keys from vault
+    try {
+      const inputs: Record<string, unknown> = {};
+      
+      // First, extract values from manifest inputs (defaults and saved values)
+      if (glyph.inputs && Array.isArray(glyph.inputs)) {
+        for (const input of glyph.inputs) {
+          if ((input as any).value !== undefined) {
+            inputs[input.id] = (input as any).value;
+          } else if ((input as any).defaultValue !== undefined) {
+            inputs[input.id] = (input as any).defaultValue;
+          }
+        }
+      }
+      
+      // Then, resolve linked keys from the secure vault
+      if (glyph.linkedKeys && glyph.linkedKeys.length > 0) {
+        const result = await window.loom?.getGlyphResolvedKeys?.(glyph.id);
+        if (result?.success && result.keys) {
+          // Get apiKey inputs from manifest for smart matching
+          const apiKeyInputs = (glyph.inputs || []).filter(i => i.type === 'apiKey');
+          
+          for (const [, keyData] of Object.entries(result.keys) as [string, { name: string; value: string }][]) {
+            const keyName = keyData.name;
+            const keyNameLower = keyName.toLowerCase().replace(/\s+/g, '');
+            
+            // Try to find a matching apiKey input in the manifest
+            let matchedInputId: string | null = null;
+            
+            for (const apiInput of apiKeyInputs) {
+              const inputIdLower = apiInput.id.toLowerCase();
+              const inputLabelLower = (apiInput.label || '').toLowerCase().replace(/\s+/g, '');
+              const inputService = ((apiInput as any).service || '').toLowerCase();
+              
+              // Match by: input id contains key name, or key name contains input id,
+              // or service matches, or label matches
+              if (inputIdLower.includes(keyNameLower) || 
+                  keyNameLower.includes(inputIdLower) ||
+                  keyNameLower.includes(inputService) ||
+                  inputService && keyNameLower.includes(inputService) ||
+                  inputLabelLower.includes(keyNameLower) ||
+                  keyNameLower.includes(inputLabelLower)) {
+                matchedInputId = apiInput.id;
+                break;
+              }
+            }
+            
+            // Use matched input ID, or fall back to key name
+            const inputKey = matchedInputId || keyNameLower;
+            inputs[inputKey] = keyData.value;
+            console.log(`🔐 [Preview] Resolved key: ${keyName} → ${inputKey}`);
+          }
+        }
+      }
+      
+      setResolvedInputs(inputs);
+      console.log(`📦 [Preview] Resolved ${Object.keys(inputs).length} inputs for preview`);
+    } catch (err) {
+      console.error('Failed to resolve glyph inputs:', err);
+      setResolvedInputs({});
     }
     
     // Always try to load index.html for preview (it's the main render file)
@@ -437,16 +561,22 @@ export default function CodeEditorView({
           const targetGlyph = loadedGlyphs.find((g: GlyphManifest) => g.id === initialGlyphId);
           if (targetGlyph) {
             console.log('[CodeEditorView] 📂 Auto-selecting glyph:', targetGlyph.name);
-            setSelectedGlyph(targetGlyph);
-            setSelectedFile(targetGlyph.files?.[0] || 'index.html');
+            await handleGlyphSelect(targetGlyph);
           }
+        } else if (persistedGlyphIdRef.current) {
+          const targetGlyph = loadedGlyphs.find((g: GlyphManifest) => g.id === persistedGlyphIdRef.current);
+          if (targetGlyph) {
+            await handleGlyphSelect(targetGlyph, persistedFileRef.current);
+          }
+          persistedGlyphIdRef.current = null;
+          persistedFileRef.current = null;
         }
       } catch (error) {
         console.error('Failed to load glyphs:', error);
       }
     };
     loadGlyphsAndFolders();
-  }, [initialGlyphId, externalIsStreaming]);
+  }, [initialGlyphId, externalIsStreaming, handleGlyphSelect]);
   
   // Load available AI models
   useEffect(() => {
@@ -1453,6 +1583,31 @@ export default function CodeEditorView({
       default: return '🔮';
     }
   };
+
+  useEffect(() => {
+    if (!onStateChange) return;
+    const nextState: CodeEditorState = {
+      selectedGlyphId: selectedGlyph?.id ?? null,
+      selectedFile,
+      glyphSidebarWidth,
+      fileSidebarWidth,
+      chatSidebarWidth,
+      previewHeight,
+      previewTab,
+      isEditorOpen,
+    };
+    onStateChange(nextState);
+  }, [
+    selectedGlyph?.id,
+    selectedFile,
+    glyphSidebarWidth,
+    fileSidebarWidth,
+    chatSidebarWidth,
+    previewHeight,
+    previewTab,
+    isEditorOpen,
+    onStateChange,
+  ]);
 
   return (
     <div style={styles.container} ref={containerRef}>
@@ -2638,7 +2793,7 @@ export default function CodeEditorView({
                 // Reset height back to single line
                 e.target.style.height = '40px';
               }}
-              placeholder="Describe your changes..."
+              placeholder="Refine..."
               maxLength={500}
               style={{
                 ...styles.chatInput,
@@ -2752,6 +2907,27 @@ export default function CodeEditorView({
                 }}
               >
                 {glyphErrors.length > 0 ? '⚠️' : '✓'} Errors {glyphErrors.length > 0 && `(${glyphErrors.length})`}
+              </button>
+              {/* DevTools tab */}
+              <button
+                onClick={() => setPreviewTab('devtools')}
+                style={{
+                  padding: '6px 12px',
+                  background: previewTab === 'devtools' ? 'rgba(180, 100, 255, 0.15)' : 'transparent',
+                  border: 'none',
+                  borderBottom: previewTab === 'devtools' ? '2px solid #b464ff' : '2px solid transparent',
+                  color: previewTab === 'devtools' ? '#b464ff' : 'rgba(255, 255, 255, 0.6)',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  fontFamily: 'inherit',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                🔧 DevTools
               </button>
             </div>
             
@@ -2994,6 +3170,159 @@ export default function CodeEditorView({
                 );
               }
               
+              // Show DevTools tab
+              if (previewTab === 'devtools') {
+                return (
+                  <div style={{
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden',
+                    background: 'rgba(0, 0, 0, 0.4)',
+                    borderRadius: '0 0 12px 12px',
+                  }}>
+                    {/* Resolved Inputs Section */}
+                    <div style={{
+                      padding: '12px 16px',
+                      borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                    }}>
+                      <div style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        color: '#b464ff',
+                        marginBottom: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}>
+                        🔐 Resolved Inputs ({Object.keys(resolvedInputs).length})
+                      </div>
+                      {Object.keys(resolvedInputs).length === 0 ? (
+                        <div style={{ 
+                          fontSize: '11px', 
+                          color: 'rgba(255, 255, 255, 0.4)',
+                          fontStyle: 'italic',
+                        }}>
+                          No inputs resolved. Link keys in Glyphs panel.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {Object.entries(resolvedInputs).map(([key, value]) => (
+                            <div key={key} style={{
+                              padding: '4px 8px',
+                              background: 'rgba(180, 100, 255, 0.1)',
+                              border: '1px solid rgba(180, 100, 255, 0.3)',
+                              borderRadius: '4px',
+                              fontSize: '10px',
+                              fontFamily: 'monospace',
+                            }}>
+                              <span style={{ color: '#b464ff' }}>{key}</span>
+                              <span style={{ color: 'rgba(255, 255, 255, 0.3)' }}> = </span>
+                              <span style={{ color: '#00ff80' }}>
+                                {typeof value === 'string' && value.length > 20 
+                                  ? `"${value.slice(0, 8)}...${value.slice(-4)}"` 
+                                  : JSON.stringify(value)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Console Section */}
+                    <div style={{
+                      flex: 1,
+                      overflow: 'auto',
+                      padding: '12px 16px',
+                    }}>
+                      <div style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        color: '#00ffff',
+                        marginBottom: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          📋 Console ({consoleLogs.length})
+                        </span>
+                        {consoleLogs.length > 0 && (
+                          <button
+                            onClick={() => setConsoleLogs([])}
+                            style={{
+                              padding: '2px 8px',
+                              background: 'transparent',
+                              border: '1px solid rgba(255, 255, 255, 0.2)',
+                              borderRadius: '4px',
+                              color: 'rgba(255, 255, 255, 0.5)',
+                              fontSize: '9px',
+                              cursor: 'pointer',
+                              fontFamily: 'inherit',
+                            }}
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                      {consoleLogs.length === 0 ? (
+                        <div style={{ 
+                          fontSize: '11px', 
+                          color: 'rgba(255, 255, 255, 0.4)',
+                          fontStyle: 'italic',
+                          textAlign: 'center',
+                          padding: '20px',
+                        }}>
+                          Console output will appear here when the glyph runs.
+                          <br />
+                          <span style={{ fontSize: '10px', opacity: 0.7 }}>
+                            (Note: iframe console is sandboxed)
+                          </span>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          {consoleLogs.map((log, i) => (
+                            <div key={i} style={{
+                              padding: '4px 8px',
+                              background: log.type === 'error' ? 'rgba(255, 80, 80, 0.1)' :
+                                         log.type === 'warn' ? 'rgba(255, 200, 0, 0.1)' :
+                                         'rgba(255, 255, 255, 0.03)',
+                              borderLeft: `2px solid ${
+                                log.type === 'error' ? '#ff5050' :
+                                log.type === 'warn' ? '#ffc800' :
+                                log.type === 'info' ? '#00bfff' : '#888'
+                              }`,
+                              borderRadius: '0 4px 4px 0',
+                              fontSize: '10px',
+                              fontFamily: 'monospace',
+                              color: log.type === 'error' ? '#ff5050' :
+                                     log.type === 'warn' ? '#ffc800' : 
+                                     'rgba(255, 255, 255, 0.8)',
+                            }}>
+                              {log.message}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Linked Keys Info */}
+                    <div style={{
+                      padding: '12px 16px',
+                      borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+                      fontSize: '10px',
+                      color: 'rgba(255, 255, 255, 0.4)',
+                    }}>
+                      {selectedGlyph?.linkedKeys?.length ? (
+                        <span>🔗 {selectedGlyph.linkedKeys.length} key(s) linked to this glyph</span>
+                      ) : (
+                        <span>💡 Tip: Link keys in the Glyphs panel → Linked Keys section</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              
               // Show new code preview if pending refinement for current file
               const codeToPreview = currentPendingRefinement ? currentPendingRefinement.newCode : previewCode;
               
@@ -3014,6 +3343,7 @@ export default function CodeEditorView({
                     allowPointerEvents={true}
                     style={{ borderRadius: '0 0 12px 12px' }}
                     onError={handleGlyphError}
+                    inputs={resolvedInputs}
                   />
                 );
               } else if (externalIsStreaming) {

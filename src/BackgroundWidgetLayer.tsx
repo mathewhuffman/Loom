@@ -17,15 +17,18 @@ interface BackgroundWidget {
   y: number;
   width: number;
   height: number;
+  inputs?: Record<string, unknown>;
 }
 
-// Memoized iframe wrapper - only re-renders when code or glyphId actually changes
+// Memoized iframe wrapper - only re-renders when code, glyphId, or inputs actually changes
 const MemoizedGlyphIframe = memo(function MemoizedGlyphIframe({ 
   code, 
-  glyphId 
+  glyphId,
+  inputs 
 }: { 
   code: string; 
   glyphId: string;
+  inputs?: Record<string, unknown>;
 }) {
   return (
     <GlyphIframe
@@ -33,11 +36,12 @@ const MemoizedGlyphIframe = memo(function MemoizedGlyphIframe({
       glyphId={glyphId}
       glyphType="widget"
       title={glyphId}
+      inputs={inputs}
     />
   );
 }, (prev, next) => {
-  // Only re-render if code content or glyphId actually changed
-  return prev.code === next.code && prev.glyphId === next.glyphId;
+  // Only re-render if code content, glyphId, or inputs actually changed
+  return prev.code === next.code && prev.glyphId === next.glyphId && prev.inputs === next.inputs;
 });
 
 const BackgroundWidgetContainer = memo(function BackgroundWidgetContainer({ 
@@ -77,7 +81,7 @@ const BackgroundWidgetContainer = memo(function BackgroundWidgetContainer({
 
   return (
     <div ref={containerRef} style={containerStyle}>
-      <MemoizedGlyphIframe code={widget.code} glyphId={widget.glyphId} />
+      <MemoizedGlyphIframe code={widget.code} glyphId={widget.glyphId} inputs={widget.inputs} />
     </div>
   );
 }, (prev, next) => {
@@ -89,7 +93,8 @@ const BackgroundWidgetContainer = memo(function BackgroundWidgetContainer({
     prev.widget.width === next.widget.width &&
     prev.widget.height === next.widget.height &&
     prev.widget.code === next.widget.code &&
-    prev.widget.glyphId === next.widget.glyphId
+    prev.widget.glyphId === next.widget.glyphId &&
+    prev.widget.inputs === next.widget.inputs
   );
 });
 
@@ -133,9 +138,10 @@ export default function BackgroundWidgetLayer() {
             existing.height !== widgetData.height;
           const codeChanged = existing.code !== widgetData.code;
           const glyphIdChanged = existing.glyphId !== widgetData.glyphId;
+          const inputsChanged = existing.inputs !== widgetData.inputs;
           
           // If nothing changed, return the same array reference
-          if (!positionChanged && !codeChanged && !glyphIdChanged) {
+          if (!positionChanged && !codeChanged && !glyphIdChanged && !inputsChanged) {
             return prev;
           }
           
@@ -149,6 +155,7 @@ export default function BackgroundWidgetLayer() {
             y: widgetData.y,
             width: widgetData.width,
             height: widgetData.height,
+            inputs: inputsChanged ? widgetData.inputs : existing.inputs,
           };
           return clone;
         }
@@ -162,6 +169,7 @@ export default function BackgroundWidgetLayer() {
           y: widgetData.y,
           width: widgetData.width,
           height: widgetData.height,
+          inputs: widgetData.inputs,
         };
         return [...prev, newWidget];
       });

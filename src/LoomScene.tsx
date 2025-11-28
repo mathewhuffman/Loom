@@ -7,6 +7,7 @@ interface GlyphInstance {
   code: string;
   prompt: string;
   createdAt: number;
+  inputs?: Record<string, unknown>;
 }
 
 function DefaultBackdrop() {
@@ -46,11 +47,12 @@ export default function LoomScene() {
       setSummoningPrompt(data.prompt);
     };
 
-    const handleInject = (data: { code: string; prompt: string; glyphId?: string }) => {
+    const handleInject = (data: { code: string; prompt: string; glyphId?: string; inputs?: Record<string, unknown> }) => {
       console.log('[Background] 📥 summon-inject received', {
         glyphId: data.glyphId,
         codeLength: data.code?.length,
         promptPreview: data.prompt?.slice(0, 80),
+        inputsCount: data.inputs ? Object.keys(data.inputs).length : 0,
       });
       const glyph: GlyphInstance = {
         id: `glyph-${Date.now()}`,
@@ -58,6 +60,7 @@ export default function LoomScene() {
         code: data.code,
         prompt: data.prompt,
         createdAt: Date.now(),
+        inputs: data.inputs,
       };
 
       setSummoningPrompt(null);
@@ -88,6 +91,7 @@ export default function LoomScene() {
           glyphId={backgroundGlyph.glyphId || backgroundGlyph.id}
           glyphType="background"
           title="loom-background"
+          inputs={backgroundGlyph.inputs}
         />
       ) : (
         <DefaultBackdrop />

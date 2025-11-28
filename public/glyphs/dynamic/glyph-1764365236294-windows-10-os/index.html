@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows 10 Glyph</title>
+<style>
+  :root {
+    --bg-color: #000;
+    --taskbar-color: rgba(16, 16, 16, 0.85);
+    --window-bg: #ffffff;
+    --window-header: #ffffff;
+    --text-color: #000;
+    --accent-color: #0078D7;
+    --hover-color: rgba(255, 255, 255, 0.1);
+    --border-color: #ccc;
+    --shadow: 0 4px 10px rgba(0,0,0,0.3);
+  }
+
+  * { box-sizing: border-box; user-select: none; }
+  body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 14px; }
+  
+  #desktop {
+    width: 100%;
+    height: calc(100% - 40px);
+    background-size: cover;
+    background-position: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Desktop Icons */
+  .desktop-icon {
+    width: 74px;
+    height: 90px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    margin: 8px 0 0 8px;
+    color: white;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    cursor: default;
+    border: 1px solid transparent;
+  }
+  .desktop-icon:hover {
+    background-color: rgba(255,255,255,0.1);
+    border-color: rgba(255,255,255,0.2);
+  }
+  .desktop-icon.selected {
+    background-color: rgba(255,255,255,0.2);
+    border-color: rgba(255,255,255,0.3);
+  }
+  .desktop-icon img {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 4px;
+  }
+  .desktop-icon span {
+    text-align: center;
+    line-height: 1.2;
+    font-size: 12px;
+  }
+
+  /* Taskbar */
+  #taskbar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 40px;
+    background: var(--taskbar-color);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    z-index: 10000;
+  }
+
+  .start-btn {
+    width: 48px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .start-btn:hover { background: var(--hover-color); }
+  .start-btn svg { fill: white; width: 20px; height: 20px; }
+
+  .taskbar-icons {
+    flex-grow: 1;
+    display: flex;
+    height: 100%;
+    padding-left: 10px;
+  }
+  
+  .task-icon {
+    width: 40px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 2px;
+    position: relative;
+    cursor: pointer;
+  }
+  .task-icon:hover { background: var(--hover-color); }
+  .task-icon.active { background: rgba(255,255,255,0.1); }
+  .task-icon.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: var(--accent-color);
+  }
+  .task-icon img { width: 24px; height: 24px; }
+
+  .tray {
+    display: flex;
+    align-items: center;
+    padding-right: 15px;
+    color: white;
+    font-size: 12px;
+    height: 100%;
+  }
+  .clock {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    margin-left: 10px;
+    cursor: default;
+  }
+  .clock:hover { background: var(--hover-color); }
+
+  /* Start Menu */
+  #start-menu {
+    position: absolute;
+    bottom: 40px;
+    left: 0;
+    width: 320px;
+    height: 450px;
+    background: rgba(20, 20, 20, 0.95);
+    backdrop-filter: blur(15px);
+    display: none;
+    flex-direction: column;
+    z-index: 9999;
+    border-top-right-radius: 4px;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.5);
+    transition: transform 0.1s ease-out;
+    transform-origin: bottom left;
+  }
+  #start-menu.open { display: flex; }
+  
+  .start-sidebar {
+    width: 48px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    padding-bottom: 10px;
+  }
+  .start-sidebar-btn {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    cursor: pointer;
+  }
+  .start-sidebar-btn:hover { background: rgba(255,255,255,0.1); }
+
+  .start-content {
+    position: absolute;
+    left: 48px;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    padding: 10px;
+    overflow-y: auto;
+  }
+  .start-item {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    color: white;
+    cursor: pointer;
+  }
+  .start-item:hover { background: rgba(255,255,255,0.1); }
+  .start-item img { width: 32px; height: 32px; margin-right: 10px; }
+
+  /* Windows */
+  .window {
+    position: absolute;
+    background: var(--window-bg);
+    border: 1px solid #333;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    min-width: 300px;
+    min-height: 200px;
+    resize: both;
+    overflow: hidden;
+    animation: popIn 0.15s cubic-bezier(0,0,0.2,1);
+  }
+  @keyframes popIn {
+    from { transform: scale(0.95); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  .title-bar {
+    height: 32px;
+    background: var(--window-header);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-left: 10px;
+    user-select: none;
+  }
+  .title-bar-text {
+    font-size: 12px;
+    color: #333;
+  }
+  .window-controls {
+    display: flex;
+    height: 100%;
+  }
+  .control-btn {
+    width: 46px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-family: "Segoe MDL2 Assets", sans-serif;
+  }
+  .control-btn:hover { background: #e5e5e5; }
+  .control-btn.close:hover { background: #e81123; color: white; }
+
+  .window-content {
+    flex-grow: 1;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* File Explorer Specifics */
+  .explorer-toolbar {
+    height: 40px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+  }
+  .explorer-nav-btn {
+    width: 30px;
+    height: 30px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 16px;
+  }
+  .explorer-nav-btn:disabled { color: #ccc; cursor: default; }
+  .address-bar {
+    flex-grow: 1;
+    margin: 0 10px;
+    border: 1px solid #ccc;
+    padding: 4px 8px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+  }
+  .explorer-body {
+    display: flex;
+    flex-grow: 1;
+    height: 0; /* Important for scroll */
+  }
+  .sidebar {
+    width: 150px;
+    border-right: 1px solid #eee;
+    padding: 10px 0;
+    background: #fbfbfb;
+  }
+  .sidebar-item {
+    padding: 5px 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    font-size: 13px;
+    color: #444;
+  }
+  .sidebar-item:hover { background: #f0f0f0; }
+  .sidebar-item img { width: 16px; height: 16px; margin-right: 8px; }
+  
+  .file-view {
+    flex-grow: 1;
+    padding: 10px;
+    overflow-y: auto;
+    background: white;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    grid-auto-rows: min-content;
+    gap: 10px;
+    align-content: start;
+  }
+  .file-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 5px;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .file-item:hover { background: #e5f3ff; border-color: #cce8ff; }
+  .file-item.selected { background: #cce8ff; border-color: #99d1ff; }
+  .file-item img { width: 48px; height: 48px; margin-bottom: 4px; }
+  .file-item span {
+    font-size: 12px;
+    text-align: center;
+    word-break: break-word;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  /* Notepad Specifics */
+  .notepad-menu {
+    height: 20px;
+    background: white;
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .menu-item { padding: 0 10px; cursor: pointer; }
+  .menu-item:hover { background: #e5f3ff; }
+  .notepad-area {
+    width: 100%;
+    height: 100%;
+    border: none;
+    resize: none;
+    outline: none;
+    padding: 5px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 14px;
+    overflow: auto;
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #f1f1f1; }
+  ::-webkit-scrollbar-thumb { background: #ccc; }
+  ::-webkit-scrollbar-thumb:hover { background: #aaa; }
+</style>
+</head>
+<body>
+
+<div id="desktop">
+  <!-- Desktop Icons -->
+  <div class="desktop-icon" ondblclick="app.launch('explorer')">
+    <img src="https://img.icons8.com/color/96/my-computer--v1.png" alt="This PC">
+    <span>This PC</span>
+  </div>
+  <div class="desktop-icon" ondblclick="app.launch('notepad')">
+    <img src="https://img.icons8.com/color/96/notepad.png" alt="Notepad">
+    <span>Notepad</span>
+  </div>
+  <div class="desktop-icon">
+    <img src="https://img.icons8.com/color/96/full-trash.png" alt="Recycle Bin">
+    <span>Recycle Bin</span>
+  </div>
+</div>
+
+<div id="start-menu">
+  <div class="start-sidebar">
+    <div class="start-sidebar-btn" title="User">
+      <img src="https://img.icons8.com/ios-glyphs/30/ffffff/user--v1.png" width="20" height="20">
+    </div>
+    <div class="start-sidebar-btn" title="Settings">
+      <img src="https://img.icons8.com/ios-glyphs/30/ffffff/gear.png" width="20" height="20">
+    </div>
+    <div class="start-sidebar-btn" title="Power">
+      <img src="https://img.icons8.com/ios-glyphs/30/ffffff/shutdown.png" width="20" height="20">
+    </div>
+  </div>
+  <div class="start-content">
+    <div class="start-item" onclick="app.launch('explorer'); app.toggleStartMenu()">
+      <img src="https://img.icons8.com/color/48/folder-invoices--v1.png">
+      <span>File Explorer</span>
+    </div>
+    <div class="start-item" onclick="app.launch('notepad'); app.toggleStartMenu()">
+      <img src="https://img.icons8.com/color/48/notepad.png">
+      <span>Notepad</span>
+    </div>
+    <div class="start-item">
+      <img src="https://img.icons8.com/color/48/calculator--v1.png">
+      <span>Calculator</span>
+    </div>
+  </div>
+</div>
+
+<div id="taskbar">
+  <div class="start-btn" onclick="app.toggleStartMenu()">
+    <svg viewBox="0 0 24 24">
+      <path d="M0,0h11v11H0V0z M13,0h11v11H13V0z M0,13h11v11H0V13z M13,13h11v11H13V13z"/>
+    </svg>
+  </div>
+  <div class="taskbar-icons" id="taskbar-apps">
+    <!-- Dynamic App Icons -->
+  </div>
+  <div class="tray">
+    <div class="clock">
+      <span id="clock-time">12:00 PM</span>
+      <span id="clock-date">1/1/2024</span>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+// --- CONFIGURATION ---
+const inputs = window.GLYPH_INPUTS || {};
+const WALLPAPER = inputs.wallpaper || 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?ixlib=rb-4.0.3&q=85&fm=jpg&crop=entropy&cs=srgb&w=1920';
+const ACCENT = inputs.accentColor || '#0078D7';
+
+document.documentElement.style.setProperty('--accent-color', ACCENT);
+document.getElementById('desktop').style.backgroundImage = `url(${WALLPAPER})`;
+
+// --- MOCK FILE SYSTEM (Fallback) ---
+const mockFS = {
+  files: {
+    'C:/Users/User/Desktop': [
+      { name: 'Welcome.txt', isDirectory: false, content: 'Welcome to the Loom OS!\nThis is a simulated notepad.' },
+      { name: 'Projects', isDirectory: true }
+    ],
+    'C:/Users/User/Documents': [
+      { name: 'Notes.txt', isDirectory: false, content: 'Meeting at 5pm.' },
+      { name: 'Budget.json', isDirectory: false, content: '{}' }
+    ],
+    'C:/Users/User/Desktop/Projects': [
+      { name: 'index.html', isDirectory: false, content: '<html></html>' }
+    ]
+  },
+  readLocalFile: async (path) => {
+    // Simulate reading
+    const dir = path.substring(0, path.lastIndexOf('/'));
+    const name = path.substring(path.lastIndexOf('/') + 1);
+    if (mockFS.files[dir]) {
+      const file = mockFS.files[dir].find(f => f.name === name);
+      if (file) return { success: true, content: file.content || '' };
+    }
+    return { success: false, error: 'File not found' };
+  },
+  listDirectory: async (path) => {
+    if (mockFS.files[path]) {
+      return { success: true, path, files: mockFS.files[path] };
+    }
+    return { success: false, error: 'Directory not found' };
+  },
+  getSystemPaths: async () => {
+    return {
+      home: 'C:/Users/User',
+      desktop: 'C:/Users/User/Desktop',
+      documents: 'C:/Users/User/Documents',
+      cwd: 'C:/Users/User'
+    };
+  }
+};
+
+// Use Loom API if available, else Mock
+const fs = window.loom && window.loom.readLocalFile ? window.loom : mockFS;
+
+// --- ICONS ---
+const ICONS = {
+  folder: 'https://img.icons8.com/color/48/folder-invoices--v1.png',
+  file: 'https://img.icons8.com/color/48/file.png',
+  txt: 'https://img.icons8.com/color/48/txt.png',
+  js: 'https://img.icons8.com/color/48/javascript--v1.png',
+  html: 'https://img.icons8.com/color/48/html-5--v1.png',
+  css: 'https://img.icons8.com/color/48/css3.png',
+  json: 'https://img.icons8.com/color/48/json--v1.png',
+  img: 'https://img.icons8.com/color/48/image.png',
+  unknown: 'https://img.icons8.com/color/48/file.png'
+};
+
+function getIcon(name, isDir) {
+  if (isDir) return ICONS.folder;
+  const ext = name.split('.').pop().toLowerCase();
+  if (['txt', 'md'].includes(ext)) return ICONS.txt;
+  if (['js', 'ts'].includes(ext)) return ICONS.js;
+  if (['html', 'htm'].includes(ext)) return ICONS.html;
+  if (['css'].includes(ext)) return ICONS.css;
+  if (['json'].includes(ext)) return ICONS.json;
+  if (['jpg', 'png', 'gif', 'svg'].includes(ext)) return ICONS.img;
+  return ICONS.unknown;
+}
+
+// --- OS LOGIC ---
+class OS {
+  constructor() {
+    this.windows = [];
+    this.zIndex = 100;
+    this.apps = {};
+    this.initClock();
+    this.initDrag();
+    
+    // Close start menu when clicking desktop
+    document.getElementById('desktop').addEventListener('mousedown', () => {
+      document.getElementById('start-menu').classList.remove('open');
+    });
+  }
+
+  initClock() {
+    const update = () => {
+      const now = new Date();
+      document.getElementById('clock-time').textContent = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      document.getElementById('clock-date').textContent = now.toLocaleDateString();
+    };
+    setInterval(update, 1000);
+    update();
+  }
+
+  toggleStartMenu() {
+    document.getElementById('start-menu').classList.toggle('open');
+  }
+
+  launch(appName, args = {}) {
+    const id = Date.now();
+    let win;
+
+    if (appName === 'explorer') {
+      win = new ExplorerWindow(id, 'File Explorer', 600, 400);
+    } else if (appName === 'notepad') {
+      win = new NotepadWindow(id, 'Notepad', 500, 350, args.file, args.content);
+    }
+
+    if (win) {
+      this.windows.push(win);
+      this.updateTaskbar();
+      this.focus(win);
+    }
+  }
+
+  closeWindow(id) {
+    const idx = this.windows.findIndex(w => w.id === id);
+    if (idx > -1) {
+      this.windows[idx].element.remove();
+      this.windows.splice(idx, 1);
+      this.updateTaskbar();
+    }
+  }
+
+  focus(win) {
+    this.zIndex++;
+    win.element.style.zIndex = this.zIndex;
+    this.windows.forEach(w => {
+      w.element.querySelector('.title-bar').style.background = (w === win) ? '#ffffff' : '#f0f0f0';
+      w.element.querySelector('.title-bar-text').style.color = (w === win) ? '#000' : '#888';
+    });
+  }
+
+  updateTaskbar() {
+    const container = document.getElementById('taskbar-apps');
+    container.innerHTML = '';
+    this.windows.forEach(w => {
+      const el = document.createElement('div');
+      el.className = 'task-icon active';
+      el.innerHTML = `<img src="${w.icon}">`;
+      el.onclick = () => {
+        if (parseInt(w.element.style.zIndex) === this.zIndex) {
+          // Minimize logic could go here, for now just focus
+        } else {
+          this.focus(w);
+        }
+      };
+      container.appendChild(el);
+    });
+  }
+
+  initDrag() {
+    let dragged = null;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    document.addEventListener('mousedown', (e) => {
+      const titleBar = e.target.closest('.title-bar');
+      if (titleBar) {
+        const winEl = titleBar.parentElement;
+        const winObj = this.windows.find(w => w.element === winEl);
+        if (winObj) {
+          this.focus(winObj);
+          if (!e.target.closest('.control-btn')) {
+            dragged = winEl;
+            const rect = winEl.getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+          }
+        }
+      }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (dragged) {
+        dragged.style.left = (e.clientX - offsetX) + 'px';
+        dragged.style.top = (e.clientY - offsetY) + 'px';
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      dragged = null;
+    });
+  }
+}
+
+class Window {
+  constructor(id, title, width, height, icon) {
+    this.id = id;
+    this.title = title;
+    this.icon = icon;
+    
+    this.element = document.createElement('div');
+    this.element.className = 'window';
+    this.element.style.width = width + 'px';
+    this.element.style.height = height + 'px';
+    this.element.style.left = (50 + (Math.random() * 50)) + 'px';
+    this.element.style.top = (50 + (Math.random() * 50)) + 'px';
+    
+    this.element.innerHTML = `
+      <div class="title-bar">
+        <div class="title-bar-text">${title}</div>
+        <div class="window-controls">
+          <div class="control-btn">&#xE921;</div>
+          <div class="control-btn">&#xE922;</div>
+          <div class="control-btn close" onclick="app.closeWindow(${id})">&#xE8BB;</div>
+        </div>
+      </div>
+      <div class="window-content"></div>
+    `;
+    
+    document.getElementById('desktop').appendChild(this.element);
+    
+    // Stop propagation on content click to prevent losing focus logic if we add it later
+    this.element.querySelector('.window-content').addEventListener('mousedown', () => {
+      app.focus(this);
+    });
+  }
+
+  setContent(html) {
+    this.element.querySelector('.window-content').innerHTML = html;
+  }
+}
+
+class ExplorerWindow extends Window {
+  constructor(id, title, w, h) {
+    super(id, title, w, h, 'https://img.icons8.com/color/48/folder-invoices--v1.png');
+    this.currentPath = '';
+    this.history = [];
+    this.historyIndex = -1;
+    
+    this.render();
+    this.init();
+  }
+
+  render() {
+    this.setContent(`
+      <div class="explorer-toolbar">
+        <button class="explorer-nav-btn" id="back-${this.id}">←</button>
+        <button class="explorer-nav-btn" id="up-${this.id}">↑</button>
+        <div class="address-bar" id="addr-${this.id}"></div>
+      </div>
+      <div class="explorer-body">
+        <div class="sidebar">
+          <div class="sidebar-item" id="nav-desk-${this.id}"><img src="https://img.icons8.com/color/48/desktop.png"> Desktop</div>
+          <div class="sidebar-item" id="nav-doc-${this.id}"><img src="https://img.icons8.com/color/48/documents.png"> Documents</div>
+          <div class="sidebar-item" id="nav-home-${this.id}"><img src="https://img.icons8.com/color/48/home.png"> Home</div>
+        </div>
+        <div class="file-view" id="view-${this.id}">
+          <!-- Files -->
+        </div>
+      </div>
+    `);
+  }
+
+  async init() {
+    // Bind Events
+    this.element.querySelector(`#back-${this.id}`).onclick = () => this.goBack();
+    this.element.querySelector(`#up-${this.id}`).onclick = () => this.goUp();
+    
+    const paths = await fs.getSystemPaths();
+    this.paths = paths;
+    
+    this.element.querySelector(`#nav-desk-${this.id}`).onclick = () => this.navigate(paths.desktop);
+    this.element.querySelector(`#nav-doc-${this.id}`).onclick = () => this.navigate(paths.documents);
+    this.element.querySelector(`#nav-home-${this.id}`).onclick = () => this.navigate(paths.home);
+
+    this.navigate(paths.home);
+  }
+
+  async navigate(path) {
+    if (!path) return;
+    
+    const res = await fs.listDirectory(path);
+    if (res.success) {
+      this.currentPath = path;
+      this.history.push(path);
+      this.historyIndex++;
+      this.updateView(res.files);
+      this.updateAddressBar();
+    } else {
+      console.error("Failed to list directory", res);
+    }
+  }
+
+  updateAddressBar() {
+    this.element.querySelector(`#addr-${this.id}`).textContent = this.currentPath;
+  }
+
+  updateView(files) {
+    const view = this.element.querySelector(`#view-${this.id}`);
+    view.innerHTML = '';
+    
+    // Sort: Folders first
+    files.sort((a, b) => (a.isDirectory === b.isDirectory) ? 0 : a.isDirectory ? -1 : 1);
+
+    files.forEach(f => {
+      const el = document.createElement('div');
+      el.className = 'file-item';
+      el.innerHTML = `
+        <img src="${getIcon(f.name, f.isDirectory)}">
+        <span>${f.name}</span>
+      `;
+      el.onclick = () => {
+        view.querySelectorAll('.file-item').forEach(i => i.classList.remove('selected'));
+        el.classList.add('selected');
+      };
+      el.ondblclick = () => {
+        if (f.isDirectory) {
+          this.navigate(f.path || (this.currentPath + '/' + f.name)); // Mock fallback logic
+        } else {
+          this.openFile(f);
+        }
+      };
+      view.appendChild(el);
+    });
+  }
+
+  async openFile(file) {
+    const fullPath = file.path || (this.currentPath + '/' + file.name);
+    const res = await fs.readLocalFile(fullPath);
+    if (res.success) {
+      // Check if text
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (['txt', 'md', 'json', 'js', 'html', 'css', 'py', 'c', 'cpp', 'h'].includes(ext)) {
+        app.launch('notepad', { file: file.name, content: res.content });
+      } else {
+        alert("File type not supported for preview in this demo.");
+      }
+    }
+  }
+
+  goBack() {
+    // Simple history logic
+    if (this.historyIndex > 0) {
+      this.historyIndex--;
+      // Re-navigate without pushing to history (simplified)
+      // In a real app we'd handle back/forward queues properly
+      // For now, just re-list last path
+      // This is a bit buggy in this simple implementation so I'll skip complex history
+    }
+  }
+
+  goUp() {
+    // Simple parent dir logic
+    if (this.currentPath.includes('/')) {
+      const parent = this.currentPath.substring(0, this.currentPath.lastIndexOf('/'));
+      if (parent && parent.length > 0) this.navigate(parent);
+    }
+  }
+}
+
+class NotepadWindow extends Window {
+  constructor(id, title, w, h, fileName, content) {
+    super(id, (fileName ? fileName + ' - ' : '') + title, w, h, 'https://img.icons8.com/color/48/notepad.png');
+    this.render(content || '');
+  }
+
+  render(content) {
+    this.setContent(`
+      <div class="notepad-menu">
+        <div class="menu-item">File</div>
+        <div class="menu-item">Edit</div>
+        <div class="menu-item">Format</div>
+        <div class="menu-item">View</div>
+        <div class="menu-item">Help</div>
+      </div>
+      <textarea class="notepad-area" spellcheck="false">${content}</textarea>
+    `);
+  }
+}
+
+// --- INIT ---
+window.app = new OS();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "msg-1764369075886-user",
+    "role": "user",
+    "content": "Make a widget to show PR's for my repo, and i can click the PR to view it\n\n[User has provided these credentials/keys: github. Use window.GLYPH_INPUTS to access them by their input ID.]",
+    "timestamp": 1764369075886,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764369075886-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Neon GitHub PRs\" (undefined)\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764369075887,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764369075886-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764369075888,
+    "type": "info"
+  },
+  {
+    "id": "msg-1764370210969",
+    "role": "user",
+    "content": "ok, I just provided you the github key, please make this widget work properly so I can see my repo",
+    "timestamp": 1764370210969,
+    "type": "refinement"
+  },
+  {
+    "id": "msg-1764370210972-assistant",
+    "role": "assistant",
+    "content": "✨ Refinement ready for index.html!\n\n• REPLACE line 292: Removed default 'facebook/react' so the widget waits for the user's actual repository.\n• REPLACE line 301: Update header to indicate setup state when no repo is configured.\n• REPLACE lines 303-307: Added validation to ensure a repository is provided before fetching.\n\n👆 Review the diff and **Save** or **Discard** the changes.",
+    "timestamp": 1764370256632,
+    "type": "refinement"
+  },
+  {
+    "id": "msg-1764370297350-confirm",
+    "role": "system",
+    "content": "✅ index.html saved successfully!",
+    "timestamp": 1764370297350,
+    "type": "info"
+  }
+]

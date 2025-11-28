@@ -118,6 +118,7 @@ interface LoomAPI {
     entry?: string;
     icon?: string;
     folderId?: string; // For folder-based organization
+    linkedKeys?: string[]; // IDs of linked keys from user's vault
     inputs?: Array<{
       id: string;
       type: 'string' | 'apiKey' | 'file' | 'toggle' | 'select' | 'multiselect' | 'range' | 'color';
@@ -210,6 +211,56 @@ interface LoomAPI {
   getGlyphApiKey: (glyphId: string, keyName: string) => Promise<{ exists: boolean; masked: string }>;
   getGlyphApiKeyValue: (glyphId: string, keyName: string) => Promise<string | null>;
   deleteGlyphApiKey: (glyphId: string, keyName: string) => Promise<{ success: boolean }>;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔐 SECURE USER KEY STORAGE — Windows DPAPI encrypted
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  getStoredKeys: () => Promise<Array<{
+    id: string;
+    name: string;
+    description?: string;
+    category?: string;
+    createdAt: number;
+    updatedAt: number;
+  }>>;
+  saveSecureKey: (keyId: string, keyData: {
+    name: string;
+    value: string;
+    description?: string;
+    category?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  getSecureKeyValue: (keyId: string) => Promise<{ success: boolean; value?: string; error?: string }>;
+  getSecureKeyValuesBatch: (keyIds: string[]) => Promise<{ 
+    success: boolean; 
+    keys?: Record<string, { name: string; value: string }>; 
+    error?: string 
+  }>;
+  deleteSecureKey: (keyId: string) => Promise<{ success: boolean; error?: string }>;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔗 GLYPH KEY LINKING — Connect vault keys to glyphs
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  getGlyphLinkedKeys: (glyphId: string) => Promise<{
+    success: boolean;
+    linkedKeys?: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      category?: string;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+    error?: string;
+  }>;
+  linkKeyToGlyph: (glyphId: string, keyId: string) => Promise<{ success: boolean; error?: string }>;
+  unlinkKeyFromGlyph: (glyphId: string, keyId: string) => Promise<{ success: boolean; error?: string }>;
+  getGlyphResolvedKeys: (glyphId: string) => Promise<{
+    success: boolean;
+    keys?: Record<string, { name: string; value: string }>;
+    error?: string;
+  }>;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 📁 GLYPH FILE UPLOAD HANDLING

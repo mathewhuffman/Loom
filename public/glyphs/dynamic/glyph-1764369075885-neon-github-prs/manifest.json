@@ -1,0 +1,65 @@
+{
+  "id": "glyph-1764369075885-neon-github-prs",
+  "name": "Git Viewer",
+  "prompt": "Make a widget to show PR's for my repo, and i can click the PR to view it\n\n[User has provided these credentials/keys: github. Use window.GLYPH_INPUTS to access them by their input ID.]",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "inputs": [
+    {
+      "id": "repository",
+      "type": "string",
+      "label": "Repository",
+      "placeholder": "owner/repo",
+      "defaultValue": "facebook/react",
+      "value": "mathewhuffman/Loom"
+    },
+    {
+      "id": "prState",
+      "type": "select",
+      "label": "PR State",
+      "options": [
+        {
+          "value": "open",
+          "label": "Open"
+        },
+        {
+          "value": "closed",
+          "label": "Closed"
+        },
+        {
+          "value": "all",
+          "label": "All"
+        }
+      ],
+      "defaultValue": "open",
+      "value": "open"
+    },
+    {
+      "id": "limit",
+      "type": "range",
+      "label": "Max PRs",
+      "min": 5,
+      "max": 50,
+      "defaultValue": 10,
+      "value": 10
+    },
+    {
+      "id": "refreshInterval",
+      "type": "range",
+      "label": "Refresh (min)",
+      "min": 1,
+      "max": 30,
+      "defaultValue": 5,
+      "value": 5
+    }
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-28T22:31:15.885Z",
+  "linkedKeys": [
+    "key-1764368938078-aaz2ot"
+  ],
+  "icon": "💻"
+}

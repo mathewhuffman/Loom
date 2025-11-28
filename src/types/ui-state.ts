@@ -1,0 +1,68 @@
+export type WidgetLayer = 'foreground' | 'background';
+
+export interface PersistedWidgetState {
+  id: string;
+  glyphId: string;
+  prompt: string;
+  code: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  layer: WidgetLayer;
+  zIndex?: number;
+  createdAt: number;
+  inputs?: Record<string, unknown>; // Resolved inputs (including linked keys)
+}
+
+export type NavSection = 'chat' | 'glyphs' | 'editor' | 'settings';
+
+export interface LoomPanelState {
+  size?: { width: number; height: number };
+  position?: { top: number; left: number };
+  navCollapsed?: boolean;
+  activeSection?: NavSection;
+}
+
+export interface CodeEditorState {
+  selectedGlyphId?: string | null;
+  selectedFile?: string | null;
+  glyphSidebarWidth?: number;
+  fileSidebarWidth?: number;
+  chatSidebarWidth?: number;
+  previewHeight?: number;
+  previewTab?: 'preview' | 'errors' | 'devtools';
+  isEditorOpen?: boolean;
+}
+
+export interface OverlayUiState {
+  prompt?: string;
+  selectedModel?: string;
+  recentGlyphs?: string[];
+  showLoomPanel?: boolean;
+  widgets?: PersistedWidgetState[];
+  zIndexCounter?: number;
+  loomPanel?: LoomPanelState;
+  codeEditor?: CodeEditorState;
+}
+
+export interface PersistedWallpaperState {
+  glyphId?: string;
+  prompt?: string;
+  code: string;
+  type?: string;
+  persistedAt: number;
+  inputs?: Record<string, unknown>; // Resolved inputs (including linked keys)
+}
+
+export interface BackgroundUiState {
+  wallpaper?: PersistedWallpaperState | null;
+}
+
+export interface LoomUIState {
+  overlay?: OverlayUiState;
+  background?: BackgroundUiState;
+}
+
+export type LoomUiStatePatch = Partial<LoomUIState>;
+

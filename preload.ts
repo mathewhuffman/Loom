@@ -3,6 +3,7 @@
 // API keys NEVER leave the main process
 
 import { contextBridge, ipcRenderer } from 'electron';
+import type { LoomUiStatePatch } from './src/types/ui-state';
 
 // Detect which layer we're in
 const params = new URLSearchParams(window.location.search);
@@ -60,6 +61,8 @@ contextBridge.exposeInMainWorld('loom', {
   
   // Get available AI models
   getAvailableModels: () => ipcRenderer.invoke('get-available-models'),
+  loadUIState: () => ipcRenderer.invoke('ui-state:load'),
+  saveUIState: (patch: LoomUiStatePatch) => ipcRenderer.invoke('ui-state:save', patch),
   
   // Inject compiled glyph into background
   summonInject: (
@@ -181,9 +184,9 @@ contextBridge.exposeInMainWorld('loom', {
   },
 
   // Listen for widget injection (overlay renders draggable widgets)
-  onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string }) => void) => {
+  onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => void) => {
     console.log(`[${layer}] 🎧 Registering listener: widget-inject`);
-    const listener = (_event: Electron.IpcRendererEvent, data: { code: string; prompt: string; glyphId: string }) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => {
       console.log(`[${layer}] 📥 CALLBACK: widget-inject`, data?.prompt);
       callback(data);
     };
@@ -363,12 +366,12 @@ contextBridge.exposeInMainWorld('loom', {
   // Listen for widget layer updates (background window receives this)
   onWidgetLayerUpdate: (callback: (data: { 
     widgetId: string; 
-    widgetData: { id: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background' } | null 
+    widgetData: { id: string; glyphId: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background'; inputs?: Record<string, unknown> } | null 
   }) => void) => {
     console.log(`[${layer}] 🎧 Registering listener: widget-layer-update`);
     const listener = (_event: Electron.IpcRendererEvent, data: { 
       widgetId: string; 
-      widgetData: { id: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background' } | null 
+      widgetData: { id: string; glyphId: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background'; inputs?: Record<string, unknown> } | null 
     }) => {
       console.log(`[${layer}] 📥 CALLBACK: widget-layer-update`, data?.widgetId, data?.widgetData?.layer || 'remove');
       callback(data);
@@ -458,6 +461,50 @@ contextBridge.exposeInMainWorld('loom', {
     ipcRenderer.invoke('delete-glyph-api-key', glyphId, keyName),
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🔐 SECURE USER KEY STORAGE — Windows DPAPI encrypted
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get all stored keys (metadata only, no values)
+  getStoredKeys: () => ipcRenderer.invoke('get-stored-keys'),
+  
+  // Save a secure key (name, value, description, category)
+  saveSecureKey: (keyId: string, keyData: {
+    name: string;
+    value: string;
+    description?: string;
+    category?: string;
+  }) => ipcRenderer.invoke('save-secure-key', keyId, keyData),
+  
+  // Get a specific key value (decrypted) - USE WITH CAUTION
+  getSecureKeyValue: (keyId: string) => ipcRenderer.invoke('get-secure-key-value', keyId),
+  
+  // Get multiple key values at once (for prompt context)
+  getSecureKeyValuesBatch: (keyIds: string[]) => ipcRenderer.invoke('get-secure-key-values-batch', keyIds),
+  
+  // Delete a secure key
+  deleteSecureKey: (keyId: string) => ipcRenderer.invoke('delete-secure-key', keyId),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔗 GLYPH KEY LINKING — Connect vault keys to glyphs
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get linked keys for a glyph (metadata only)
+  getGlyphLinkedKeys: (glyphId: string) => 
+    ipcRenderer.invoke('get-glyph-linked-keys', glyphId),
+  
+  // Link a key from the vault to a glyph
+  linkKeyToGlyph: (glyphId: string, keyId: string) => 
+    ipcRenderer.invoke('link-key-to-glyph', glyphId, keyId),
+  
+  // Unlink a key from a glyph
+  unlinkKeyFromGlyph: (glyphId: string, keyId: string) => 
+    ipcRenderer.invoke('unlink-key-from-glyph', glyphId, keyId),
+  
+  // Get resolved key values for a glyph (used when invoking)
+  getGlyphResolvedKeys: (glyphId: string) => 
+    ipcRenderer.invoke('get-glyph-resolved-keys', glyphId),
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 📁 GLYPH FILE UPLOAD HANDLING
   // ═══════════════════════════════════════════════════════════════════════════
   
@@ -502,7 +549,7 @@ declare global {
       onSummonProvider: (callback: (data: { provider: string }) => void) => void;
       onSummonStart: (callback: (data: { prompt: string }) => void) => void;
       onSummonInject: (callback: (data: { code: string; prompt: string; mode?: 'background' | 'widget'; glyphId?: string }) => void) => void;
-      onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string }) => void) => void;
+      onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => void) => void;
       summonRefine: (data: { prompt: string; code: string; error: string; attempt: number; model?: string }) => void;
       onSummonRefining: (callback: (data: { attempt: number; error: string }) => void) => void;
       reportGlyphError: (data: { prompt: string; code: string; error: string }) => void;
@@ -553,7 +600,7 @@ declare global {
       } | null) => void;
       onWidgetLayerUpdate: (callback: (data: { 
         widgetId: string; 
-        widgetData: { id: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background' } | null 
+        widgetData: { id: string; glyphId: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background'; inputs?: Record<string, unknown> } | null 
       }) => void) => void;
       deleteGlyph: (glyphId: string) => Promise<{ success: boolean }>;
       openGlyphInEditor: (glyphId: string) => void;
@@ -610,6 +657,29 @@ declare global {
         documents: string;
         downloads: string;
       }>;
+      
+      // Secure user key storage
+      getStoredKeys: () => Promise<Array<{
+        id: string;
+        name: string;
+        description?: string;
+        category?: string;
+        createdAt: number;
+        updatedAt: number;
+      }>>;
+      saveSecureKey: (keyId: string, keyData: {
+        name: string;
+        value: string;
+        description?: string;
+        category?: string;
+      }) => Promise<{ success: boolean; error?: string }>;
+      getSecureKeyValue: (keyId: string) => Promise<{ success: boolean; value?: string; error?: string }>;
+      getSecureKeyValuesBatch: (keyIds: string[]) => Promise<{ 
+        success: boolean; 
+        keys?: Record<string, { name: string; value: string }>; 
+        error?: string 
+      }>;
+      deleteSecureKey: (keyId: string) => Promise<{ success: boolean; error?: string }>;
     };
   }
 }

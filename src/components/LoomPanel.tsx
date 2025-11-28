@@ -4,11 +4,13 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { CodeEditorState, LoomPanelState } from '../types/ui-state';
 import ChatView from './views/ChatView';
 import GlyphsView from './views/GlyphsView';
 import CodeEditorView from './views/CodeEditorView';
+import SettingsView from './views/SettingsView';
 
-type NavSection = 'chat' | 'glyphs' | 'editor';
+type NavSection = 'chat' | 'glyphs' | 'editor' | 'settings';
 
 interface NavItem {
   id: NavSection;
@@ -25,6 +27,10 @@ interface LoomPanelProps {
   transitionFromSummonBar?: boolean; // For goopy morph animation
   zIndex?: number;
   onRequestFront?: () => void;
+  initialState?: LoomPanelState;
+  onStateChange?: (state: LoomPanelState) => void;
+  editorState?: CodeEditorState;
+  onEditorStateChange?: (state: CodeEditorState) => void;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -42,19 +48,27 @@ export default function LoomPanel({
   transitionFromSummonBar = false,
   zIndex,
   onRequestFront,
+  initialState,
+  onStateChange,
+  editorState,
+  onEditorStateChange,
 }: LoomPanelProps) {
-  const [activeSection, setActiveSection] = useState<NavSection>(initialSection);
+  const derivedInitialSection: NavSection =
+    initialSection !== 'chat' ? initialSection : initialState?.activeSection ?? initialSection;
+  const [activeSection, setActiveSection] = useState<NavSection>(derivedInitialSection);
   const [isVisible, setIsVisible] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [navCollapsed, setNavCollapsed] = useState(false); // Nav collapsed state (open by default)
+  const [navCollapsed, setNavCollapsed] = useState(initialState?.navCollapsed ?? false); // Nav collapsed state (open by default)
   const hasAutoSwitchedToEditor = useRef(false); // Track if we've auto-switched to editor
   
   // Panel position (absolute top-left coordinates)
-  const [panelPosition, setPanelPosition] = useState<{ top: number; left: number } | null>(null);
+  const [panelPosition, setPanelPosition] = useState<{ top: number; left: number } | null>(
+    initialState?.position ?? null
+  );
   
   // Resize state
-  const [size, setSize] = useState({ width: 1400, height: 900 }); // Default size
+  const [size, setSize] = useState(initialState?.size ?? { width: 1400, height: 900 }); // Default size
   const [isResizing, setIsResizing] = useState(false);
   const [resizeDir, setResizeDir] = useState<string | null>(null);
   const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0 });
@@ -62,6 +76,26 @@ export default function LoomPanel({
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   
+  const initialStateAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (initialStateAppliedRef.current) return;
+    if (!initialState) return;
+    if (initialSection === 'chat' && initialState.activeSection) {
+      setActiveSection(initialState.activeSection);
+    }
+    if (typeof initialState.navCollapsed === 'boolean') {
+      setNavCollapsed(initialState.navCollapsed);
+    }
+    if (initialState.position) {
+      setPanelPosition(initialState.position);
+    }
+    if (initialState.size) {
+      setSize(initialState.size);
+    }
+    initialStateAppliedRef.current = true;
+  }, [initialState, initialSection]);
+
   // Initialize panel position to center it
   useEffect(() => {
     if (panelPosition === null) {
@@ -261,6 +295,17 @@ export default function LoomPanel({
     }
   }, [isDragging]);
 
+  useEffect(() => {
+    if (!onStateChange) return;
+    const nextState: LoomPanelState = {
+      size,
+      position: panelPosition ?? undefined,
+      navCollapsed,
+      activeSection,
+    };
+    onStateChange(nextState);
+  }, [size, panelPosition, navCollapsed, activeSection, onStateChange]);
+
   return (
     <div 
       ref={containerRef}
@@ -407,20 +452,25 @@ export default function LoomPanel({
             
             {/* Settings button at bottom */}
             <button
+              onClick={() => setActiveSection('settings')}
               style={{
                 ...styles.navItem,
-                opacity: isVisible ? 0.6 : 0,
+                ...(activeSection === 'settings' ? styles.navItemActive : {}),
+                opacity: isVisible ? (activeSection === 'settings' ? 1 : 0.6) : 0,
                 transform: isVisible ? 'translateX(0)' : 'translateX(-20px)',
                 animationDelay: '400ms',
                 width: navCollapsed ? '40px' : '64px',
                 padding: navCollapsed ? '14px 4px' : '14px 8px',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-              onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
+              onMouseEnter={(e) => { if (activeSection !== 'settings') e.currentTarget.style.opacity = '1'; }}
+              onMouseLeave={(e) => { if (activeSection !== 'settings') e.currentTarget.style.opacity = '0.6'; }}
               title={navCollapsed ? 'Settings' : undefined}
             >
               <span style={styles.navIcon}>⚙️</span>
               {!navCollapsed && <span style={styles.navLabel}>Settings</span>}
+              {activeSection === 'settings' && (
+                <div style={styles.navIndicator} />
+              )}
             </button>
           </nav>
 
@@ -433,8 +483,11 @@ export default function LoomPanel({
                 initialGlyphId={initialGlyphId}
                 streamingCode={streamingCode}
                 isStreaming={isStreaming}
+                persistedState={editorState}
+                onStateChange={onEditorStateChange}
               />
             )}
+            {activeSection === 'settings' && <SettingsView />}
           </div>
         </div>
       </div>

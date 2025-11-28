@@ -1,0 +1,12 @@
+{
+  "id": "glyph-1764365236294-windows-10-os",
+  "name": "Windows 10 OS",
+  "prompt": "Create a glyph that looks like a windows 10 os. Have a function file browser, notepad, and make sure these work completely.",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-28T21:27:16.295Z"
+}
