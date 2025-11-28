@@ -1,0 +1,2804 @@
+// main.ts — LOOM Spatial Shell
+// THREE-LAYER ARCHITECTURE: Background (Three.js wallpaper) + Overlay (UI) + Loom Panel (Control Center)
+// Ctrl+Alt+S to awaken the Summoner
+// Ctrl+Alt+L to open the Loom Panel
+// SECURE: All API keys live here, never exposed to renderer
+
+import { app, BrowserWindow, screen, globalShortcut, ipcMain, IpcMainInvokeEvent, Tray, Menu, nativeImage } from 'electron';
+import path from 'path';
+import { attach, detach } from 'electron-as-wallpaper';
+import fs from 'fs';
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📁 DYNAMIC GLYPH FILE SYSTEM
+// ════════════════════════════════════════════════════════════════════════════
+
+const isDev = !app.isPackaged;
+const publicPath = isDev 
+  ? path.join(__dirname, '..', 'public')
+  : path.join(__dirname, '..', 'dist');
+
+// Ensure dynamic glyph folder exists
+const dynamicGlyphPath = path.join(publicPath, 'glyphs', 'dynamic');
+if (!fs.existsSync(dynamicGlyphPath)) {
+  fs.mkdirSync(dynamicGlyphPath, { recursive: true });
+}
+
+// Persistent user-facing glyph library (Documents/LOOM/Glyphs)
+function resolveGlyphLibraryPath() {
+  try {
+    return path.join(app.getPath('documents'), 'LOOM', 'Glyphs');
+  } catch (error) {
+    console.warn('[LOOM] ⚠️  Failed to resolve Documents path, using userData instead:', error);
+    return path.join(app.getPath('userData'), 'Glyphs');
+  }
+}
+
+const glyphLibraryPath = resolveGlyphLibraryPath();
+if (!fs.existsSync(glyphLibraryPath)) {
+  fs.mkdirSync(glyphLibraryPath, { recursive: true });
+  console.log('[LOOM] 📁 Created glyph library:', glyphLibraryPath);
+}
+
+function ensureDirectoryExists(dirPath: string) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+function slugifyGlyphName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+function createGlyphId(manifest: GlyphManifest): string {
+  const slug = slugifyGlyphName(manifest.name);
+  return slug ? `glyph-${Date.now()}-${slug}` : `glyph-${Date.now()}`;
+}
+
+// IPC: Save dynamic glyph to file system
+ipcMain.handle('save-dynamic-glyph', async (event, fileName: string, code: string) => {
+  const filePath = path.join(dynamicGlyphPath, fileName);
+  console.log('[LOOM] 📝 Saving dynamic glyph:', filePath);
+  fs.writeFileSync(filePath, code);
+  return { success: true, path: filePath };
+});
+
+let backgroundWindow: BrowserWindow | null = null;
+let overlayWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let interactionEnabled = false;
+
+const log = (...args: any[]) => console.log('[LOOM]', ...args);
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔧 DIAGNOSTIC IPC HANDLERS
+// ════════════════════════════════════════════════════════════════════════════
+
+ipcMain.handle('get-all-windows', () => {
+  return BrowserWindow.getAllWindows().map(w => ({
+    id: w.id,
+    title: w.getTitle(),
+    focused: w.isFocused(),
+    visible: w.isVisible(),
+    bounds: w.getBounds(),
+  }));
+});
+
+// Direct summon endpoint (invoke-style, returns result)
+ipcMain.handle('summon-glyph-direct', async (event: IpcMainInvokeEvent, prompt: string) => {
+  log('🎯 summon-glyph-direct invoked:', prompt);
+  
+  try {
+    const response = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKeys.grok || ''}`
+      },
+      body: JSON.stringify({
+        model: 'grok-3-fast',
+        messages: [
+          { role: 'system', content: GLYPH_SYSTEM_PROMPT },
+          { role: 'user', content: buildUserPrompt(prompt) }
+        ],
+        stream: false
+      })
+    });
+    
+    const data = await response.json();
+    log('🎯 Direct summon response received');
+    return data.choices?.[0]?.message?.content || 'No response';
+  } catch (error) {
+    log('❌ Direct summon error:', error);
+    return `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔐 API KEY MANAGEMENT — Secure storage in main process
+// ════════════════════════════════════════════════════════════════════════════
+
+interface ApiKeys {
+  grok?: string;
+  gemini?: string;
+  openai?: string;
+}
+
+function loadApiKeys(): ApiKeys {
+  // Try loading from environment variables first
+  const keys: ApiKeys = {
+    grok: process.env.GROK_API_KEY || process.env.XAI_API_KEY,
+    gemini: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
+    openai: process.env.OPENAI_API_KEY,
+  };
+
+  // Try loading from a local config file (gitignored)
+  const configPath = path.join(app.getPath('userData'), 'api-keys.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const fileKeys = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      if (fileKeys.grok) keys.grok = fileKeys.grok;
+      if (fileKeys.gemini) keys.gemini = fileKeys.gemini;
+      if (fileKeys.openai) keys.openai = fileKeys.openai;
+      log('🔑 Loaded API keys from config file');
+    } catch (err) {
+      log('⚠️ Failed to load API keys config:', err);
+    }
+  }
+
+  // Also try loading from project root .env or api-keys.json
+  const projectConfigPath = path.join(__dirname, '..', 'api-keys.json');
+  if (fs.existsSync(projectConfigPath)) {
+    try {
+      const fileKeys = JSON.parse(fs.readFileSync(projectConfigPath, 'utf-8'));
+      if (fileKeys.grok) keys.grok = fileKeys.grok;
+      if (fileKeys.gemini) keys.gemini = fileKeys.gemini;
+      if (fileKeys.openai) keys.openai = fileKeys.openai;
+      log('🔑 Loaded API keys from project config');
+    } catch (err) {
+      log('⚠️ Failed to load project API keys config:', err);
+    }
+  }
+
+  return keys;
+}
+
+const apiKeys = loadApiKeys();
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🧙 SUMMONER ENGINE — LLM streaming in main process
+// ════════════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🧙 GLYPH BUNDLE SYSTEM — Multi-file manifest with auto-refinement
+// ════════════════════════════════════════════════════════════════════════════
+
+interface GlyphInput {
+  id: string;
+  type: 'string' | 'apiKey' | 'file' | 'toggle' | 'select' | 'multiselect' | 'range' | 'color';
+  label: string;
+  description?: string;
+  required?: boolean;
+  // Type-specific properties
+  inputType?: string;
+  placeholder?: string;
+  defaultValue?: unknown;
+  value?: unknown;
+  options?: Array<{ value: string; label: string }>;
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
+  accept?: string;
+  multiple?: boolean;
+  service?: string;
+  onLabel?: string;
+  offLabel?: string;
+}
+
+interface GlyphManifest {
+  name: string;
+  type?: string; // Optional - no longer enforced, kept for backwards compatibility
+  entry?: string;
+  prompt?: string;
+  icon?: string;
+  inputs?: GlyphInput[];
+  files: Record<string, string>;
+  folderId?: string; // For folder-based organization
+}
+
+const GLYPH_SYSTEM_PROMPT = `You are LOOM — a code generator for standalone HTML/CSS/JS glyphs that run inside sandboxed iframes.
+
+OUTPUT FORMAT: Return a JSON manifest (no markdown, no prose):
+{
+  "name": "",
+  "icon": "",
+  "entry": "index.html",
+  "inputs": [
+    {
+      "id": "particleCount",
+      "type": "range",
+      "label": "Particle Count",
+      "description": "Number of particles to render",
+      "min": 100,
+      "max": 5000,
+      "defaultValue": 1000
+    },
+    {
+      "id": "primaryColor",
+      "type": "color",
+      "label": "Primary Color",
+      "defaultValue": "#00ffff"
+    }
+  ],
+  "files": {
+    "index.html": "<!DOCTYPE html>..."
+  }
+}
+
+DESIGN CONSIDERATIONS:
+- Glyphs should be designed to work as BOTH full-screen backgrounds AND resizable widgets.
+- Use responsive design: scale with window.innerWidth/Height so content adapts to any size.
+- Use percentage-based layouts or viewport units (vw, vh) for flexibility.
+
+═══════════════════════════════════════════════════════════════════════════════
+⚠️ CRITICAL: DYNAMIC INPUTS — YOU MUST DEFINE INPUTS IN THE MANIFEST!
+═══════════════════════════════════════════════════════════════════════════════
+
+When the user requests ANY configurable value, API key, token, setting, or external service:
+1. You MUST add an entry to the "inputs" array in the manifest
+2. The code accesses these via window.GLYPH_INPUTS
+3. NEVER leave inputs as an empty array if the glyph needs configuration!
+
+INPUT TYPES (choose the appropriate one):
+- "apiKey": For API keys, tokens, secrets (REQUIRED for GitHub, OpenWeather, Spotify, etc.)
+  Example: { "id": "githubToken", "type": "apiKey", "label": "GitHub Token", "service": "github", "required": true }
+  
+- "string": Text input (inputType: "text"|"textarea"|"url"|"email"|"number")
+  Example: { "id": "repository", "type": "string", "label": "Repository", "placeholder": "owner/repo", "defaultValue": "facebook/react" }
+  
+- "select": Single-select dropdown
+  Example: { "id": "prState", "type": "select", "label": "PR State", "options": [{"value": "open", "label": "Open"}, {"value": "closed", "label": "Closed"}], "defaultValue": "open" }
+  
+- "toggle": Boolean on/off switch
+  Example: { "id": "showDrafts", "type": "toggle", "label": "Show Drafts", "defaultValue": false }
+  
+- "range": Numeric slider (min, max, step, unit)
+  Example: { "id": "refreshInterval", "type": "range", "label": "Refresh (sec)", "min": 30, "max": 300, "defaultValue": 60 }
+  
+- "color": Color picker
+  Example: { "id": "accentColor", "type": "color", "label": "Accent Color", "defaultValue": "#00ffff" }
+  
+- "file": File upload (accept: MIME types)
+  Example: { "id": "configFile", "type": "file", "label": "Config File", "accept": ".json" }
+  
+- "multiselect": Multi-select dropdown
+  Example: { "id": "labels", "type": "multiselect", "label": "Filter Labels", "options": [...] }
+
+EXAMPLE — GitHub PR Widget manifest with REQUIRED inputs:
+{
+  "name": "GitHub PRs",
+  "icon": "🐙",
+  "inputs": [
+    { "id": "githubToken", "type": "apiKey", "label": "GitHub Token", "service": "github", "required": true, "description": "Personal access token with repo scope" },
+    { "id": "repository", "type": "string", "label": "Repository", "placeholder": "owner/repo", "defaultValue": "facebook/react" },
+    { "id": "prState", "type": "select", "label": "PR State", "options": [{"value": "open", "label": "Open"}, {"value": "closed", "label": "Closed"}, {"value": "all", "label": "All"}], "defaultValue": "open" }
+  ],
+  "entry": "index.html",
+  "files": { "index.html": "..." }
+}
+
+USING INPUTS IN CODE — Access via window.GLYPH_INPUTS:
+  const inputs = window.GLYPH_INPUTS || {};
+  const TOKEN = inputs.githubToken;  // Will be the actual token value
+  const REPO = inputs.repository || 'facebook/react';
+  
+  if (!TOKEN) {
+    // Show error state - user hasn't configured the token yet
+  }
+
+═══════════════════════════════════════════════════════════════════════════════
+
+RULES FOR index.html:
+1. Provide a COMPLETE HTML document with <head>, <style>, and <body>.
+2. Set body/html to margin:0; padding:0; width/height:100%; background transparent.
+3. Use inline CSS + JavaScript; no build tools, no React, no bundlers.
+4. You may import CDN modules inside <script type="module">. Example:
+   <script type="module">
+     import * as THREE from 'https://esm.sh/three@0.168.0';
+   </script>
+5. Prefer WebGL/Canvas/Shader/Tween effects. For UI glyphs you can use DOM + CSS animations.
+6. Keep all assets self-contained (SVG gradients, noise shaders, etc.) or load from public HTTPS URLs only.
+7. If interactivity is requested, add real event listeners (mousemove, keydown, etc.) with cleanup.
+8. Ensure the experience scales with window.innerWidth/Height so the iframe can be resized.
+9. Use neon/cyberpunk colors (#00ffff, #ff00ff, #ffff00, #00ff00, #ff0066).
+
+═══════════════════════════════════════════════════════════════════════════════
+📂 FILE SYSTEM ACCESS — Read local files and directories
+═══════════════════════════════════════════════════════════════════════════════
+
+Glyphs can read files from the user's computer using these APIs (available on window.loom):
+
+1. READ A FILE:
+   const result = await window.loom.readLocalFile('C:/path/to/file.txt');
+   if (result.success) {
+     if (result.isDirectory) {
+       // It's a directory - result.files contains the listing
+       console.log(result.files); // [{name, path, isDirectory, size, modified}, ...]
+     } else {
+       // It's a file - result.content contains the text (or base64 for binary)
+       console.log(result.content);
+       console.log(result.extension); // '.txt', '.json', etc.
+       console.log(result.size);
+       console.log(result.modified);
+     }
+   } else {
+     console.error(result.error);
+   }
+
+2. LIST A DIRECTORY:
+   const dir = await window.loom.listDirectory('C:/Users/Documents');
+   if (dir.success) {
+     console.log(dir.path);   // Full path
+     console.log(dir.parent); // Parent directory path (for navigation)
+     console.log(dir.files);  // [{name, path, isDirectory, size, modified}, ...]
+   }
+
+3. GET COMMON PATHS:
+   const paths = await window.loom.getSystemPaths();
+   // paths.home     - User's home directory
+   // paths.desktop  - Desktop folder
+   // paths.documents - Documents folder  
+   // paths.downloads - Downloads folder
+   // paths.cwd      - Current working directory
+
+USE CASES:
+- File browsers / explorers
+- Code viewers / editors
+- Log file viewers
+- Document preview widgets
+- Directory tree visualizers
+- Any glyph that needs to read user files
+
+IMPORTANT: These APIs bypass CORS restrictions since they go through Electron's main process.
+Do NOT use fetch() for local files - use window.loom.readLocalFile() instead.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Be bold, animated, and optimized for real-time rendering.`;
+const INTERACTIVE_KEYWORDS = [
+  'interactive',
+  'interact',
+  'control',
+  'controls',
+  'wasd',
+  'keyboard',
+  'mouse',
+  'click',
+  'drag',
+  'pan',
+  'zoom',
+  'orbit',
+  'drive',
+  'move around',
+  'fly',
+  'game',
+  'playable',
+  'input',
+];
+
+function buildUserPrompt(prompt: string): string {
+  const lowerPrompt = prompt.toLowerCase();
+  const needsInteractivity = INTERACTIVE_KEYWORDS.some(keyword => lowerPrompt.includes(keyword));
+  
+  const interactivityInstructions = needsInteractivity
+    ? `
+IMPORTANT: The user explicitly asked for interactivity. Implement real input handling:
+- Add keyboard/mouse listeners inside <script> with addEventListener + cleanup.
+- Track mutable state (keys pressed, pointer positions) in module-level variables.
+- Animate the scene responsively (move camera/meshes/shaders) in response to that state.
+- Provide clear visual feedback that the controls are active.`
+    : '';
+  
+  return `Create a glyph for: "${prompt}"
+${interactivityInstructions}
+
+Return ONLY the JSON manifest with entry "index.html" and full HTML content.`;
+}
+
+function buildRefinementPrompt(originalPrompt: string, code: string, error: string): string {
+  return `The previous code had an error. Fix it.
+
+ORIGINAL REQUEST: "${originalPrompt}"
+
+ERROR: ${error}
+
+BROKEN CODE:
+${code.slice(0, 1500)}
+
+Return the FIXED JSON manifest. Make sure the HTML document is complete (doctype, head, styles, scripts), all variables are defined before use, and any external imports use valid HTTPS CDNs.
+
+Return ONLY the corrected JSON manifest.`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🤖 AI MODELS CONFIGURATION
+// ════════════════════════════════════════════════════════════════════════════
+
+interface AIModelConfig {
+  id: string;
+  provider: 'grok' | 'gemini' | 'openai';
+  label: string;
+  modelName: string;
+  icon: string;
+}
+
+const AI_MODELS: Record<string, AIModelConfig> = {
+  // xAI Grok models
+  'grok-4.1-fast-reasoning':   { id: 'grok-4.1-fast-reasoning',   provider: 'grok', label: 'Grok 4.1 Fast Reasoning',   modelName: 'grok-4.1-fast-reasoning', icon: '🚀' },
+  'grok-code-fast-1':          { id: 'grok-code-fast-1',          provider: 'grok', label: 'Grok Code Fast',            modelName: 'grok-code-fast-1', icon: '💻' },
+  'grok-4-fast-reasoning':     { id: 'grok-4-fast-reasoning',     provider: 'grok', label: 'Grok 4 Fast Reasoning',     modelName: 'grok-4-fast-reasoning', icon: '⚡' },
+  'grok-4-fast-non-reasoning': { id: 'grok-4-fast-non-reasoning', provider: 'grok', label: 'Grok 4 Fast',               modelName: 'grok-4-fast-non-reasoning', icon: '🏎️' },
+  'grok-3-mini':               { id: 'grok-3-mini',               provider: 'grok', label: 'Grok 3 Mini',               modelName: 'grok-3-mini', icon: '🤖' },
+  'grok-3':                    { id: 'grok-3',                    provider: 'grok', label: 'Grok 3',                    modelName: 'grok-3', icon: '🤖' },
+  
+  // Gemini (Google) models
+  'gemini-3':                  { id: 'gemini-3',                  provider: 'gemini', label: 'Gemini 3 Pro',            modelName: 'gemini-3-pro-preview', icon: '🌟' },
+  'gemini-2.0-flash':          { id: 'gemini-2.0-flash',          provider: 'gemini', label: 'Gemini 2.0 Flash',        modelName: 'gemini-2.0-flash', icon: '✨' },
+  'gemini-1.5-pro':            { id: 'gemini-1.5-pro',            provider: 'gemini', label: 'Gemini 1.5 Pro',          modelName: 'gemini-1.5-pro', icon: '💎' },
+  
+  // OpenAI / GPT models
+  'gpt-4o':                    { id: 'gpt-4o',                    provider: 'openai', label: 'GPT-4o',                  modelName: 'gpt-4o', icon: '🧠' },
+  'gpt-4o-mini':               { id: 'gpt-4o-mini',               provider: 'openai', label: 'GPT-4o Mini',             modelName: 'gpt-4o-mini', icon: '🧠' },
+  'gpt-4-turbo':               { id: 'gpt-4-turbo',               provider: 'openai', label: 'GPT-4 Turbo',             modelName: 'gpt-4-turbo', icon: '🚀' },
+  'o1':                        { id: 'o1',                        provider: 'openai', label: 'o1 (Reasoning)',          modelName: 'o1', icon: '🔮' },
+  'o1-mini':                   { id: 'o1-mini',                   provider: 'openai', label: 'o1 Mini',                 modelName: 'o1-mini', icon: '🔮' },
+};
+
+// Default models for each provider (used for fallback)
+const DEFAULT_MODELS = {
+  gemini: 'gemini-3',
+  grok: 'grok-3', // Default to Gemini 3 Pro
+  openai: 'gpt-4o-mini',
+};
+
+const PROVIDER_ORDER = ['gemini', 'grok', 'openai'];
+const MODEL_PRIORITY: Record<string, number> = {
+  'gemini-3': 0,
+  'gemini-2.0-flash': 1,
+  'gemini-1.5-pro': 2,
+  'grok-4.1-fast-reasoning': 0,
+  'grok-code-fast-1': 1,
+  'grok-4-fast-reasoning': 2,
+  'grok-4-fast-non-reasoning': 3,
+  'grok-3': 4,
+  'grok-3-mini': 5,
+  'gpt-4o': 0,
+  'gpt-4o-mini': 1,
+  'gpt-4-turbo': 2,
+  'o1': 3,
+  'o1-mini': 4,
+};
+
+// Streaming LLM call to xAI Grok
+async function* streamGrok(prompt: string, modelName: string = 'grok-3'): AsyncGenerator<string> {
+  if (!apiKeys.grok) throw new Error('Grok API key not configured');
+
+  const response = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKeys.grok}`,
+    },
+    body: JSON.stringify({
+      model: modelName,
+      messages: [
+        { role: 'system', content: GLYPH_SYSTEM_PROMPT },
+        { role: 'user', content: buildUserPrompt(prompt) },
+      ],
+      stream: true,
+      temperature: 0.7,
+      max_tokens: 4000,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Grok API error: ${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content || '';
+          if (content) {
+            yield content;
+          }
+        } catch {
+          // Ignore parse errors for incomplete chunks
+        }
+      }
+    }
+  }
+}
+
+// Streaming LLM call to Gemini
+async function* streamGemini(prompt: string, modelName: string = 'gemini-2.0-flash'): AsyncGenerator<string> {
+  if (!apiKeys.gemini) throw new Error('Gemini API key not configured');
+
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKeys.gemini}&alt=sse`;
+  log(`[Gemini] 🌐 Calling API with model: ${modelName}`);
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{ text: GLYPH_SYSTEM_PROMPT + '\n\n' + buildUserPrompt(prompt) }],
+      }],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 30000, 
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    // Try to get more error details
+    let errorBody = '';
+    try {
+      errorBody = await response.text();
+      log(`[Gemini] ❌ API Error Response: ${errorBody}`);
+    } catch (e) {
+      log(`[Gemini] ❌ Could not read error body`);
+    }
+    throw new Error(`Gemini API error: ${response.status} ${response.statusText} - ${errorBody.slice(0, 200)}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let totalChars = 0;
+  let chunkCount = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      log(`[Gemini] ✅ Stream complete: ${chunkCount} chunks, ${totalChars} total chars`);
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const rawData = line.slice(6);
+          const data = JSON.parse(rawData);
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (text) {
+            totalChars += text.length;
+            chunkCount++;
+            yield text;
+          }
+          // Check for errors in the response
+          if (data?.error) {
+            log(`[Gemini] ❌ API returned error in stream: ${JSON.stringify(data.error)}`);
+          }
+          // Check for finish reason
+          const finishReason = data?.candidates?.[0]?.finishReason;
+          if (finishReason && finishReason !== 'STOP') {
+            log(`[Gemini] ⚠️ Unusual finish reason: ${finishReason}`);
+          }
+        } catch (parseErr) {
+          // Log parse errors for debugging
+          if (line.trim() && !line.includes('[DONE]')) {
+            log(`[Gemini] ⚠️ Parse error on line: ${line.slice(0, 100)}`);
+          }
+        }
+      }
+    }
+  }
+  
+  if (totalChars === 0) {
+    log(`[Gemini] ⚠️ WARNING: Stream completed with 0 characters!`);
+  }
+}
+
+// Streaming LLM call to OpenAI
+async function* streamOpenAI(prompt: string, modelName: string = 'gpt-4o-mini'): AsyncGenerator<string> {
+  if (!apiKeys.openai) throw new Error('OpenAI API key not configured');
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKeys.openai}`,
+    },
+    body: JSON.stringify({
+      model: modelName,
+      messages: [
+        { role: 'system', content: GLYPH_SYSTEM_PROMPT },
+        { role: 'user', content: buildUserPrompt(prompt) },
+      ],
+      stream: true,
+      temperature: 0.7,
+      max_tokens: 4000,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content || '';
+          if (content) {
+            yield content;
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+}
+
+// Provider streaming functions
+const PROVIDER_STREAMS: Record<string, (prompt: string, modelName: string) => AsyncGenerator<string>> = {
+  grok: streamGrok,
+  gemini: streamGemini,
+  openai: streamOpenAI,
+};
+
+// Parse and validate glyph manifest from LLM response
+function parseGlyphManifest(response: string): GlyphManifest | null {
+  try {
+    // Try to extract JSON from the response
+    let jsonStr = response.trim();
+    
+    // Remove markdown code blocks if present
+    jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    
+    // Find JSON object
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      log('❌ No JSON found in response');
+      return null;
+    }
+    
+    const manifest = JSON.parse(jsonMatch[0]) as GlyphManifest;
+    
+    // Only name and files are required - type is now optional
+    if (!manifest.name || !manifest.files) {
+      log('❌ Invalid manifest structure (missing name or files)');
+      return null;
+    }
+
+    const fileNames = Object.keys(manifest.files);
+    if (fileNames.length === 0) {
+      log('❌ Manifest has no files');
+      return null;
+    }
+
+    const entry =
+      manifest.entry ||
+      (fileNames.includes('index.html')
+        ? 'index.html'
+        : fileNames.includes('index.tsx')
+          ? 'index.tsx'
+          : fileNames[0]);
+
+    if (!entry || !manifest.files[entry]) {
+      log('❌ Manifest entry missing or file not found');
+      return null;
+    }
+
+    manifest.entry = entry;
+    
+    return manifest;
+  } catch (error) {
+    log('❌ Failed to parse manifest:', error);
+    return null;
+  }
+}
+
+// Write glyph files to disk
+// Chat message interface for glyph history
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+  type?: 'generation' | 'refinement' | 'info';
+}
+
+async function writeGlyphBundle(
+  glyphId: string, 
+  manifest: GlyphManifest,
+  prompt?: string,
+  modelUsed?: string
+): Promise<{ glyphId: string; locations: string[] }> {
+  const targets = [dynamicGlyphPath, glyphLibraryPath];
+  const savedLocations: string[] = [];
+  const contentFileNames = Object.keys(manifest.files);
+  const entryFile = manifest.entry && manifest.files[manifest.entry]
+    ? manifest.entry
+    : contentFileNames.includes('index.html')
+      ? 'index.html'
+      : contentFileNames.includes('index.tsx')
+        ? 'index.tsx'
+        : contentFileNames[0];
+  // Include manifest.json in the files list so it shows in the editor
+  const allFileNames = ['manifest.json', ...contentFileNames];
+  const metadata = {
+    id: glyphId,
+    name: manifest.name,
+    type: manifest.type,
+    prompt: prompt || '',
+    entry: entryFile,
+    files: allFileNames,
+    model: modelUsed || undefined, // Store which model was used for generation
+    savedAt: new Date().toISOString(),
+  };
+  
+  for (const basePath of targets) {
+    if (!basePath) continue;
+    
+    const glyphDir = path.join(basePath, glyphId);
+    ensureDirectoryExists(glyphDir);
+    log(`📂 [Bundle] Writing ${glyphId} → ${glyphDir}`);
+    
+    for (const [filename, content] of Object.entries(manifest.files)) {
+      const filePath = path.join(glyphDir, filename);
+      ensureDirectoryExists(path.dirname(filePath));
+      fs.writeFileSync(filePath, content, 'utf-8');
+      log(`📝 Wrote ${filename} (${content.length} chars) → ${glyphDir}`);
+    }
+    
+    fs.writeFileSync(
+      path.join(glyphDir, 'manifest.json'),
+      JSON.stringify(metadata, null, 2)
+    );
+    
+    // Save initial chat history with the generation prompt
+    if (prompt) {
+      const chatHistory: ChatMessage[] = [
+        {
+          id: `msg-${Date.now()}-user`,
+          role: 'user',
+          content: prompt,
+          timestamp: Date.now(),
+          type: 'generation',
+        },
+        {
+          id: `msg-${Date.now()}-assistant`,
+          role: 'assistant',
+          content: `✨ Created "${manifest.name}" (${manifest.type})\n\nGenerated ${contentFileNames.length} file(s): ${contentFileNames.join(', ')}`,
+          timestamp: Date.now() + 1,
+          type: 'generation',
+        },
+      ];
+      if (modelUsed) {
+        chatHistory.push({
+          id: `msg-${Date.now()}-system`,
+          role: 'system',
+          content: `Model: ${modelUsed}`,
+          timestamp: Date.now() + 2,
+          type: 'info',
+        });
+      }
+      fs.writeFileSync(
+        path.join(glyphDir, 'chat.json'),
+        JSON.stringify(chatHistory, null, 2)
+      );
+      log(`💬 Saved chat history with ${chatHistory.length} messages`);
+    }
+    
+    savedLocations.push(glyphDir);
+  }
+  
+  return { glyphId, locations: savedLocations };
+}
+
+// Main summon function with refinement loop
+async function summonGlyph(
+  prompt: string, 
+  webContents: Electron.WebContents, 
+  selectedModelId?: string,
+  refinementAttempt: number = 0,
+  previousError?: string,
+  previousCode?: string,
+  summonId: string = `summon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+): Promise<void> {
+  const maxRefinements = 5; // Max refinement attempts
+  
+  // Get model config or use default
+  const modelConfig = selectedModelId ? AI_MODELS[selectedModelId] : null;
+  const provider = modelConfig?.provider || 'gemini'; // Default to Gemini
+  const modelName = modelConfig?.modelName || DEFAULT_MODELS[provider];
+  const modelLabel = modelConfig?.label || 'Auto';
+  
+  const isRefinement = refinementAttempt > 0;
+  log(`[${summonId}] ⚡ ${isRefinement ? `REFINING (attempt ${refinementAttempt})` : 'SUMMONING'}:`, prompt, `(${modelLabel})`);
+
+  // Check if we have the API key for the selected provider
+  const apiKey = apiKeys[provider];
+  if (!apiKey) {
+    // Prefer Gemini 3, then Grok, then OpenAI
+    const fallbackProviders = ['gemini', 'grok', 'openai'].filter(p => apiKeys[p as keyof ApiKeys]);
+    if (fallbackProviders.length === 0) {
+      // Send error - use overlayWindow directly as safeSend isn't defined yet
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send('summon-error', { error: 'No API keys configured!' });
+      } else if (!webContents.isDestroyed()) {
+        webContents.send('summon-error', { error: 'No API keys configured!' });
+      }
+      return;
+    }
+    const fallbackProvider = fallbackProviders[0] as keyof typeof DEFAULT_MODELS;
+    return summonGlyph(prompt, webContents, DEFAULT_MODELS[fallbackProvider], refinementAttempt, previousError, previousCode, summonId);
+  }
+
+  let fullResponse = '';
+  
+  // Helper to safely send IPC - checks if webContents is still valid
+  const safeSend = (channel: string, data: any) => {
+    // Check if webContents is destroyed
+    if (webContents.isDestroyed()) {
+      log(`[${summonId}] ⚠️ Cannot send ${channel} - webContents destroyed, trying overlayWindow`);
+      // Fall back to overlayWindow
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send(channel, data);
+        return true;
+      }
+      log(`[${summonId}] ❌ Cannot send ${channel} - no valid window`);
+      return false;
+    }
+    webContents.send(channel, data);
+    return true;
+  };
+  
+  try {
+    // Send status update
+    safeSend('summon-provider', { 
+      provider: modelLabel,
+      attempt: refinementAttempt + 1,
+      isRefinement 
+    });
+
+    const streamFn = PROVIDER_STREAMS[provider];
+    
+    // Build the appropriate prompt
+    const actualPrompt = isRefinement && previousError && previousCode
+      ? buildRefinementPrompt(prompt, previousCode, previousError)
+      : buildUserPrompt(prompt);
+    
+    // Stream the response
+    for await (const chunk of streamFn(actualPrompt, modelName)) {
+      fullResponse += chunk;
+      safeSend('summon-chunk', { 
+        chunk, 
+        fullCode: fullResponse,
+        attempt: refinementAttempt + 1
+      });
+    }
+
+    log(`[${summonId}] ✨ ${modelLabel} responded: ${fullResponse.length} chars`);
+    
+    // Try to parse as manifest first
+    const manifest = parseGlyphManifest(fullResponse);
+    
+    let codeToSend: string;
+    let bundleInfo: { id: string; name: string; type?: string; locations: string[] } | null = null;
+    
+    if (manifest) {
+      // New bundle format - write files and send
+      const glyphId = createGlyphId(manifest);
+      const saveResult = await writeGlyphBundle(glyphId, manifest, prompt, modelLabel);
+      const entryName = manifest.entry || Object.keys(manifest.files)[0];
+      const entryCode = manifest.files[entryName];
+      if (!entryCode) {
+        log('❌ Manifest entry code missing, aborting summon');
+        return;
+      }
+      codeToSend = entryCode;
+      bundleInfo = {
+        id: saveResult.glyphId,
+        name: manifest.name,
+        type: manifest.type, // Optional - may be undefined
+        locations: saveResult.locations,
+      };
+      log(`[${summonId}] 📦 Bundle written: ${manifest.name} → ${saveResult.locations.join(', ')}`);
+    } else {
+      // Fallback: treat as raw code (legacy format)
+      codeToSend = cleanGeneratedCode(fullResponse);
+      log(`[${summonId}] 📄 Legacy format: ${codeToSend.length} chars`);
+    }
+    
+    // Send completion with metadata
+    const sent = safeSend('summon-complete', { 
+      code: codeToSend,
+      attempt: refinementAttempt + 1,
+      manifest: manifest ? { name: manifest.name, type: manifest.type } : null,
+      bundle: bundleInfo
+    });
+    log(`[${summonId}] ${sent ? '✅' : '⚠️'} summon-complete dispatched (attempt ${refinementAttempt + 1}, code ${codeToSend.length} chars)`);
+    
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    log(`[${summonId}] ❌ ${modelLabel} failed:`, errorMsg);
+    
+    // Try fallback to different provider (prefer Gemini)
+    const fallbackProviders = ['gemini', 'grok', 'openai']
+      .filter(p => p !== provider && apiKeys[p as keyof ApiKeys]);
+    
+    if (fallbackProviders.length > 0) {
+      const fallbackProvider = fallbackProviders[0] as keyof typeof DEFAULT_MODELS;
+      log(`[${summonId}] 🔄 Falling back to ${fallbackProvider}...`);
+      return summonGlyph(prompt, webContents, DEFAULT_MODELS[fallbackProvider], refinementAttempt, previousError, previousCode, summonId);
+    }
+    
+    // No fallback available
+    const fallbackCode = generateFallbackGlyph(prompt);
+    safeSend('summon-complete', { code: fallbackCode, fallback: true });
+    log(`[${summonId}] ⚠️ Fallback glyph generated (${fallbackCode.length} chars)`);
+  }
+}
+
+// Handle refinement request from renderer (legacy - full code replacement)
+ipcMain.on('summon-refine', async (event, data: { 
+  prompt: string; 
+  code: string; 
+  error: string; 
+  attempt: number;
+  model?: string;
+}) => {
+  log(`🔄 Refinement request (attempt ${data.attempt + 1}):`, data.error.slice(0, 100));
+  
+  // Forward to background that we're refining
+  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+    backgroundWindow.webContents.send('summon-refining', { 
+      attempt: data.attempt + 1,
+      error: data.error 
+    });
+  }
+  
+  // Call summon with refinement context
+  await summonGlyph(
+    data.prompt, 
+    event.sender, 
+    data.model,
+    data.attempt + 1,
+    data.error,
+    data.code
+  );
+});
+
+// Interface for surgical line edits
+interface LineEdit {
+  type: 'replace' | 'insert' | 'delete';
+  startLine: number;
+  endLine?: number; // For replace/delete - inclusive
+  newContent?: string; // For replace/insert
+  explanation?: string;
+}
+
+const createRefinementDebugId = (prefix = 'refine') =>
+  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+const logRefinementStage = (
+  debugId: string,
+  stage: string,
+  payload?: Record<string, unknown>
+) => {
+  if (payload) {
+    log(`[${debugId}] ${stage}`, payload);
+  } else {
+    log(`[${debugId}] ${stage}`);
+  }
+};
+
+const previewSnippet = (text: string, length = 200) =>
+  text.replace(/\s+/g, ' ').slice(0, length);
+
+// Build prompt for surgical refinement
+function buildSurgicalRefinementPrompt(
+  originalPrompt: string, 
+  currentCode: string, 
+  chatHistory: ChatMessage[],
+  refinementRequest: string
+): string {
+  // Number the lines for reference
+  const numberedCode = currentCode.split('\n')
+    .map((line, i) => `${(i + 1).toString().padStart(4, ' ')} | ${line}`)
+    .join('\n');
+  
+  const historyContext = chatHistory
+    .filter(m => m.role !== 'system')
+    .map(m => `${m.role.toUpperCase()}: ${m.content}`)
+    .join('\n---\n');
+
+  return `You are a CODE EDITOR. Your job is to MODIFY existing code based on user requests.
+
+⚠️ CRITICAL: You must respond with ONLY a JSON object in one of the two formats below.
+⚠️ DO NOT return a manifest JSON with "name", "icon", "entry", "inputs" fields - that is WRONG.
+⚠️ DO NOT create a new glyph - you are EDITING existing code.
+
+═══════════════════════════════════════════════════════════════════════════════
+📂 AVAILABLE APIs — File System Access (window.loom)
+═══════════════════════════════════════════════════════════════════════════════
+If the user asks to read files, browse directories, or work with local files, use these APIs:
+
+• window.loom.readLocalFile(path) → {success, content, isDirectory, files, error, size, modified, extension}
+• window.loom.listDirectory(path) → {success, path, parent, files, error}
+• window.loom.getSystemPaths() → {home, desktop, documents, downloads, cwd}
+
+Example:
+  const result = await window.loom.readLocalFile('C:/path/to/file.txt');
+  if (result.success) {
+    console.log(result.content); // File contents (or result.files for directories)
+  }
+
+DO NOT use fetch() for local files - it will fail with CORS errors.
+═══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL CREATION REQUEST: "${originalPrompt}"
+
+CONVERSATION HISTORY:
+${historyContext || '(No previous refinement history)'}
+
+CURRENT CODE (with line numbers for reference):
+\`\`\`
+${numberedCode}
+\`\`\`
+
+USER'S EDIT REQUEST: "${refinementRequest}"
+
+═══════════════════════════════════════════════════════════════════════════════
+RESPONSE FORMAT - Choose ONE:
+═══════════════════════════════════════════════════════════════════════════════
+
+FORMAT A: Surgical Edits (PREFERRED for targeted changes)
+{
+  "mode": "surgical",
+  "edits": [
+    {"type": "replace", "startLine": 15, "endLine": 17, "newContent": "// new code here\\n// more lines", "explanation": "What changed"},
+    {"type": "insert", "startLine": 8, "newContent": "// code to insert before line 8", "explanation": "Added X"},
+    {"type": "delete", "startLine": 42, "endLine": 45, "explanation": "Removed Y"}
+  ]
+}
+
+Edit types:
+- "replace": Replace lines startLine through endLine (inclusive) with newContent
+- "insert": Insert newContent BEFORE the specified startLine  
+- "delete": Remove lines startLine through endLine (inclusive)
+
+FORMAT B: Full Replacement (for extensive changes affecting >30% of code)
+{
+  "mode": "full",
+  "code": "<!DOCTYPE html>\\n<html>\\n... complete updated file content ...",
+  "explanation": "Why full replacement was needed"
+}
+
+═══════════════════════════════════════════════════════════════════════════════
+
+RULES:
+1. Line numbers are 1-indexed (first line is 1, not 0)
+2. Use \\n for newlines within JSON strings
+3. Preserve proper indentation in newContent
+4. Prefer FORMAT A (surgical) when possible - it's cleaner
+5. Use FORMAT B only when changes are extensive
+6. Respond with ONLY the JSON object - no markdown, no explanation outside JSON`;
+}
+
+// Apply surgical edits to code
+function applySurgicalEdits(
+  code: string, 
+  edits: LineEdit[],
+  options?: { debugId?: string; logLimit?: number }
+): { 
+  newCode: string; 
+  appliedEdits: LineEdit[];
+  errors: string[];
+} {
+  const lines = code.split('\n');
+  const appliedEdits: LineEdit[] = [];
+  const errors: string[] = [];
+  
+  // Sort edits by line number in reverse order (apply from bottom to top to preserve line numbers)
+  const sortedEdits = [...edits].sort((a, b) => b.startLine - a.startLine);
+  
+  const logLimit = options?.logLimit ?? 10;
+  if (options?.debugId) {
+    logRefinementStage(options.debugId, 'Applying surgical edits', {
+      requestedEdits: sortedEdits.length,
+    });
+  }
+
+  sortedEdits.forEach((edit, index) => {
+    try {
+      const startIdx = edit.startLine - 1; // Convert to 0-indexed
+      const endIdx = (edit.endLine || edit.startLine) - 1;
+      
+      if (startIdx < 0 || startIdx >= lines.length) {
+        errors.push(`Line ${edit.startLine} out of range (1-${lines.length})`);
+        if (options?.debugId) {
+          logRefinementStage(options.debugId, 'Edit skipped - out of range', {
+            edit,
+            totalLines: lines.length,
+          });
+        }
+        return; // Skip this edit (continue equivalent in forEach)
+      }
+      
+      if (edit.type === 'delete') {
+        lines.splice(startIdx, endIdx - startIdx + 1);
+        appliedEdits.push(edit);
+      } else if (edit.type === 'replace') {
+        const newLines = edit.newContent?.split('\n') || [];
+        lines.splice(startIdx, endIdx - startIdx + 1, ...newLines);
+        appliedEdits.push(edit);
+      } else if (edit.type === 'insert') {
+        const newLines = edit.newContent?.split('\n') || [];
+        lines.splice(startIdx, 0, ...newLines);
+        appliedEdits.push(edit);
+      }
+      if (options?.debugId && index < logLimit) {
+        logRefinementStage(options.debugId, `Edit applied #${index + 1}`, {
+          type: edit.type,
+          startLine: edit.startLine,
+          endLine: edit.endLine,
+          newContentLines: edit.newContent ? edit.newContent.split('\n').length : 0,
+        });
+      }
+    } catch (err) {
+      errors.push(`Error applying edit at line ${edit.startLine}: ${err}`);
+      if (options?.debugId) {
+        logRefinementStage(options.debugId, 'Error applying edit', {
+          edit,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  });
+  
+  if (options?.debugId && sortedEdits.length > logLimit) {
+    logRefinementStage(options.debugId, 'Additional edits omitted from logs', {
+      totalEdits: sortedEdits.length,
+      loggedEdits: logLimit,
+    });
+  }
+  
+  if (options?.debugId) {
+    logRefinementStage(options.debugId, 'Surgical edit summary', {
+      appliedEdits: appliedEdits.length,
+      errors,
+    });
+  }
+  
+  return {
+    newCode: lines.join('\n'),
+    appliedEdits: appliedEdits.reverse(), // Return in original order
+    errors
+  };
+}
+
+// Handle surgical refinement request (tool-based, minimal edits)
+ipcMain.handle('refine-glyph-surgical', async (event, data: {
+  glyphId: string;
+  fileName: string;
+  currentCode: string;
+  originalPrompt: string;
+  refinementRequest: string;
+  chatHistory: ChatMessage[];
+  model?: string;
+  debugId?: string;
+  source?: 'manual' | 'autofix';
+}) => {
+  const debugId = data.debugId || createRefinementDebugId();
+  const stage = (message: string, payload?: Record<string, unknown>) =>
+    logRefinementStage(debugId, message, payload);
+  
+  stage('🔧 Surgical refinement request received', {
+    glyphId: data.glyphId,
+    fileName: data.fileName,
+    source: data.source || 'manual',
+    requestPreview: previewSnippet(data.refinementRequest, 80),
+    requestChars: data.refinementRequest.length,
+    codeChars: data.currentCode.length,
+    chatMessages: data.chatHistory?.length || 0,
+    modelPreference: data.model || 'auto',
+  });
+  
+  let selectedModelId = data.model || 'gemini-3';
+  let modelConfig = AI_MODELS[selectedModelId];
+  
+  if (!modelConfig && selectedModelId) {
+    const foundByLabel = Object.entries(AI_MODELS).find(([, config]) => config.label === selectedModelId);
+    if (foundByLabel) {
+      selectedModelId = foundByLabel[0];
+      modelConfig = foundByLabel[1];
+      stage('📍 Resolved model by label', { selectedModelId });
+    }
+  }
+  
+  if (!modelConfig || !apiKeys[modelConfig.provider]) {
+    stage('⚠️ Preferred model unavailable, searching fallback', { selectedModelId });
+    const modelOrder = ['gemini-3', 'gemini-2.0-flash', 'grok-3', 'gpt-4o-mini', 'gemini-1.5-pro'];
+    for (const modelId of modelOrder) {
+      const config = AI_MODELS[modelId];
+      if (config && apiKeys[config.provider]) {
+        selectedModelId = modelId;
+        modelConfig = config;
+        stage('✅ Using fallback model', { selectedModelId, label: config.label });
+        break;
+      }
+    }
+  }
+  
+  if (!modelConfig) {
+    stage('❌ No AI models available', {});
+    return { success: false, error: 'No AI models available. Please configure an API key.', debugId };
+  }
+  
+  const provider = modelConfig.provider;
+  const modelName = modelConfig.modelName;
+  const modelLabel = modelConfig.label;
+  
+  stage('🔧 Using model', { modelLabel, modelName, provider });
+  
+  const apiKey = apiKeys[provider];
+  if (!apiKey) {
+    stage('❌ Missing API key for provider', { provider });
+    return { success: false, error: 'No API key configured for ' + provider, debugId };
+  }
+  
+  let promptChars = 0;
+  let responseChars = 0;
+  let chunkCount = 0;
+  let fullResponse = '';
+  
+  try {
+    const prompt = buildSurgicalRefinementPrompt(
+      data.originalPrompt,
+      data.currentCode,
+      data.chatHistory,
+      data.refinementRequest
+    );
+    promptChars = prompt.length;
+    stage('🧾 Prompt assembled', {
+      promptChars,
+      codeLines: data.currentCode.split('\n').length,
+      requestPreview: previewSnippet(data.refinementRequest, 120),
+    });
+    
+    const streamFn = PROVIDER_STREAMS[provider];
+    for await (const chunk of streamFn(prompt, modelName)) {
+      chunkCount += 1;
+      fullResponse += chunk;
+      if (chunkCount <= 3) {
+        stage('📨 LLM chunk received', {
+          chunkCount,
+          chunkChars: chunk.length,
+          preview: previewSnippet(chunk, 100),
+        });
+      }
+    }
+    responseChars = fullResponse.length;
+    stage('✨ LLM stream complete', { chunkCount, responseChars });
+    
+    let parsedResponse: any;
+    try {
+      stage('🧩 Parsing response', { preview: previewSnippet(fullResponse, 160) });
+      const jsonMatch = fullResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsedResponse = JSON.parse(jsonMatch[0]);
+      } else {
+        parsedResponse = JSON.parse(fullResponse.trim());
+      }
+    } catch (parseErr) {
+      try {
+        const arrayMatch = fullResponse.match(/\[\s*\{[\s\S]*\}\s*\]/);
+        if (arrayMatch) {
+          const edits = JSON.parse(arrayMatch[0]);
+          parsedResponse = { mode: 'surgical', edits };
+          stage('📎 Parsed legacy edits format', { editCount: edits?.length || 0 });
+        } else {
+          throw parseErr;
+        }
+      } catch {
+        stage('⚠️ Failed to parse response', {
+          error: parseErr instanceof Error ? parseErr.message : parseErr,
+        });
+        return { 
+          success: false, 
+          error: 'Failed to parse LLM response as JSON',
+          rawResponse: fullResponse.slice(0, 500),
+          debugId,
+          responseChars,
+          promptChars,
+          chunkCount,
+        };
+      }
+    }
+    
+    if (parsedResponse.mode === 'full' && parsedResponse.code) {
+      stage('🪄 Full replacement mode detected', {
+        codeChars: parsedResponse.code.length,
+      });
+      const oldLines = data.currentCode.split('\n').length;
+      const newLines = parsedResponse.code.split('\n').length;
+      
+      return {
+        success: true,
+        originalCode: data.currentCode,
+        newCode: parsedResponse.code,
+        edits: [{
+          type: 'replace' as const,
+          startLine: 1,
+          endLine: oldLines,
+          newContent: parsedResponse.code,
+          explanation: parsedResponse.explanation || `Full file replacement (${oldLines} → ${newLines} lines)`,
+        }],
+        errors: [],
+        model: modelLabel,
+        mode: 'full' as const,
+        debugId,
+        chunkCount,
+        promptChars,
+        responseChars,
+      };
+    }
+    
+    const edits: LineEdit[] = parsedResponse.edits || parsedResponse;
+    
+    if (!Array.isArray(edits) || edits.length === 0) {
+      // Check if LLM returned wrong format (manifest instead of edits)
+      if (parsedResponse.name && parsedResponse.entry) {
+        stage('⚠️ LLM returned manifest format instead of edits', {
+          name: parsedResponse.name,
+          hasInputs: !!parsedResponse.inputs,
+        });
+        return { 
+          success: false, 
+          error: 'LLM returned a manifest instead of code edits. Please try again.',
+          rawResponse: fullResponse.slice(0, 500),
+          debugId,
+          promptChars,
+          responseChars,
+          chunkCount,
+        };
+      }
+      stage('⚠️ No edits returned from LLM', {});
+      return { 
+        success: false, 
+        error: 'No edits returned from LLM',
+        rawResponse: fullResponse.slice(0, 500),
+        debugId,
+        promptChars,
+        responseChars,
+        chunkCount,
+      };
+    }
+    
+    const result = applySurgicalEdits(data.currentCode, edits, { debugId });
+    stage('🔧 Surgical edits applied', {
+      appliedEdits: result.appliedEdits.length,
+      errors: result.errors,
+    });
+    
+    return {
+      success: true,
+      originalCode: data.currentCode,
+      newCode: result.newCode,
+      edits: result.appliedEdits,
+      errors: result.errors,
+      model: modelLabel,
+      mode: 'surgical' as const,
+      debugId,
+      chunkCount,
+      promptChars,
+      responseChars,
+    };
+    
+  } catch (err) {
+    stage('❌ Surgical refinement failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { 
+      success: false, 
+      error: err instanceof Error ? err.message : 'Unknown error',
+      debugId,
+    };
+  }
+});
+
+function cleanGeneratedCode(code: string): string {
+  // Remove markdown code blocks if present
+  let cleaned = code
+    .replace(/```(?:tsx?|typescript|javascript)?\n?/g, '')
+    .replace(/```\n?/g, '')
+    .trim();
+
+  // Ensure it starts with import
+  if (!cleaned.startsWith('import')) {
+    const importIndex = cleaned.indexOf('import');
+    if (importIndex !== -1) {
+      cleaned = cleaned.slice(importIndex);
+    }
+  }
+
+  return cleaned;
+}
+
+function generateFallbackGlyph(prompt: string): string {
+  const words = prompt.split(' ').slice(0, 3).join(' ').toUpperCase();
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      }
+      .container {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at top, rgba(15,0,40,0.9), rgba(0,0,10,0.95));
+      }
+      .sigil {
+        position: relative;
+        width: min(65vw, 420px);
+        height: min(65vw, 420px);
+        border-radius: 50%;
+        border: 3px solid rgba(0, 255, 255, 0.4);
+        box-shadow: 0 0 40px rgba(255, 0, 255, 0.45);
+        animation: spin 14s linear infinite;
+      }
+      .sigil::before {
+        content: '';
+        position: absolute;
+        inset: 18%;
+        border-radius: 50%;
+        border: 2px dashed rgba(255, 0, 255, 0.5);
+        animation: spin 10s linear reverse infinite;
+      }
+      .sigil::after {
+        content: '${words || 'LOOM'}';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        letter-spacing: 0.5em;
+        color: #00f0ff;
+        font-size: clamp(14px, 2.8vw, 32px);
+        text-shadow: 0 0 15px rgba(0, 255, 255, 0.7);
+      }
+      .spark {
+        position: absolute;
+        inset: 0;
+        background: repeating-radial-gradient(circle, rgba(255,255,255,0.12) 0 1px, transparent 1px 3px);
+        filter: blur(1px);
+        opacity: 0.6;
+        animation: pulse 4s ease-in-out infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes pulse {
+        0% { transform: scale(0.95); opacity: 0.4; }
+        50% { transform: scale(1.05); opacity: 0.8; }
+        100% { transform: scale(0.95); opacity: 0.4; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="sigil"><div class="spark"></div></div>
+    </div>
+  </body>
+</html>`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🖼️ WINDOW MANAGEMENT
+// ════════════════════════════════════════════════════════════════════════════
+
+function approxEqual(a: number, b: number): boolean {
+  return Math.abs((a || 0) - (b || 0)) <= 1;
+}
+
+function applyBounds(win: BrowserWindow, displayId: string, bounds: Electron.Rectangle) {
+  if (!win || win.isDestroyed()) return;
+  
+  const desired = { ...bounds };
+  let attempt = 0;
+  let lastActual: Electron.Rectangle | null = null;
+  let adjusted = { ...desired };
+
+  while (attempt < 3) {
+    win.setBounds(adjusted, false);
+    lastActual = win.getBounds();
+    log('bounds-applied', { displayId, desired, attempt, adjusted, actual: lastActual });
+
+    const matches =
+      approxEqual(lastActual.x, desired.x) &&
+      approxEqual(lastActual.y, desired.y) &&
+      approxEqual(lastActual.width, desired.width) &&
+      approxEqual(lastActual.height, desired.height);
+
+    if (matches) {
+      log('bounds-matched', { displayId });
+      return;
+    }
+
+    const deltaX = desired.x - lastActual.x;
+    const deltaY = desired.y - lastActual.y;
+
+    if (deltaX === 0 && deltaY === 0) {
+      break;
+    }
+
+    adjusted = {
+      ...adjusted,
+      x: adjusted.x + deltaX,
+      y: adjusted.y + deltaY
+    };
+
+    attempt += 1;
+  }
+
+  log('bounds-warning', { displayId, desired, final: lastActual });
+}
+
+function toggleInteraction() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  
+  interactionEnabled = !interactionEnabled;
+  
+  if (interactionEnabled) {
+    overlayWindow.focus();
+    log('✨ SUMMONER AWAKENED — Type your will');
+    overlayWindow.webContents.send('interaction-state', { enabled: true });
+  } else {
+    overlayWindow.blur();
+    log('💤 SUMMONER SLEEPS — Desktop restored');
+    overlayWindow.webContents.send('interaction-state', { enabled: false });
+  }
+}
+
+/**
+ * LAYER 1: The Background Window
+ * - Full screen Three.js animated canvas
+ * - Attached as wallpaper via electron-as-wallpaper
+ * - Always click-through (ignoreMouseEvents: true)
+ */
+function createBackgroundWindow() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { bounds } = primaryDisplay;
+  const displayId = String(primaryDisplay.id);
+  
+  log('creating-background-window', {
+    displayId,
+    bounds,
+    scaleFactor: primaryDisplay.scaleFactor,
+  });
+
+  backgroundWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: false,
+    focusable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false,
+    },
+  });
+
+  log('background-window-created', { id: backgroundWindow.id });
+
+  // Background is ALWAYS click-through
+  backgroundWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  const isDev = !app.isPackaged;
+  
+  if (isDev) {
+    backgroundWindow.loadURL('http://localhost:5173?layer=background');
+  } else {
+    backgroundWindow.loadFile(path.join(__dirname, '../dist/index.html'), {
+      query: { layer: 'background' }
+    });
+  }
+
+  backgroundWindow.once('ready-to-show', () => {
+    if (!backgroundWindow) return;
+    
+    log('background-ready-to-show', { bounds: backgroundWindow.getBounds() });
+    log('background webContents id:', backgroundWindow.webContents.id);
+    
+    // Test IPC to background - send a test message after a short delay
+    setTimeout(() => {
+      if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+        log('📤 Sending test ping to background...');
+        backgroundWindow.webContents.send('test-ping', { message: 'hello from main' });
+      }
+    }, 2000);
+    
+    applyBounds(backgroundWindow, displayId, bounds);
+    backgroundWindow.showInactive();
+
+    if (process.platform === 'win32') {
+      try {
+        attach(backgroundWindow, {
+          transparent: true,
+          forwardKeyboardInput: false,
+          forwardMouseInput: false,
+        });
+        log('🔮 BACKGROUND ATTACHED AS WALLPAPER');
+        
+        setTimeout(() => {
+          if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+            applyBounds(backgroundWindow, displayId, bounds);
+          }
+        }, 100);
+      } catch (err) {
+        log('attach-error', err);
+      }
+    } else {
+      log('🪄 BACKGROUND LAYERED (macOS/Linux mode)');
+    }
+  });
+
+  screen.on('display-metrics-changed', () => {
+    if (!backgroundWindow || backgroundWindow.isDestroyed()) return;
+    const newBounds = screen.getPrimaryDisplay().bounds;
+    log('display-metrics-changed', { newBounds });
+    applyBounds(backgroundWindow, displayId, newBounds);
+  });
+
+  backgroundWindow.on('closed', () => {
+    if (backgroundWindow) {
+      try {
+        detach(backgroundWindow);
+      } catch (err) {
+        log('detach-error', err);
+      }
+    }
+    backgroundWindow = null;
+  });
+}
+
+/**
+ * LAYER 2: The Overlay Window
+ * - Transparent, always-on-top
+ * - Contains ONLY the React UI (SummonBar, etc.)
+ * - Starts click-through, toggles with Ctrl+Alt+S
+ */
+function createOverlayWindow() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { bounds } = primaryDisplay;
+  
+  log('creating-overlay-window', { bounds });
+
+  overlayWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    focusable: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false,
+    },
+  });
+
+  log('overlay-window-created', { id: overlayWindow.id });
+
+  overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  const isDev = !app.isPackaged;
+  
+  if (isDev) {
+    overlayWindow.loadURL('http://localhost:5173?layer=overlay');
+  } else {
+    overlayWindow.loadFile(path.join(__dirname, '../dist/index.html'), {
+      query: { layer: 'overlay' }
+    });
+  }
+
+  overlayWindow.once('ready-to-show', () => {
+    if (!overlayWindow) return;
+    log('overlay-ready-to-show');
+    overlayWindow.showInactive();
+  });
+
+  overlayWindow.on('closed', () => {
+    overlayWindow = null;
+  });
+}
+
+/**
+ * Toggle Loom Panel in the overlay window
+ * Sends IPC event to show/hide the panel (no separate window needed)
+ * 
+ * IMPORTANT: We keep the overlay click-through (forward: true) even when panel is open.
+ * The panel uses mouseEnterUI/mouseLeaveUI to capture events only when hovering over it.
+ * This allows clicking through to other windows when not on the panel.
+ * 
+ * NOT using alwaysOnTop so other windows can come to front when clicked.
+ * Use Ctrl+Alt+L to bring the panel back to front.
+ */
+function toggleLoomPanel() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    log('🔮 Sending toggle-loom-panel to overlay');
+    
+    // Keep click-through with forwarding - panel will capture events on hover
+    overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+    // Don't use alwaysOnTop - let other windows come to front when clicked
+    overlayWindow.setAlwaysOnTop(false);
+    overlayWindow.webContents.send('toggle-loom-panel');
+    // Bring to front initially, but other windows can go above it
+    overlayWindow.moveTop();
+  }
+}
+
+/**
+ * Open the Loom Panel (used for initial launch)
+ */
+function openLoomPanel() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    log('🔮 Opening Loom Panel');
+    // Keep click-through with forwarding - panel will capture events on hover
+    overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+    // Don't use alwaysOnTop - let other windows come to front when clicked
+    overlayWindow.setAlwaysOnTop(false);
+    overlayWindow.webContents.send('open-loom-panel');
+    overlayWindow.moveTop();
+  }
+}
+
+/**
+ * System Tray Setup
+ * - Shows LOOM icon in system tray
+ * - Click to open Loom Panel
+ * - Right-click for context menu
+ */
+function createTray() {
+  // Create a 16x16 icon for the tray (using a data URL for simplicity)
+  const iconPath = path.join(__dirname, '..', 'public', 'tray-icon.png');
+  
+  // If icon doesn't exist, create a simple colored icon
+  let trayIcon;
+  if (fs.existsSync(iconPath)) {
+    trayIcon = nativeImage.createFromPath(iconPath);
+  } else {
+    // Create a simple 16x16 cyan-magenta gradient icon
+    trayIcon = nativeImage.createFromDataURL(
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAADSSURBVDiNY2AYBaNgqANGBgYGBkdHx/+Ojo7/GRkZGRj+//8PAJb8AMiNDAwMDIyMjP8ZGRn/AwAjAyMDAwPj////GRkZ/wMAI0MEAwMDA8N/RkbG/4D8/4yMjAyMQDEGBgYGRkZGBsb//xkZGBj+AwAjUAMDA+N/RkZGRoYIoFoGBkZgGJD5/5+RkYEB6BUGBgYGRkbG/4wQNQyMDP8BLmVkZGRgZPzPwMjI+J+RkZERaD7QAAYGBkZGxv+MjIwMjEANDAz/GRkZGQEAqEU8HQPLXSEAAAAASUVORK5CYII='
+    );
+  }
+  
+  tray = new Tray(trayIcon.resize({ width: 16, height: 16 }));
+  tray.setToolTip('LOOM — Digital Manifestation');
+  
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '🔮 Open LOOM Panel (Ctrl+Alt+L)',
+      click: () => toggleLoomPanel(),
+    },
+    {
+      label: '⚡ Toggle Summoner (Ctrl+Alt+S)',
+      click: () => toggleInteraction(),
+    },
+    { type: 'separator' },
+    {
+      label: '🔧 Dev Tools',
+      submenu: [
+        {
+          label: 'Overlay DevTools',
+          click: () => {
+            if (overlayWindow && !overlayWindow.isDestroyed()) {
+              overlayWindow.webContents.openDevTools({ mode: 'detach' });
+            }
+          },
+        },
+        {
+          label: 'Background DevTools',
+          click: () => {
+            if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+              backgroundWindow.webContents.openDevTools({ mode: 'detach' });
+            }
+          },
+        },
+      ],
+    },
+    { type: 'separator' },
+    {
+      label: '❌ Quit LOOM',
+      click: () => app.quit(),
+    },
+  ]);
+  
+  tray.setContextMenu(contextMenu);
+  
+  // Single click toggles the panel
+  tray.on('click', () => {
+    toggleLoomPanel();
+  });
+  
+  log('🔔 System tray created');
+}
+
+// Sync Loom Panel state when closed from renderer (ESC key or close button)
+ipcMain.on('loom-panel-closed', () => {
+  log('🔮 Loom Panel closed from renderer - restoring click-through');
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+    overlayWindow.setAlwaysOnTop(false);
+  }
+});
+
+// Load chat history for a glyph
+ipcMain.handle('load-glyph-chat-history', async (event, glyphId: string) => {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    if (!basePath || !fs.existsSync(basePath)) continue;
+    
+    const chatPath = path.join(basePath, glyphId, 'chat.json');
+    if (fs.existsSync(chatPath)) {
+      try {
+        const chatHistory = JSON.parse(fs.readFileSync(chatPath, 'utf-8'));
+        log(`📜 Loaded ${chatHistory.length} messages for glyph: ${glyphId}`);
+        return chatHistory;
+      } catch (err) {
+        log(`⚠️ Failed to load chat history for ${glyphId}:`, err);
+      }
+    }
+  }
+  
+  log(`📜 No chat history found for glyph: ${glyphId}`);
+  return [];
+});
+
+// Save a chat message to a glyph's history
+ipcMain.handle('save-glyph-chat-message', async (event, glyphId: string, message: ChatMessage) => {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    if (!basePath || !fs.existsSync(basePath)) continue;
+    
+    const glyphDir = path.join(basePath, glyphId);
+    if (!fs.existsSync(glyphDir)) continue;
+    
+    const chatPath = path.join(glyphDir, 'chat.json');
+    let chatHistory: ChatMessage[] = [];
+    
+    if (fs.existsSync(chatPath)) {
+      try {
+        chatHistory = JSON.parse(fs.readFileSync(chatPath, 'utf-8'));
+      } catch (err) {
+        log(`⚠️ Failed to read existing chat history, starting fresh`);
+      }
+    }
+    
+    chatHistory.push(message);
+    fs.writeFileSync(chatPath, JSON.stringify(chatHistory, null, 2));
+    log(`💬 Saved message to ${glyphId} chat history (${chatHistory.length} total)`);
+    
+    return { success: true, messageCount: chatHistory.length };
+  }
+  
+  return { success: false, error: 'Glyph not found' };
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📁 GLYPH FILE SYSTEM IPC HANDLERS
+// ════════════════════════════════════════════════════════════════════════════
+
+// Load all glyphs from both dynamic and library paths
+ipcMain.handle('load-glyphs', async () => {
+  const glyphs: any[] = [];
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    if (!fs.existsSync(basePath)) continue;
+    
+    const dirs = fs.readdirSync(basePath, { withFileTypes: true });
+    for (const dir of dirs) {
+      if (!dir.isDirectory()) continue;
+      
+      const manifestPath = path.join(basePath, dir.name, 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        try {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+          // Use folder name as id if not present in manifest
+          if (!manifest.id) {
+            manifest.id = dir.name;
+          }
+          // Ensure manifest.json is always included in files list (for backward compatibility)
+          if (manifest.files && !manifest.files.includes('manifest.json')) {
+            manifest.files = ['manifest.json', ...manifest.files];
+          } else if (!manifest.files) {
+            // If no files array, scan directory for files
+            const glyphDir = path.join(basePath, dir.name);
+            const filesInDir = fs.readdirSync(glyphDir).filter(f => 
+              fs.statSync(path.join(glyphDir, f)).isFile()
+            );
+            manifest.files = filesInDir;
+          }
+          // Avoid duplicates (same ID in both locations)
+          if (!glyphs.find(g => g.id === manifest.id)) {
+            glyphs.push(manifest);
+          }
+        } catch (err) {
+          log('⚠️ Failed to load manifest:', manifestPath, err);
+        }
+      }
+    }
+  }
+  
+  // Sort by savedAt (newest first)
+  glyphs.sort((a, b) => {
+    const dateA = new Date(a.savedAt || 0).getTime();
+    const dateB = new Date(b.savedAt || 0).getTime();
+    return dateB - dateA;
+  });
+  
+  log(`📦 Loaded ${glyphs.length} glyphs`);
+  return glyphs;
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📁 GLYPH FOLDER ORGANIZATION
+// ════════════════════════════════════════════════════════════════════════════
+
+const glyphFoldersPath = path.join(glyphLibraryPath, '_folders.json');
+
+interface GlyphFolder {
+  id: string;
+  name: string;
+  icon: string;
+  collapsed?: boolean;
+  glyphIds: string[];
+  createdAt: string;
+}
+
+// Load folder organization data
+ipcMain.handle('load-glyph-folders', async () => {
+  try {
+    if (fs.existsSync(glyphFoldersPath)) {
+      const data = JSON.parse(fs.readFileSync(glyphFoldersPath, 'utf-8'));
+      log(`📂 Loaded ${data.folders?.length || 0} folders`);
+      return data;
+    }
+  } catch (err) {
+    log('⚠️ Failed to load folders:', err);
+  }
+  // Return default structure
+  return { folders: [], unassignedOrder: [] };
+});
+
+// Save folder organization data
+ipcMain.handle('save-glyph-folders', async (event, data: { folders: GlyphFolder[]; unassignedOrder: string[] }) => {
+  try {
+    fs.writeFileSync(glyphFoldersPath, JSON.stringify(data, null, 2), 'utf-8');
+    log(`💾 Saved ${data.folders?.length || 0} folders`);
+    return { success: true };
+  } catch (err) {
+    log('❌ Failed to save folders:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Read a specific file from a glyph
+ipcMain.handle('read-glyph-file', async (event, glyphId: string, fileName: string) => {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const filePath = path.join(basePath, glyphId, fileName);
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, 'utf-8');
+    }
+  }
+  
+  throw new Error(`File not found: ${glyphId}/${fileName}`);
+});
+
+// Save a file to a glyph
+ipcMain.handle('save-glyph-file', async (event, glyphId: string, fileName: string, content: string) => {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const glyphDir = path.join(basePath, glyphId);
+    if (fs.existsSync(glyphDir)) {
+      const filePath = path.join(glyphDir, fileName);
+      fs.writeFileSync(filePath, content, 'utf-8');
+      log(`💾 Saved ${fileName} to ${glyphId}`);
+      return { success: true };
+    }
+  }
+  
+  throw new Error(`Glyph not found: ${glyphId}`);
+});
+
+// Invoke a glyph to the screen (supports 'background' or 'widget' mode)
+ipcMain.on('invoke-glyph', async (event, data: { glyphId: string; mode: 'background' | 'widget' }) => {
+  const { glyphId, mode = 'background' } = typeof data === 'string' ? { glyphId: data, mode: 'background' as const } : data;
+  log(`🔮 Invoking glyph: ${glyphId} as ${mode}`);
+  
+  // Find and load the glyph
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const glyphDir = path.join(basePath, glyphId);
+    const manifestPath = path.join(glyphDir, 'manifest.json');
+    
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      const entryFile = manifest.entry
+        || (fs.existsSync(path.join(glyphDir, 'index.html')) ? 'index.html' : 'index.tsx');
+      const entryPath = path.join(glyphDir, entryFile);
+
+      if (!fs.existsSync(entryPath)) {
+        log(`❌ Entry file missing for glyph ${glyphId}: ${entryFile}`);
+        continue;
+      }
+
+      const code = fs.readFileSync(entryPath, 'utf-8');
+      
+      // 🔍 DIAGNOSTIC: Log what we're reading
+      log(`📄 Reading glyph from: ${entryPath}`);
+      log(`📄 Code length: ${code.length} chars`);
+      log(`📄 Code preview (first 200): ${code.slice(0, 200)}`);
+      log(`📄 Manifest name: ${manifest.name}, type: ${manifest.type}`);
+      log(`📄 Manifest prompt length: ${manifest.prompt?.length || 0}`);
+      
+      if (mode === 'widget') {
+        // Send widgets to OVERLAY for rendering (overlay is on top, interactive)
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+          log(`📤 Sending to overlay: code=${code.length}chars, prompt=${(manifest.prompt || manifest.name).slice(0, 50)}...`);
+          overlayWindow.webContents.send('widget-inject', {
+            code,
+            prompt: manifest.prompt || manifest.name,
+            glyphId,
+          });
+          log(`✨ Widget ${glyphId} sent to overlay`);
+        }
+      } else {
+        // Send backgrounds to BACKGROUND window (full-screen wallpaper)
+        if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+          log(`📤 Sending to background: code=${code.length}chars`);
+          backgroundWindow.webContents.send('summon-inject', {
+            code,
+            prompt: manifest.prompt || manifest.name,
+            mode: 'background',
+            glyphId,
+            type: manifest.type,
+          });
+          log(`✨ Glyph ${glyphId} sent to background`);
+        }
+      }
+      return;
+    }
+  }
+  
+  log(`❌ Glyph not found: ${glyphId}`);
+});
+
+// Handle widget layer changes (foreground/background toggle)
+ipcMain.on('widget-layer-change', (event, data: { 
+  widgetId: string; 
+  widgetData: {
+    id: string;
+    glyphId: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    prompt: string;
+    code: string;
+    layer: 'foreground' | 'background';
+  } | null 
+}) => {
+  log(`📥 widget-layer-change received:`, JSON.stringify({
+    widgetId: data.widgetId,
+    hasWidgetData: !!data.widgetData,
+    layer: data.widgetData?.layer,
+    x: data.widgetData?.x,
+    y: data.widgetData?.y,
+    width: data.widgetData?.width,
+    height: data.widgetData?.height,
+    codeLength: data.widgetData?.code?.length,
+  }));
+  
+  const { widgetId, widgetData } = data;
+  
+  if (!widgetData) {
+    // Widget being removed - notify background to remove it
+    log(`🗑️ Widget ${widgetId} removed from layer system`);
+    if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+      backgroundWindow.webContents.send('widget-layer-update', { widgetId, widgetData: null });
+    }
+    return;
+  }
+  
+  log(`🔄 Widget ${widgetId} layer change: ${widgetData.layer}`);
+  log(`📐 Widget dimensions: x=${widgetData.x}, y=${widgetData.y}, w=${widgetData.width}, h=${widgetData.height}`);
+  
+  if (widgetData.layer === 'background') {
+    // Widget moving to background layer - send to background window
+    if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+      log(`📤 Sending widget-layer-update to background window`);
+      backgroundWindow.webContents.send('widget-layer-update', { widgetId, widgetData });
+      log(`✨ Widget ${widgetId} sent to background layer`);
+    } else {
+      log(`❌ backgroundWindow not available!`);
+    }
+  } else {
+    // Widget moving to foreground - tell background to remove it
+    if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+      backgroundWindow.webContents.send('widget-layer-update', { widgetId, widgetData: null });
+      log(`✨ Widget ${widgetId} removed from background (now foreground)`);
+    }
+  }
+});
+
+// Delete a glyph
+ipcMain.handle('delete-glyph', async (event, glyphId: string) => {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const glyphDir = path.join(basePath, glyphId);
+    if (fs.existsSync(glyphDir)) {
+      fs.rmSync(glyphDir, { recursive: true, force: true });
+      log(`🗑️ Deleted glyph: ${glyphId} from ${basePath}`);
+    }
+  }
+  
+  return { success: true };
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📡 IPC HANDLERS
+// ════════════════════════════════════════════════════════════════════════════
+
+// Secure summon request from overlay
+ipcMain.on('summon-request', async (event, data: { prompt: string; model?: string }) => {
+  log('📨 summon-request received:', data.prompt, data.model ? `(model: ${data.model})` : '(auto)');
+  
+  // Forward to background for glyph injection
+  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+    backgroundWindow.webContents.send('summon-start', { prompt: data.prompt });
+  }
+  
+  // Use overlayWindow.webContents directly instead of event.sender
+  // This ensures we always send to the current overlay window, even if it was reloaded
+  const targetWebContents = overlayWindow && !overlayWindow.isDestroyed() 
+    ? overlayWindow.webContents 
+    : event.sender;
+  
+  // Start LLM streaming from main process (secure)
+  await summonGlyph(data.prompt, targetWebContents, data.model);
+});
+
+// Get available models grouped by provider
+ipcMain.handle('get-available-models', () => {
+  const models = Object.values(AI_MODELS).map(model => ({
+    id: model.id,
+    name: model.label,
+    provider: model.provider,
+    available: !!apiKeys[model.provider],
+    icon: model.icon,
+  }));
+  
+  // Sort: available models first, then by provider, then by label
+  return models.sort((a, b) => {
+    if (a.available !== b.available) return a.available ? -1 : 1;
+    if (a.provider !== b.provider) {
+      const orderDiff =
+        (PROVIDER_ORDER.indexOf(a.provider) === -1 ? 999 : PROVIDER_ORDER.indexOf(a.provider)) -
+        (PROVIDER_ORDER.indexOf(b.provider) === -1 ? 999 : PROVIDER_ORDER.indexOf(b.provider));
+      if (orderDiff !== 0) return orderDiff;
+    }
+    const priorityDiff = (MODEL_PRIORITY[a.id] ?? 999) - (MODEL_PRIORITY[b.id] ?? 999);
+    if (priorityDiff !== 0) return priorityDiff;
+    return a.name.localeCompare(b.name);
+  });
+});
+
+// Forward completed code to background for compilation
+ipcMain.on('summon-inject', (event, data: { code: string; prompt: string; type?: string; glyphId?: string; mode?: 'background' | 'widget' }) => {
+  log('💉 ═══════════════════════════════════════════════════════════');
+  log('💉 SUMMON-INJECT RECEIVED FROM OVERLAY');
+  log('💉 Prompt:', data.prompt?.slice(0, 80));
+  log('💉 Code length:', data.code?.length, 'chars');
+  log('💉 Type:', data.type || 'unspecified');
+  log('💉 Sender ID:', event.sender.id);
+  log('💉 Background window:', !!backgroundWindow, '| destroyed:', backgroundWindow?.isDestroyed());
+  
+  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+    log('💉 FORWARDING to background window...');
+    backgroundWindow.webContents.send('summon-inject', data);
+    log('💉 ✅ summon-inject SENT to background!');
+  } else {
+    log('💉 ❌ Cannot forward - background window not available!');
+  }
+  log('💉 ═══════════════════════════════════════════════════════════');
+});
+
+// Handle glyph errors from background → forward to overlay for refinement
+ipcMain.on('glyph-error', (event, data: { prompt: string; code: string; error: string }) => {
+  log('❌ ═══════════════════════════════════════════════════════════');
+  log('❌ GLYPH-ERROR RECEIVED FROM BACKGROUND!');
+  log('❌ Error:', data.error?.slice(0, 100));
+  log('❌ Prompt:', data.prompt?.slice(0, 80));
+  log('❌ Code length:', data.code?.length, 'chars');
+  log('❌ Overlay window:', !!overlayWindow, '| destroyed:', overlayWindow?.isDestroyed());
+  
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    log('❌ 🔄 FORWARDING ERROR to overlay for auto-refinement...');
+    overlayWindow.webContents.send('summon-error', { error: data.error });
+    log('❌ ✅ summon-error SENT to overlay!');
+  } else {
+    log('❌ ❌ Cannot forward - overlay window not available!');
+  }
+  log('❌ ═══════════════════════════════════════════════════════════');
+});
+
+// Mouse capture for overlay UI hover
+ipcMain.on('overlay-mouse-enter', () => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.setIgnoreMouseEvents(false);
+    // Bring to front when hovering over UI (but not alwaysOnTop)
+    overlayWindow.moveTop();
+  }
+});
+
+ipcMain.on('overlay-mouse-leave', () => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🎯 BACKGROUND WINDOW INTERACTIVE CAPTURE
+// When mouse enters an interactive glyph, capture mouse events so state.pointer works
+// When mouse leaves, restore click-through so desktop icons work
+// ═══════════════════════════════════════════════════════════════════════════
+
+let backgroundMouseCaptured = false;
+
+ipcMain.on('background-mouse-enter', () => {
+  if (backgroundWindow && !backgroundWindow.isDestroyed() && !backgroundMouseCaptured) {
+    log('🎯 Background: Mouse entered interactive area - capturing mouse events');
+    backgroundMouseCaptured = true;
+    backgroundWindow.setIgnoreMouseEvents(false);
+  }
+});
+
+ipcMain.on('background-mouse-leave', () => {
+  if (backgroundWindow && !backgroundWindow.isDestroyed() && backgroundMouseCaptured) {
+    log('🎯 Background: Mouse left interactive area - restoring click-through');
+    backgroundMouseCaptured = false;
+    backgroundWindow.setIgnoreMouseEvents(true, { forward: true });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔐 SECURE API KEY STORAGE FOR GLYPHS
+// ════════════════════════════════════════════════════════════════════════════
+
+// Store glyph-specific API keys securely (encrypted in a separate file)
+const glyphSecretsPath = path.join(app.getPath('userData'), 'glyph-secrets.json');
+
+function loadGlyphSecrets(): Record<string, Record<string, string>> {
+  try {
+    if (fs.existsSync(glyphSecretsPath)) {
+      const data = fs.readFileSync(glyphSecretsPath, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    log('⚠️ Failed to load glyph secrets:', err);
+  }
+  return {};
+}
+
+function saveGlyphSecrets(secrets: Record<string, Record<string, string>>): void {
+  try {
+    fs.writeFileSync(glyphSecretsPath, JSON.stringify(secrets, null, 2), 'utf-8');
+    log('🔐 Glyph secrets saved');
+  } catch (err) {
+    log('❌ Failed to save glyph secrets:', err);
+  }
+}
+
+// Save an API key for a specific glyph
+ipcMain.handle('save-glyph-api-key', async (event, glyphId: string, keyName: string, keyValue: string) => {
+  const secrets = loadGlyphSecrets();
+  if (!secrets[glyphId]) {
+    secrets[glyphId] = {};
+  }
+  secrets[glyphId][keyName] = keyValue;
+  saveGlyphSecrets(secrets);
+  log(`🔐 Saved API key "${keyName}" for glyph ${glyphId}`);
+  return { success: true };
+});
+
+// Get an API key for a specific glyph (returns masked value for display)
+ipcMain.handle('get-glyph-api-key', async (event, glyphId: string, keyName: string) => {
+  const secrets = loadGlyphSecrets();
+  const value = secrets[glyphId]?.[keyName];
+  if (value) {
+    // Return masked version for UI display
+    const masked = value.length > 8 
+      ? `${value.slice(0, 4)}${'*'.repeat(value.length - 8)}${value.slice(-4)}`
+      : '*'.repeat(value.length);
+    return { exists: true, masked };
+  }
+  return { exists: false, masked: '' };
+});
+
+// Get the actual API key value (for runtime use only)
+ipcMain.handle('get-glyph-api-key-value', async (event, glyphId: string, keyName: string) => {
+  const secrets = loadGlyphSecrets();
+  return secrets[glyphId]?.[keyName] || null;
+});
+
+// Delete an API key for a specific glyph
+ipcMain.handle('delete-glyph-api-key', async (event, glyphId: string, keyName: string) => {
+  const secrets = loadGlyphSecrets();
+  if (secrets[glyphId]?.[keyName]) {
+    delete secrets[glyphId][keyName];
+    if (Object.keys(secrets[glyphId]).length === 0) {
+      delete secrets[glyphId];
+    }
+    saveGlyphSecrets(secrets);
+    log(`🔐 Deleted API key "${keyName}" for glyph ${glyphId}`);
+  }
+  return { success: true };
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📁 GLYPH FILE UPLOAD HANDLING
+// ════════════════════════════════════════════════════════════════════════════
+
+// Save an uploaded file to a glyph's directory
+ipcMain.handle('upload-glyph-file', async (event, glyphId: string, fileName: string, base64Data: string, mimeType: string) => {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const glyphDir = path.join(basePath, glyphId);
+    if (fs.existsSync(glyphDir)) {
+      // Create uploads subdirectory if needed
+      const uploadsDir = path.join(glyphDir, 'uploads');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      
+      // Sanitize filename
+      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath = path.join(uploadsDir, safeName);
+      
+      // Write the file
+      const buffer = Buffer.from(base64Data, 'base64');
+      fs.writeFileSync(filePath, buffer);
+      
+      log(`📁 Uploaded file "${safeName}" to glyph ${glyphId} (${buffer.length} bytes)`);
+      
+      return {
+        success: true,
+        path: `uploads/${safeName}`,
+        size: buffer.length,
+        mimeType,
+      };
+    }
+  }
+  
+  return { success: false, error: 'Glyph not found' };
+});
+
+// Read an uploaded file from a glyph's directory (returns base64)
+ipcMain.handle('read-glyph-upload', async (event, glyphId: string, relativePath: string) => {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const filePath = path.join(basePath, glyphId, relativePath);
+    if (fs.existsSync(filePath)) {
+      const buffer = fs.readFileSync(filePath);
+      return {
+        success: true,
+        data: buffer.toString('base64'),
+        size: buffer.length,
+      };
+    }
+  }
+  
+  return { success: false, error: 'File not found' };
+});
+
+// Delete an uploaded file from a glyph's directory
+ipcMain.handle('delete-glyph-upload', async (event, glyphId: string, relativePath: string) => {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const filePath = path.join(basePath, glyphId, relativePath);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      log(`🗑️ Deleted uploaded file from glyph ${glyphId}: ${relativePath}`);
+      return { success: true };
+    }
+  }
+  
+  return { success: false, error: 'File not found' };
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 📂 LOCAL FILE SYSTEM ACCESS FOR GLYPHS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Read a local file (for glyphs that need to view files)
+ipcMain.handle('read-local-file', async (event, filePath: string) => {
+  try {
+    // Normalize the path
+    const normalizedPath = path.normalize(filePath);
+    
+    // Check if file exists
+    if (!fs.existsSync(normalizedPath)) {
+      return { success: false, error: `File not found: ${normalizedPath}` };
+    }
+    
+    // Get file stats
+    const stats = fs.statSync(normalizedPath);
+    
+    if (stats.isDirectory()) {
+      // If it's a directory, list contents
+      const files = fs.readdirSync(normalizedPath).map(name => {
+        const itemPath = path.join(normalizedPath, name);
+        const itemStats = fs.statSync(itemPath);
+        return {
+          name,
+          path: itemPath,
+          isDirectory: itemStats.isDirectory(),
+          size: itemStats.size,
+          modified: itemStats.mtime.toISOString(),
+        };
+      });
+      return { success: true, isDirectory: true, files, path: normalizedPath };
+    }
+    
+    // For files, read content
+    const ext = path.extname(normalizedPath).toLowerCase();
+    const textExtensions = ['.txt', '.md', '.json', '.js', '.ts', '.tsx', '.jsx', '.html', '.css', '.scss', '.yaml', '.yml', '.xml', '.csv', '.log', '.env', '.gitignore', '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp', '.sh', '.bat', '.ps1', '.sql', '.graphql', '.toml', '.ini', '.cfg'];
+    
+    if (textExtensions.includes(ext) || stats.size < 1024 * 1024) { // Read text files or files under 1MB
+      const content = fs.readFileSync(normalizedPath, 'utf-8');
+      return { 
+        success: true, 
+        isDirectory: false, 
+        content, 
+        path: normalizedPath,
+        size: stats.size,
+        modified: stats.mtime.toISOString(),
+        extension: ext,
+      };
+    } else {
+      // For binary files, return base64
+      const content = fs.readFileSync(normalizedPath);
+      return { 
+        success: true, 
+        isDirectory: false, 
+        content: content.toString('base64'),
+        encoding: 'base64',
+        path: normalizedPath,
+        size: stats.size,
+        modified: stats.mtime.toISOString(),
+        extension: ext,
+      };
+    }
+  } catch (error: any) {
+    log(`❌ Error reading local file: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
+
+// List directory contents
+ipcMain.handle('list-directory', async (event, dirPath: string) => {
+  try {
+    const normalizedPath = path.normalize(dirPath || process.cwd());
+    
+    if (!fs.existsSync(normalizedPath)) {
+      return { success: false, error: `Directory not found: ${normalizedPath}` };
+    }
+    
+    const stats = fs.statSync(normalizedPath);
+    if (!stats.isDirectory()) {
+      return { success: false, error: `Not a directory: ${normalizedPath}` };
+    }
+    
+    const files = fs.readdirSync(normalizedPath).map(name => {
+      try {
+        const itemPath = path.join(normalizedPath, name);
+        const itemStats = fs.statSync(itemPath);
+        return {
+          name,
+          path: itemPath,
+          isDirectory: itemStats.isDirectory(),
+          size: itemStats.size,
+          modified: itemStats.mtime.toISOString(),
+        };
+      } catch {
+        return { name, path: path.join(normalizedPath, name), isDirectory: false, size: 0, modified: '', error: true };
+      }
+    });
+    
+    return { 
+      success: true, 
+      path: normalizedPath,
+      parent: path.dirname(normalizedPath),
+      files 
+    };
+  } catch (error: any) {
+    log(`❌ Error listing directory: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
+
+// Get home directory and common paths
+ipcMain.handle('get-system-paths', async () => {
+  return {
+    home: require('os').homedir(),
+    cwd: process.cwd(),
+    desktop: path.join(require('os').homedir(), 'Desktop'),
+    documents: path.join(require('os').homedir(), 'Documents'),
+    downloads: path.join(require('os').homedir(), 'Downloads'),
+  };
+});
+
+// Legacy summon-glyph for backwards compat
+ipcMain.on('summon-glyph', (event, data) => {
+  log('summon-glyph (legacy)', data);
+  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+    backgroundWindow.webContents.send('summon-glyph', data);
+  }
+});
+
+ipcMain.on('summon-status', (event, data) => {
+  log('summon-status', data);
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('summon-status', data);
+  }
+});
+
+ipcMain.on('summon-stream', (event, data) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('summon-stream', data);
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🚀 APP LIFECYCLE
+// ════════════════════════════════════════════════════════════════════════════
+
+app.whenReady().then(() => {
+  log('app-ready');
+  
+  // Log API key status
+  log('🔐 API Keys:', {
+    grok: apiKeys.grok ? '✓' : '✗',
+    gemini: apiKeys.gemini ? '✓' : '✗',
+    openai: apiKeys.openai ? '✓' : '✗',
+  });
+  
+  // THE SACRED SHORTCUT — Ctrl+Alt+S to toggle interaction
+  const registered = globalShortcut.register('Control+Alt+S', () => {
+    log('🔑 SUMMONER SHORTCUT TRIGGERED');
+    toggleInteraction();
+  });
+  
+  if (registered) {
+    log('⌨️  Global shortcut registered: Ctrl+Alt+S (Summoner)');
+  } else {
+    log('❌ Failed to register Ctrl+Alt+S');
+  }
+  
+  // Loom Panel shortcut — Ctrl+Alt+L to toggle the panel
+  const loomPanelShortcut = globalShortcut.register('Control+Alt+L', () => {
+    log('🔮 LOOM PANEL SHORTCUT TRIGGERED');
+    toggleLoomPanel();
+  });
+  
+  if (loomPanelShortcut) {
+    log('⌨️  Global shortcut registered: Ctrl+Alt+L (Loom Panel)');
+  } else {
+    log('❌ Failed to register Ctrl+Alt+L');
+  }
+  
+  // DevTools shortcut — Ctrl+Shift+D to toggle DevTools on overlay
+  const devToolsOverlay = globalShortcut.register('Control+Shift+D', () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      if (overlayWindow.webContents.isDevToolsOpened()) {
+        overlayWindow.webContents.closeDevTools();
+        log('🔧 Overlay DevTools closed');
+      } else {
+        overlayWindow.webContents.openDevTools({ mode: 'detach' });
+        log('🔧 Overlay DevTools opened');
+      }
+    }
+  });
+  
+  if (devToolsOverlay) {
+    log('⌨️  Overlay DevTools: Ctrl+Shift+D');
+  } else {
+    log('❌ Failed to register Ctrl+Shift+D');
+  }
+  
+  // DevTools shortcut — Ctrl+Shift+B to toggle DevTools on background
+  const devToolsBackground = globalShortcut.register('Control+Shift+B', () => {
+    if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+      if (backgroundWindow.webContents.isDevToolsOpened()) {
+        backgroundWindow.webContents.closeDevTools();
+        log('🔧 Background DevTools closed');
+      } else {
+        backgroundWindow.webContents.openDevTools({ mode: 'detach' });
+        log('🔧 Background DevTools opened');
+      }
+    }
+  });
+  
+  if (devToolsBackground) {
+    log('⌨️  Background DevTools: Ctrl+Shift+B');
+  } else {
+    log('❌ Failed to register Ctrl+Shift+B');
+  }
+
+  // DevTools shortcut — Ctrl+Shift+C to open background DevTools (Chrome-style)
+  const devToolsBackgroundAlt = globalShortcut.register('Control+Shift+C', () => {
+    if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+      if (backgroundWindow.webContents.isDevToolsOpened()) {
+        backgroundWindow.webContents.closeDevTools();
+        log('🔧 Background DevTools closed (Ctrl+Shift+C)');
+      } else {
+        backgroundWindow.webContents.openDevTools({ mode: 'detach' });
+        log('🔧 Background DevTools opened (Ctrl+Shift+C)');
+      }
+    }
+  });
+
+  if (devToolsBackgroundAlt) {
+    log('⌨️  Background DevTools: Ctrl+Shift+C');
+  } else {
+    log('❌ Failed to register Ctrl+Shift+C');
+  }
+  
+  // Create system tray
+  createTray();
+  
+  // Create both layers
+  createBackgroundWindow();
+  createOverlayWindow();
+  
+  // Open the Loom Panel by default on launch (rendered in overlay)
+  setTimeout(() => {
+    openLoomPanel();
+  }, 1500); // Delay to let overlay initialize
+  
+  log('🎭 TWO-LAYER ARCHITECTURE INITIALIZED');
+  log('   Layer 1: Background (Three.js wallpaper)');
+  log('   Layer 2: Overlay (UI + Loom Panel)');
+  log('⌨️  Press Ctrl+Alt+S to awaken the Summoner');
+  log('⌨️  Press Ctrl+Alt+L to toggle the Loom Panel');
+  log('🔔 System tray icon active');
+  log('');
+  log('🧙 LOOM SUMMONER v2 READY — Manifest reality');
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});
+
+app.on('window-all-closed', () => {
+  log('window-all-closed');
+  if (backgroundWindow) {
+    try {
+      detach(backgroundWindow);
+    } catch (err) {
+      log('detach-error-on-quit', err);
+    }
+  }
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  log('before-quit');
+  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+    try {
+      detach(backgroundWindow);
+    } catch (err) {
+      log('detach-error-before-quit', err);
+    }
+  }
+});

@@ -1,0 +1,11 @@
+{
+  "id": "glyph-1764191306740-cyber-pet-tamagotchi",
+  "name": "Cyber-Pet Tamagotchi",
+  "type": "object",
+  "prompt": "Generate a game where I can feed a dog and it grows.. I can also pet it, and if i don't give it what it needs (petting and feeding) it can get upset",
+  "entry": "index.html",
+  "files": [
+    "index.html"
+  ],
+  "savedAt": "2025-11-26T21:08:26.741Z"
+}

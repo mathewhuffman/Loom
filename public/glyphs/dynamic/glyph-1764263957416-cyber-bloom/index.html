@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber Bloom</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #050510;
+            font-family: sans-serif;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.7);
+            pointer-events: none;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-size: 0.8rem;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+            transition: opacity 0.5s;
+        }
+        .hidden {
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">Click to Deconstruct</div>
+    <div id="canvas-container"></div>
+
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+        import { UnrealBloomPass } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+        import { EffectComposer } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/RenderPass.js';
+
+        // --- CONFIGURATION ---
+        const inputs = window.GLYPH_INPUTS || {};
+        const CONFIG = {
+            petalColor: inputs.petalColor || '#ff0055',
+            centerColor: inputs.centerColor || '#ffdd00',
+            stemColor: inputs.stemColor || '#00ff88',
+            petalCount: parseInt(inputs.petalCount) || 12,
+            regrowthDelay: parseInt(inputs.regrowthDelay) || 10
+        };
+
+        // --- SCENE SETUP ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050510, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 3, 8);
+        camera.lookAt(0, 1, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        container.appendChild(renderer.domElement);
+
+        // --- POST PROCESSING (BLOOM) ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.2;
+        bloomPass.strength = 1.2;
+        bloomPass.radius = 0.5;
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- LIGHTING ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+        scene.add(ambientLight);
+
+        const pointLight = new THREE.PointLight(CONFIG.centerColor, 2, 20);
+        pointLight.position.set(0, 2, 1);
+        scene.add(pointLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // --- OBJECTS ---
+        const flowerGroup = new THREE.Group();
+        scene.add(flowerGroup);
+
+        // Stem
+        const stemGeo = new THREE.CylinderGeometry(0.1, 0.15, 4, 8);
+        const stemMat = new THREE.MeshStandardMaterial({ 
+            color: CONFIG.stemColor, 
+            roughness: 0.4,
+            emissive: CONFIG.stemColor,
+            emissiveIntensity: 0.2
+        });
+        const stem = new THREE.Mesh(stemGeo, stemMat);
+        stem.position.y = -1;
+        flowerGroup.add(stem);
+
+        // Flower Center
+        const centerGeo = new THREE.SphereGeometry(0.4, 16, 16);
+        const centerMat = new THREE.MeshStandardMaterial({ 
+            color: CONFIG.centerColor, 
+            emissive: CONFIG.centerColor, 
+            emissiveIntensity: 0.8,
+            roughness: 0.2
+        });
+        const centerMesh = new THREE.Mesh(centerGeo, centerMat);
+        centerMesh.position.y = 1.1;
+        flowerGroup.add(centerMesh);
+
+        // Petals
+        const petals = [];
+        const petalGeo = new THREE.ConeGeometry(0.3, 1.5, 4);
+        // Flatten the cone to make it petal-like
+        petalGeo.scale(1, 0.1, 2);
+        petalGeo.rotateX(Math.PI / 2);
+        petalGeo.translate(0, 0, 0.75); // Pivot at base
+
+        const petalMat = new THREE.MeshPhysicalMaterial({
+            color: CONFIG.petalColor,
+            metalness: 0.1,
+            roughness: 0.2,
+            transmission: 0.1, // Slight glass effect
+            thickness: 0.5,
+            clearcoat: 1.0,
+            side: THREE.DoubleSide
+        });
+
+        // Create petals in a spiral/circle
+        for (let i = 0; i < CONFIG.petalCount; i++) {
+            const angle = (i / CONFIG.petalCount) * Math.PI * 2;
+            const petal = new THREE.Mesh(petalGeo, petalMat);
+            
+            // Base position relative to flower center
+            const yOffset = 1.0 + Math.random() * 0.1;
+            const radius = 0.2;
+            
+            petal.position.set(Math.cos(angle) * radius, yOffset, Math.sin(angle) * radius);
+            
+            // Initial rotation to face outward and tilt up
+            petal.rotation.y = -angle + Math.PI / 2;
+            petal.rotation.x = -Math.PI / 4 - Math.random() * 0.2;
+
+            // Store initial state for regeneration
+            petal.userData = {
+                isFalling: false,
+                velocity: new THREE.Vector3(),
+                rotationVelocity: new THREE.Vector3(),
+                initialPos: petal.position.clone(),
+                initialRot: petal.rotation.clone(),
+                delay: Math.random() * 0.2 // Slight stagger in fall start
+            };
+
+            flowerGroup.add(petal);
+            petals.push(petal);
+        }
+
+        // --- INTERACTIVITY ---
+        let state = 'IDLE'; // IDLE, FALLING, WAITING, REGROWING
+        const uiElement = document.getElementById('ui');
+        let regrowthTimer = null;
+        let timeSinceClick = 0;
+
+        function triggerFall() {
+            if (state !== 'IDLE') return;
+            
+            state = 'FALLING';
+            timeSinceClick = 0;
+            uiElement.classList.add('hidden');
+
+            petals.forEach(p => {
+                p.userData.isFalling = true;
+                // Random explosion velocity
+                p.userData.velocity.set(
+                    (Math.random() - 0.5) * 0.1,
+                    (Math.random() * 0.1),
+                    (Math.random() - 0.5) * 0.1
+                );
+                // Random spin
+                p.userData.rotationVelocity.set(
+                    Math.random() * 0.1,
+                    Math.random() * 0.1,
+                    Math.random() * 0.1
+                );
+            });
+
+            // Schedule regrowth
+            regrowthTimer = setTimeout(() => {
+                startRegrowth();
+            }, CONFIG.regrowthDelay * 1000);
+        }
+
+        function startRegrowth() {
+            state = 'REGROWING';
+            // Reset positions but keep scale 0
+            petals.forEach(p => {
+                p.userData.isFalling = false;
+                p.position.copy(p.userData.initialPos);
+                p.rotation.copy(p.userData.initialRot);
+                p.scale.set(0, 0, 0);
+            });
+            
+            // Animate scale up
+            let progress = 0;
+            const growInterval = setInterval(() => {
+                progress += 0.02;
+                const scale = Math.min(progress, 1);
+                // Elastic ease out
+                const ease = scale === 0 ? 0 : scale === 1 ? 1 : Math.pow(2, -10 * scale) * Math.sin((scale * 10 - 0.75) * (2 * Math.PI) / 3) + 1;
+                
+                petals.forEach(p => p.scale.set(ease, ease, ease));
+
+                if (progress >= 1) {
+                    clearInterval(growInterval);
+                    state = 'IDLE';
+                    uiElement.textContent = "Click to Deconstruct";
+                    uiElement.classList.remove('hidden');
+                }
+            }, 16);
+
+            // Update UI text for countdown
+            uiElement.textContent = "Regrowing...";
+            uiElement.classList.remove('hidden');
+        }
+
+        window.addEventListener('pointerdown', triggerFall);
+
+        // --- ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            // Idle animation
+            if (state === 'IDLE') {
+                flowerGroup.rotation.y = Math.sin(time * 0.5) * 0.1;
+                flowerGroup.position.y = Math.sin(time * 1) * 0.1;
+                
+                // Subtle petal breathing
+                petals.forEach((p, i) => {
+                    p.rotation.x = p.userData.initialRot.x + Math.sin(time * 2 + i) * 0.05;
+                });
+            }
+
+            // Falling animation
+            if (state === 'FALLING') {
+                timeSinceClick += delta;
+                
+                petals.forEach(p => {
+                    if (timeSinceClick > p.userData.delay) {
+                        // Gravity
+                        p.userData.velocity.y -= 0.005;
+                        // Wind resistance / flutter
+                        p.userData.velocity.x += Math.sin(time * 3 + p.id) * 0.0005;
+                        p.userData.velocity.z += Math.cos(time * 2 + p.id) * 0.0005;
+
+                        p.position.add(p.userData.velocity);
+                        
+                        p.rotation.x += p.userData.rotationVelocity.x;
+                        p.rotation.y += p.userData.rotationVelocity.y;
+                        p.rotation.z += p.userData.rotationVelocity.z;
+
+                        // Floor collision (simple)
+                        if (p.position.y < -4) {
+                            p.userData.velocity.set(0, 0, 0);
+                            p.userData.rotationVelocity.set(0, 0, 0);
+                        }
+                    }
+                });
+            }
+
+            // Update UI countdown if waiting
+            if (state === 'FALLING' && uiElement.classList.contains('hidden') === false) {
+               // Shouldn't happen based on logic, but safety check
+            }
+            else if (state === 'FALLING' && regrowthTimer) {
+                // Optional: Show countdown? Maybe too cluttered. 
+                // Let's keep it clean.
+            }
+
+            composer.render();
+        }
+
+        animate();
+
+        // --- RESIZE HANDLING ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            bloomPass.resolution.set(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

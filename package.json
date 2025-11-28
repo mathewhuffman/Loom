@@ -1,0 +1,62 @@
+{
+  "name": "loom",
+  "version": "0.0.1",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "compile": "tsc -p electron-main.tsconfig.json",
+    "dev": "npm run compile && concurrently --kill-others-on-fail \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev:clean": "taskkill /F /IM electron.exe /T 2>nul & npm run dev",
+    "start": "electron .",
+    "build": "npm run compile && vite build && electron-builder",
+    "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.loom.desktop",
+    "productName": "Loom",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@monaco-editor/react": "^4.7.0",
+    "@react-three/drei": "^9.88.0",
+    "@react-three/fiber": "^8.16.8",
+    "diff": "^8.0.2",
+    "electron-as-wallpaper": "^2.0.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sucrase": "^3.35.1",
+    "three": "^0.168.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/node": "^20.19.25",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.168.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.1",
+    "wait-on": "^7.2.0"
+  }
+}

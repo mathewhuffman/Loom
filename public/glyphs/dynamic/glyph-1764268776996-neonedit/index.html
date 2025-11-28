@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeonEdit</title>
+    <style>
+        :root {
+            --bg-color: #050505;
+            --panel-bg: #0a0a0a;
+            --text-color: #e0e0e0;
+            --accent-color: #00ffff;
+            --accent-dim: rgba(0, 255, 255, 0.2);
+            --border-color: #333;
+            --font-family: 'Courier New', Courier, monospace;
+            --font-size: 14px;
+            --gutter-width: 40px;
+        }
+
+        * {
+            box-sizing: border-box;
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-color) var(--bg-color);
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: transparent;
+            font-family: var(--font-family);
+            overflow: hidden;
+            color: var(--text-color);
+        }
+
+        /* Main Container */
+        .widget-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            background: var(--bg-color);
+            border: 1px solid var(--accent-dim);
+            position: relative;
+            transition: box-shadow 0.3s ease;
+        }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            padding: 8px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--accent-dim);
+            align-items: center;
+            height: 40px;
+            flex-shrink: 0;
+        }
+
+        .url-input {
+            flex: 1;
+            background: #000;
+            border: 1px solid var(--border-color);
+            color: var(--accent-color);
+            padding: 4px 8px;
+            font-family: inherit;
+            font-size: 12px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .url-input:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 5px var(--accent-dim);
+        }
+
+        .btn {
+            background: transparent;
+            border: 1px solid var(--accent-color);
+            color: var(--accent-color);
+            padding: 4px 12px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 11px;
+            text-transform: uppercase;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn:hover {
+            background: var(--accent-color);
+            color: #000;
+            box-shadow: 0 0 8px var(--accent-color);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        /* Editor Area */
+        .editor-wrapper {
+            display: flex;
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .gutter {
+            width: var(--gutter-width);
+            background: var(--panel-bg);
+            border-right: 1px solid var(--border-color);
+            color: #555;
+            text-align: right;
+            padding: 10px 5px;
+            font-size: var(--font-size);
+            line-height: 1.5;
+            user-select: none;
+            overflow: hidden;
+            flex-shrink: 0;
+            display: none; /* Toggled via JS */
+        }
+
+        .editor {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-color);
+            padding: 10px;
+            font-family: inherit;
+            font-size: var(--font-size);
+            line-height: 1.5;
+            resize: none;
+            outline: none;
+            white-space: pre;
+            overflow: auto;
+            tab-size: 4;
+        }
+
+        /* File Browser Overlay */
+        .file-browser {
+            position: absolute;
+            top: 40px;
+            left: 0;
+            right: 0;
+            bottom: 24px;
+            background: rgba(5, 5, 5, 0.95);
+            z-index: 50;
+            display: none;
+            flex-direction: column;
+            backdrop-filter: blur(5px);
+        }
+
+        .file-browser.active {
+            display: flex;
+        }
+
+        .fb-header {
+            padding: 10px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--accent-dim);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .fb-path {
+            flex: 1;
+            font-family: monospace;
+            color: var(--accent-color);
+            font-size: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            direction: rtl;
+            text-align: left;
+        }
+
+        .fb-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .fb-item {
+            display: flex;
+            padding: 6px 10px;
+            cursor: pointer;
+            color: #aaa;
+            align-items: center;
+            border-bottom: 1px solid #111;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        .fb-item:hover {
+            background: var(--accent-dim);
+            color: #fff;
+        }
+
+        .fb-item.is-dir {
+            color: var(--accent-color);
+            font-weight: bold;
+        }
+
+        .fb-icon {
+            width: 24px;
+            text-align: center;
+            margin-right: 10px;
+            opacity: 0.7;
+        }
+
+        /* Status Bar */
+        .status-bar {
+            height: 24px;
+            background: var(--panel-bg);
+            border-top: 1px solid var(--accent-dim);
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            font-size: 10px;
+            color: #666;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .status-item {
+            margin-right: 15px;
+        }
+        
+        .status-item span {
+            color: var(--accent-color);
+        }
+
+        /* Drag Overlay */
+        .drop-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            backdrop-filter: blur(2px);
+        }
+
+        .drop-overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .drop-message {
+            color: var(--accent-color);
+            font-size: 24px;
+            border: 2px dashed var(--accent-color);
+            padding: 40px;
+            border-radius: 8px;
+            text-shadow: 0 0 10px var(--accent-color);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 5px var(--accent-dim); }
+            50% { box-shadow: 0 0 20px var(--accent-dim); }
+            100% { box-shadow: 0 0 5px var(--accent-dim); }
+        }
+
+        /* CRT Effect */
+        .scanlines {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.1) 50%,
+                rgba(0,0,0,0.1)
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 999;
+            opacity: 0.3;
+            display: none;
+        }
+        
+        .glow-corner {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--accent-color);
+            transition: all 0.3s ease;
+            pointer-events: none;
+        }
+        .gc-tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+        .gc-tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+        .gc-bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+        .gc-br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+
+    </style>
+</head>
+<body>
+
+<div class="widget-container" id="container">
+    <div class="glow-corner gc-tl"></div>
+    <div class="glow-corner gc-tr"></div>
+    <div class="glow-corner gc-bl"></div>
+    <div class="glow-corner gc-br"></div>
+
+    <div class="toolbar">
+        <input type="text" class="url-input" id="urlInput" placeholder="URL or Local Path..." />
+        <button class="btn" id="browseBtn">Browse</button>
+        <button class="btn" id="loadBtn">Load</button>
+        <button class="btn" id="saveBtn">Save</button>
+        <button class="btn" id="clearBtn">Clear</button>
+    </div>
+
+    <div class="editor-wrapper">
+        <div class="gutter" id="gutter"></div>
+        <textarea class="editor" id="editor" spellcheck="false" placeholder="// Drop a file here, browse, or type..."></textarea>
+        
+        <!-- File Browser Overlay -->
+        <div class="file-browser" id="fileBrowser">
+            <div class="fb-header">
+                <button class="btn" id="fbUpBtn">▲ Up</button>
+                <div class="fb-path" id="fbPath">/</div>
+                <button class="btn" id="fbCloseBtn">Close</button>
+            </div>
+            <div class="fb-list" id="fbList">
+                <!-- Items will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar">
+        <div class="status-item" id="fileName">No File</div>
+        <div style="display:flex;">
+            <div class="status-item">Ln <span id="lnCount">1</span></div>
+            <div class="status-item">Col <span id="colCount">1</span></div>
+            <div class="status-item"><span id="byteCount">0</span> B</div>
+        </div>
+    </div>
+
+    <div class="drop-overlay" id="dropOverlay">
+        <div class="drop-message">INITIATING DATA TRANSFER</div>
+    </div>
+</div>
+
+<div class="scanlines" id="scanlines"></div>
+
+<script type="module">
+    // ==========================================
+    // CONFIG & STATE
+    // ==========================================
+    const inputs = window.GLYPH_INPUTS || {};
+    const state = {
+        currentFile: null,
+        unsaved: false,
+        lineCount: 1,
+        currentPath: '',
+        isLoomAvailable: !!(window.loom && window.loom.readLocalFile)
+    };
+
+    // DOM Elements
+    const el = {
+        container: document.getElementById('container'),
+        editor: document.getElementById('editor'),
+        gutter: document.getElementById('gutter'),
+        urlInput: document.getElementById('urlInput'),
+        loadBtn: document.getElementById('loadBtn'),
+        saveBtn: document.getElementById('saveBtn'),
+        clearBtn: document.getElementById('clearBtn'),
+        browseBtn: document.getElementById('browseBtn'),
+        dropOverlay: document.getElementById('dropOverlay'),
+        fileName: document.getElementById('fileName'),
+        lnCount: document.getElementById('lnCount'),
+        colCount: document.getElementById('colCount'),
+        byteCount: document.getElementById('byteCount'),
+        scanlines: document.getElementById('scanlines'),
+        // Browser Elements
+        fileBrowser: document.getElementById('fileBrowser'),
+        fbList: document.getElementById('fbList'),
+        fbPath: document.getElementById('fbPath'),
+        fbUpBtn: document.getElementById('fbUpBtn'),
+        fbCloseBtn: document.getElementById('fbCloseBtn')
+    };
+
+    // ==========================================
+    // INITIALIZATION
+    // ==========================================
+    function init() {
+        // Apply inputs
+        const root = document.documentElement;
+        const accent = inputs.accentColor || '#00ffff';
+        root.style.setProperty('--accent-color', accent);
+        root.style.setProperty('--accent-dim', accent + '33');
+        root.style.setProperty('--font-size', (inputs.fontSize || 14) + 'px');
+
+        if (inputs.showLineNumbers) el.gutter.style.display = 'block';
+        if (inputs.crtEffect) el.scanlines.style.display = 'block';
+
+        // Setup Listeners
+        setupEditor();
+        setupDragAndDrop();
+        setupToolbar();
+        setupFileBrowser();
+
+        // Load default URL if provided
+        if (inputs.defaultUrl) {
+            el.urlInput.value = inputs.defaultUrl;
+            handleLoad();
+        }
+
+        updateStats();
+        
+        if (!state.isLoomAvailable) {
+            el.browseBtn.style.opacity = '0.5';
+            el.browseBtn.title = "Local file access not available";
+        }
+    }
+
+    // ==========================================
+    // EDITOR LOGIC
+    // ==========================================
+    function setupEditor() {
+        const update = () => {
+            updateGutter();
+            updateStats();
+        };
+
+        el.editor.addEventListener('input', update);
+        el.editor.addEventListener('scroll', () => {
+            el.gutter.scrollTop = el.editor.scrollTop;
+        });
+        el.editor.addEventListener('click', updateStats);
+        el.editor.addEventListener('keyup', updateStats);
+        
+        el.editor.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = el.editor.selectionStart;
+                const end = el.editor.selectionEnd;
+                const val = el.editor.value;
+                el.editor.value = val.substring(0, start) + '    ' + val.substring(end);
+                el.editor.selectionStart = el.editor.selectionEnd = start + 4;
+                update();
+            }
+        });
+    }
+
+    function updateGutter() {
+        const text = el.editor.value;
+        const lines = text.split('\n').length;
+        
+        if (lines !== state.lineCount) {
+            state.lineCount = lines;
+            el.gutter.innerHTML = Array(lines).fill(0).map((_, i) => i + 1).join('<br>');
+        }
+    }
+
+    function updateStats() {
+        const text = el.editor.value;
+        const bytes = new Blob([text]).size;
+        const pos = el.editor.selectionStart;
+        const textUpToCursor = text.substring(0, pos);
+        const lines = textUpToCursor.split('\n');
+        const currentLine = lines.length;
+        const currentCol = lines[lines.length - 1].length + 1;
+
+        el.lnCount.textContent = currentLine;
+        el.colCount.textContent = currentCol;
+        el.byteCount.textContent = bytes;
+    }
+
+    // ==========================================
+    // FILE HANDLING
+    // ==========================================
+    function setupToolbar() {
+        el.loadBtn.addEventListener('click', handleLoad);
+        el.clearBtn.addEventListener('click', () => {
+            el.editor.value = '';
+            el.fileName.textContent = 'New File';
+            el.urlInput.value = '';
+            updateGutter();
+            updateStats();
+        });
+        el.saveBtn.addEventListener('click', downloadFile);
+        el.browseBtn.addEventListener('click', () => toggleBrowser(true));
+    }
+
+    async function handleLoad() {
+        const input = el.urlInput.value.trim();
+        if (!input) return;
+
+        // Check if it's a URL or a Local Path
+        if (input.match(/^https?:\/\//i)) {
+            await fetchUrl(input);
+        } else if (state.isLoomAvailable) {
+            // Assume local path
+            await loadLocalFile(input);
+        } else {
+            el.editor.value = "// ERROR: Local file access unavailable in this environment.\n// Only HTTP/HTTPS URLs are supported.";
+            updateGutter();
+        }
+    }
+
+    async function loadLocalFile(path) {
+        el.fileName.textContent = 'Reading Disk...';
+        try {
+            const result = await window.loom.readLocalFile(path);
+            if (result.success) {
+                if (result.isDirectory) {
+                    // If user loaded a directory path, switch to browser
+                    toggleBrowser(true, path);
+                } else {
+                    el.editor.value = result.content;
+                    el.fileName.textContent = result.name || path.split(/[\\/]/).pop();
+                    el.urlInput.value = path;
+                    toggleBrowser(false);
+                    updateGutter();
+                    updateStats();
+                }
+            } else {
+                throw new Error(result.error || 'Unknown error');
+            }
+        } catch (err) {
+            el.editor.value = `// ERROR READING LOCAL FILE:\n// ${err.message}`;
+            updateGutter();
+        }
+    }
+
+    async function fetchUrl(url) {
+        el.fileName.textContent = 'Fetching...';
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Network error');
+            const text = await response.text();
+            el.editor.value = text;
+            const name = url.substring(url.lastIndexOf('/') + 1) || 'download.txt';
+            el.fileName.textContent = name;
+            updateGutter();
+            updateStats();
+        } catch (err) {
+            el.editor.value = `// ERROR LOADING URL:\n// ${err.message}`;
+            updateGutter();
+        }
+    }
+
+    function downloadFile() {
+        const text = el.editor.value;
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = el.fileName.textContent === 'No File' ? 'untitled.txt' : el.fileName.textContent;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    // ==========================================
+    // FILE BROWSER
+    // ==========================================
+    function setupFileBrowser() {
+        el.fbCloseBtn.addEventListener('click', () => toggleBrowser(false));
+        el.fbUpBtn.addEventListener('click', async () => {
+            if (state.currentPath) {
+                // This is a naive 'up' - a real implementation would use the parent from the API if available
+                // But loom.listDirectory returns 'parent'
+                const res = await window.loom.listDirectory(state.currentPath);
+                if (res.success && res.parent) {
+                    loadDirectory(res.parent);
+                }
+            }
+        });
+    }
+
+    async function toggleBrowser(show, startPath) {
+        if (!state.isLoomAvailable) {
+            if(show) alert("File system access not available.");
+            return;
+        }
+
+        if (show) {
+            el.fileBrowser.classList.add('active');
+            let path = startPath;
+            if (!path) {
+                // Default to CWD or Home
+                const paths = await window.loom.getSystemPaths();
+                path = paths.cwd || paths.home;
+            }
+            loadDirectory(path);
+        } else {
+            el.fileBrowser.classList.remove('active');
+        }
+    }
+
+    async function loadDirectory(path) {
+        el.fbList.innerHTML = '<div class="fb-item">Loading...</div>';
+        const res = await window.loom.listDirectory(path);
+        
+        if (res.success) {
+            state.currentPath = res.path;
+            el.fbPath.textContent = res.path;
+            renderFileList(res.files);
+        } else {
+            el.fbList.innerHTML = `<div class="fb-item" style="color:red">Error: ${res.error}</div>`;
+        }
+    }
+
+    function renderFileList(files) {
+        el.fbList.innerHTML = '';
+        
+        // Sort: Directories first, then files
+        files.sort((a, b) => {
+            if (a.isDirectory === b.isDirectory) return a.name.localeCompare(b.name);
+            return a.isDirectory ? -1 : 1;
+        });
+
+        files.forEach(file => {
+            const item = document.createElement('div');
+            item.className = 'fb-item';
+            if (file.isDirectory) item.classList.add('is-dir');
+            
+            const icon = file.isDirectory ? '📁' : '📄';
+            item.innerHTML = `<span class="fb-icon">${icon}</span> ${file.name}`;
+            
+            item.addEventListener('click', () => {
+                if (file.isDirectory) {
+                    loadDirectory(file.path);
+                } else {
+                    loadLocalFile(file.path);
+                }
+            });
+            
+            el.fbList.appendChild(item);
+        });
+    }
+
+    // ==========================================
+    // DRAG AND DROP
+    // ==========================================
+    function setupDragAndDrop() {
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            document.body.addEventListener(eventName, e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, false);
+        });
+
+        document.body.addEventListener('dragenter', () => el.dropOverlay.classList.add('active'));
+        
+        el.dropOverlay.addEventListener('dragleave', (e) => {
+            if (e.target === el.dropOverlay) el.dropOverlay.classList.remove('active');
+        });
+
+        document.body.addEventListener('drop', handleDrop, false);
+    }
+
+    function handleDrop(e) {
+        el.dropOverlay.classList.remove('active');
+        const dt = e.dataTransfer;
+        const files = dt.files;
+
+        if (files.length > 0) {
+            const file = files[0];
+            // If we have access to the file path (Electron/Loom), use it
+            if (state.isLoomAvailable && file.path) {
+                loadLocalFile(file.path);
+            } else {
+                // Fallback to standard Browser FileReader
+                readFileStandard(file);
+            }
+        }
+    }
+
+    function readFileStandard(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            el.editor.value = e.target.result;
+            el.fileName.textContent = file.name;
+            el.urlInput.value = '';
+            updateGutter();
+            updateStats();
+        };
+        reader.readAsText(file);
+    }
+
+    // Start
+    init();
+
+</script>
+</body>
+</html>

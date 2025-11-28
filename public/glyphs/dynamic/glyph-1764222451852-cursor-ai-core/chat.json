@@ -1,0 +1,30 @@
+[
+  {
+    "id": "msg-1764222451854-user",
+    "role": "user",
+    "content": "make a widget that is a cursor. file path:  instance so I can edit files with cursor from my desktop. file path: E:\\cursor/Cursor.exe",
+    "timestamp": 1764222451854,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764222451854-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Cursor AI Core\" (object)\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764222451855,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764222451854-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764222451856,
+    "type": "info"
+  },
+  {
+    "id": "msg-1764225831707",
+    "role": "user",
+    "content": "can you make the interactive part of this glyph slower?",
+    "timestamp": 1764225831707,
+    "type": "refinement"
+  }
+]

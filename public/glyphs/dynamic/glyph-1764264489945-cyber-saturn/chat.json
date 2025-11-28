@@ -1,0 +1,58 @@
+[
+  {
+    "id": "msg-1764264489947-user",
+    "role": "user",
+    "content": "a cyber saturn with matrix text particle field rotating around it",
+    "timestamp": 1764264489947,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764264489947-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Cyber Saturn\" (undefined)\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764264489948,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764264489947-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764264489949,
+    "type": "info"
+  },
+  {
+    "id": "msg-1764264514847",
+    "role": "user",
+    "content": "Make the particle field react to the users mouse",
+    "timestamp": 1764264514847,
+    "type": "refinement"
+  },
+  {
+    "id": "msg-1764264915098",
+    "role": "user",
+    "content": "Make the particle field react to the users mouse",
+    "timestamp": 1764264915098,
+    "type": "refinement"
+  },
+  {
+    "id": "msg-1764265244183",
+    "role": "user",
+    "content": "Make the particle field react to the users mouse",
+    "timestamp": 1764265244183,
+    "type": "refinement"
+  },
+  {
+    "id": "msg-1764265244187-assistant",
+    "role": "assistant",
+    "content": "✨ Refinement ready for index.html!\n\n• INSERT line 65: Setup raycaster and interaction plane aligned with the particle rings.\n• REPLACE lines 203-247: Updated animation loop to include mouse interaction logic (repulsion + wave effect).\n\n👆 Review the diff and **Save** or **Discard** the changes.",
+    "timestamp": 1764265308264,
+    "type": "refinement"
+  },
+  {
+    "id": "msg-1764265339720-confirm",
+    "role": "system",
+    "content": "✅ index.html saved successfully!",
+    "timestamp": 1764265339720,
+    "type": "info"
+  }
+]

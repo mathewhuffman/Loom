@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764263957417-user",
+    "role": "user",
+    "content": "create a red flower that the petals fall from when the user left clicks.. petals regrow after 10 seconds",
+    "timestamp": 1764263957417,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764263957417-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Cyber Bloom\" (undefined)\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764263957418,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764263957417-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764263957419,
+    "type": "info"
+  }
+]

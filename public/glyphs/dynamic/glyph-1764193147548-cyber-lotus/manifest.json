@@ -1,0 +1,11 @@
+{
+  "id": "glyph-1764193147548-cyber-lotus",
+  "name": "Cyber Lotus",
+  "type": "object",
+  "prompt": "create an animated and interactive blue flower",
+  "entry": "index.html",
+  "files": [
+    "index.html"
+  ],
+  "savedAt": "2025-11-26T21:39:07.548Z"
+}

@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber-Pet</title>
+    <style>
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; width: 100%; height: 100%; outline: none; }
+        
+        /* HUD Overlay */
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 220px;
+            pointer-events: none;
+            user-select: none;
+            z-index: 10;
+        }
+        .stat-row {
+            margin-bottom: 15px;
+        }
+        .label { color: #00ffff; font-size: 12px; margin-bottom: 4px; text-shadow: 0 0 5px #00ffff; font-weight: bold; }
+        .bar-bg {
+            width: 100%; height: 8px;
+            background: rgba(0, 255, 255, 0.1);
+            border: 1px solid #00ffff;
+            box-shadow: 0 0 5px rgba(0, 255, 255, 0.2);
+        }
+        .bar-fill {
+            height: 100%;
+            width: 100%;
+            background: #00ffff;
+            box-shadow: 0 0 10px #00ffff;
+            transition: width 0.2s, background-color 0.5s;
+        }
+
+        /* Controls */
+        #controls {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+            z-index: 10;
+        }
+        button {
+            pointer-events: auto;
+            background: rgba(0,0,0,0.8);
+            border: 1px solid #ff00ff;
+            color: #ff00ff;
+            padding: 12px 24px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: bold;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 0 10px rgba(255, 0, 255, 0.3);
+            margin: 0 10px;
+        }
+        button:hover {
+            background: #ff00ff;
+            color: #000;
+            box-shadow: 0 0 20px #ff00ff;
+        }
+        button:active {
+            transform: scale(0.95);
+        }
+
+        /* Status Text */
+        #status {
+            position: absolute;
+            top: 50%;
+            width: 100%;
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #ff0000;
+            text-shadow: 0 0 10px #ff0000;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.5s;
+            transform: translateY(-50%);
+        }
+        
+        .instruction {
+            font-size: 10px; color: #aaa; margin-top: 8px; text-shadow: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div class="stat-row">
+            <div class="label">INTEGRITY (HUNGER)</div>
+            <div class="bar-bg"><div id="bar-hunger" class="bar-fill"></div></div>
+        </div>
+        <div class="stat-row">
+            <div class="label">SYNC_RATE (HAPPINESS)</div>
+            <div class="bar-bg"><div id="bar-happy" class="bar-fill"></div></div>
+        </div>
+        <div class="stat-row">
+             <div class="label">MASS: <span id="mass-val">1.00</span> TB</div>
+        </div>
+    </div>
+
+    <div id="status">CRITICAL SYSTEM FAILURE<br><span style="font-size:14px">SUBJECT IS UPSET</span></div>
+
+    <div id="controls">
+        <button id="btn-feed">Inject Data (Feed)</button>
+        <div class="instruction">RUB CURSOR ON SUBJECT TO PET • FEED TO GROW</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+        import { OrbitControls } from 'https://esm.sh/three@0.168.0/examples/jsm/controls/OrbitControls.js';
+
+        // --- STATE ---
+        const state = {
+            hunger: 100,      // 0 = Starving, 100 = Full
+            happiness: 100,   // 0 = Depressed, 100 = Ecstatic
+            size: 1.0,        // Growth multiplier
+            isUpset: false,
+            lastPetTime: 0
+        };
+
+        // --- SETUP ---
+        const scene = new THREE.Scene();
+        // scene.background = new THREE.Color(0x050505);
+        // Transparent background requested, but let's add some fog for depth
+        scene.fog = new THREE.FogExp2(0x000000, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(4, 3, 6);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.enablePan = false;
+        controls.minDistance = 2;
+        controls.maxDistance = 15;
+
+        // --- LIGHTS ---
+        const ambientLight = new THREE.AmbientLight(0x404040, 2);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        const pointLight = new THREE.PointLight(0x00ffff, 3, 10);
+        pointLight.position.set(0, 2, 2);
+        scene.add(pointLight);
+
+        // --- MATERIALS ---
+        const bodyMat = new THREE.MeshStandardMaterial({ 
+            color: 0x111111, 
+            roughness: 0.2, 
+            metalness: 0.8,
+            emissive: 0x00ffff,
+            emissiveIntensity: 0.2
+        });
+        
+        const jointMat = new THREE.MeshStandardMaterial({ 
+            color: 0x222222, 
+            roughness: 0.5 
+        });
+
+        const eyeMat = new THREE.MeshStandardMaterial({ 
+            color: 0x000000,
+            emissive: 0x00ffff,
+            emissiveIntensity: 2
+        });
+
+        // --- PET CONSTRUCTION (The "Cyber-Dog") ---
+        const dogGroup = new THREE.Group();
+        scene.add(dogGroup);
+
+        // Body
+        const bodyGeo = new THREE.BoxGeometry(1, 0.8, 1.5);
+        const body = new THREE.Mesh(bodyGeo, bodyMat.clone());
+        body.position.y = 0.8;
+        dogGroup.add(body);
+
+        // Head Group
+        const headGroup = new THREE.Group();
+        headGroup.position.set(0, 1.4, 0.9);
+        dogGroup.add(headGroup);
+
+        // Head Mesh
+        const headGeo = new THREE.BoxGeometry(0.7, 0.7, 0.8);
+        const head = new THREE.Mesh(headGeo, bodyMat.clone());
+        headGroup.add(head);
+
+        // Eyes
+        const eyeGeo = new THREE.SphereGeometry(0.1, 16, 16);
+        const leftEye = new THREE.Mesh(eyeGeo, eyeMat.clone());
+        leftEye.position.set(0.2, 0.1, 0.4);
+        headGroup.add(leftEye);
+        
+        const rightEye = new THREE.Mesh(eyeGeo, eyeMat.clone());
+        rightEye.position.set(-0.2, 0.1, 0.4);
+        headGroup.add(rightEye);
+
+        // Ears
+        const earGeo = new THREE.ConeGeometry(0.15, 0.4, 4);
+        const leftEar = new THREE.Mesh(earGeo, bodyMat.clone());
+        leftEar.position.set(0.25, 0.5, 0);
+        leftEar.rotation.x = -0.2;
+        leftEar.rotation.z = -0.2;
+        headGroup.add(leftEar);
+
+        const rightEar = new THREE.Mesh(earGeo, bodyMat.clone());
+        rightEar.position.set(-0.25, 0.5, 0);
+        rightEar.rotation.x = -0.2;
+        rightEar.rotation.z = 0.2;
+        headGroup.add(rightEar);
+
+        // Legs
+        const legGeo = new THREE.CylinderGeometry(0.15, 0.1, 0.8);
+        const legs = [];
+        const legPos = [
+            {x: 0.35, z: 0.5}, {x: -0.35, z: 0.5},
+            {x: 0.35, z: -0.5}, {x: -0.35, z: -0.5}
+        ];
+        legPos.forEach(pos => {
+            const leg = new THREE.Mesh(legGeo, jointMat);
+            leg.position.set(pos.x, 0.4, pos.z);
+            dogGroup.add(leg);
+            legs.push(leg);
+        });
+
+        // Tail
+        const tailGroup = new THREE.Group();
+        tailGroup.position.set(0, 1, -0.75);
+        dogGroup.add(tailGroup);
+        const tailGeo = new THREE.BoxGeometry(0.15, 0.15, 0.6);
+        const tail = new THREE.Mesh(tailGeo, bodyMat.clone());
+        tail.position.set(0, 0.1, -0.3);
+        tail.rotation.x = 0.4;
+        tailGroup.add(tail);
+
+        // Floor Grid
+        const gridHelper = new THREE.GridHelper(20, 20, 0x333333, 0x111111);
+        scene.add(gridHelper);
+
+        // --- INTERACTIVITY ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let isHovering = false;
+        let petVelocity = 0;
+
+        window.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            // Petting detection: Raycast
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(dogGroup.children, true);
+            
+            if (intersects.length > 0) {
+                document.body.style.cursor = 'grab';
+                isHovering = true;
+                
+                // Calculate "rubbing" velocity
+                petVelocity += Math.abs(event.movementX) + Math.abs(event.movementY);
+            } else {
+                document.body.style.cursor = 'default';
+                isHovering = false;
+            }
+        });
+
+        // Feed Button
+        document.getElementById('btn-feed').addEventListener('click', () => {
+            spawnFood();
+        });
+
+        // Food Logic
+        const foods = [];
+        const foodGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+        const foodMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: true });
+
+        function spawnFood() {
+            if (state.hunger >= 120) return; // Don't overfeed too much
+
+            const food = new THREE.Mesh(foodGeo, foodMat);
+            // Random position above
+            food.position.set(
+                (Math.random() - 0.5) * 4,
+                4,
+                (Math.random() - 0.5) * 4
+            );
+            scene.add(food);
+            foods.push({ mesh: food, velocity: new THREE.Vector3(0, -0.1, 0) });
+        }
+
+        // --- ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+        let time = 0;
+
+        function updateState(dt) {
+            // Decay stats
+            state.hunger = Math.max(0, state.hunger - 2 * dt);
+            state.happiness = Math.max(0, state.happiness - 1.5 * dt);
+
+            // Petting Logic
+            if (petVelocity > 0) {
+                state.happiness = Math.min(100, state.happiness + petVelocity * 0.1);
+                petVelocity *= 0.9; // dampening
+                
+                // Visual feedback for petting
+                headGroup.rotation.z = Math.sin(time * 20) * 0.1;
+            }
+
+            // Check upset state
+            const wasUpset = state.isUpset;
+            state.isUpset = (state.hunger < 20 || state.happiness < 20);
+
+            // Update UI
+            document.getElementById('bar-hunger').style.width = state.hunger + '%';
+            document.getElementById('bar-happy').style.width = state.happiness + '%';
+            document.getElementById('mass-val').innerText = state.size.toFixed(2);
+
+            // Color feedback
+            const targetColor = state.isUpset ? new THREE.Color(0xff0000) : new THREE.Color(0x00ffff);
+            const targetEmissive = state.isUpset ? new THREE.Color(0xff0000) : new THREE.Color(0x00ffff);
+            
+            // Smoothly change eye color
+            leftEye.material.emissive.lerp(targetEmissive, 0.1);
+            rightEye.material.emissive.lerp(targetEmissive, 0.1);
+            
+            // Body glow
+            body.material.emissive.lerp(targetEmissive, 0.05);
+            head.material.emissive.lerp(targetEmissive, 0.05);
+
+            // HUD Bar colors
+            const barColor = state.isUpset ? '#ff0000' : '#00ffff';
+            document.querySelectorAll('.bar-fill').forEach(el => el.style.backgroundColor = barColor);
+
+            // Status Text
+            document.getElementById('status').style.opacity = state.isUpset ? 1 : 0;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const dt = clock.getDelta();
+            time += dt;
+
+            updateState(dt);
+            controls.update();
+
+            // --- DOG ANIMATION ---
+            
+            // Breathing
+            const breath = Math.sin(time * 2) * 0.05;
+            body.scale.y = 1 + breath;
+            body.position.y = 0.8 + breath * 0.5;
+            headGroup.position.y = 1.4 + breath * 0.5;
+
+            // Tail Wag
+            let wagSpeed = state.isUpset ? 0.5 : 5;
+            if (state.happiness > 80) wagSpeed = 15;
+            tailGroup.rotation.y = Math.sin(time * wagSpeed) * 0.5;
+
+            // Look at camera (Head tracking)
+            const lookTarget = new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z);
+            headGroup.lookAt(lookTarget);
+            // Clamp head rotation so it doesn't break neck
+            headGroup.rotation.x = THREE.MathUtils.clamp(headGroup.rotation.x, -0.5, 0.5);
+            headGroup.rotation.z = THREE.MathUtils.clamp(headGroup.rotation.z, -0.5, 0.5);
+            // Add petting shake
+            if (isHovering && petVelocity > 5) {
+                headGroup.rotation.z += Math.sin(time * 50) * 0.1;
+            }
+
+            // Growth Scale
+            const targetScale = state.size;
+            dogGroup.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.05);
+
+            // --- FOOD PHYSICS ---
+            for (let i = foods.length - 1; i >= 0; i--) {
+                const f = foods[i];
+                
+                // Move towards dog mouth
+                const mouthPos = new THREE.Vector3();
+                headGroup.getWorldPosition(mouthPos);
+                mouthPos.y -= 0.2; // Adjust to mouth level
+                mouthPos.z += 0.5;
+
+                const dir = new THREE.Vector3().subVectors(mouthPos, f.mesh.position).normalize();
+                f.mesh.position.add(dir.multiplyScalar(0.15));
+                f.mesh.rotation.x += 0.1;
+                f.mesh.rotation.y += 0.1;
+
+                // Eat detection
+                if (f.mesh.position.distanceTo(mouthPos) < 0.5) {
+                    scene.remove(f.mesh);
+                    foods.splice(i, 1);
+                    
+                    // Effect of eating
+                    state.hunger = Math.min(100, state.hunger + 20);
+                    state.size += 0.05; // Grow!
+                    
+                    // Happy jump
+                    dogGroup.position.y += 0.5;
+                }
+            }
+
+            // Gravity for dog jump
+            if (dogGroup.position.y > 0) {
+                dogGroup.position.y = Math.max(0, dogGroup.position.y - 0.1);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

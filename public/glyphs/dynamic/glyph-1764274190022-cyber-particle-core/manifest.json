@@ -1,0 +1,12 @@
+{
+  "id": "glyph-1764274190022-cyber-particle-core",
+  "name": "Cyber Particle Core",
+  "prompt": "Create a particle field with a square in the middle, make it interactive",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-27T20:09:50.022Z"
+}

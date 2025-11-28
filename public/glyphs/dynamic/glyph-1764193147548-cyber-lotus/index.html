@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber Lotus</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            overflow: hidden;
+            font-family: monospace;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            outline: none;
+        }
+        #ui {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: #00ffff;
+            pointer-events: none;
+            text-shadow: 0 0 5px #00ffff;
+            opacity: 0.8;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">SYSTEM: ONLINE<br>INPUT: TRACKING</div>
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+
+        // --- STATE & CONFIG ---
+        const config = {
+            colorCore: 0x001133,
+            colorPetal: 0x00ffff,
+            colorGlow: 0x5500ff,
+            bloomSpeed: 0.05,
+            rotationSensitivity: 0.001
+        };
+
+        const state = {
+            mouseX: 0,
+            mouseY: 0,
+            isHovering: false,
+            bloomLevel: 0, // 0 to 1
+            targetBloom: 0,
+            time: 0
+        };
+
+        // --- SCENE SETUP ---
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        
+        // Camera setup for an object view
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 3, 8);
+        camera.lookAt(0, 0, 0);
+
+        // --- MATERIALS ---
+        // Holographic petal material
+        const petalMaterial = new THREE.MeshPhysicalMaterial({
+            color: config.colorGlow,
+            emissive: 0x000044,
+            metalness: 0.9,
+            roughness: 0.1,
+            transmission: 0.6, // Glass-like
+            thickness: 1.0,
+            transparent: true,
+            opacity: 0.9,
+            side: THREE.DoubleSide,
+        });
+
+        const wireframeMaterial = new THREE.MeshBasicMaterial({
+            color: config.colorPetal,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.3,
+            blending: THREE.AdditiveBlending
+        });
+
+        const coreMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.8
+        });
+
+        // --- GEOMETRY GENERATION ---
+        const flowerGroup = new THREE.Group();
+        scene.add(flowerGroup);
+
+        // Helper to create a single petal
+        function createPetal(width, height, curvature) {
+            // Create a curved shape
+            const shape = new THREE.Shape();
+            shape.moveTo(0, 0);
+            shape.quadraticCurveTo(width / 2, height / 2, 0, height);
+            shape.quadraticCurveTo(-width / 2, height / 2, 0, 0);
+
+            const geometry = new THREE.ShapeGeometry(shape, 12);
+            
+            // Bend the geometry to make it cup-shaped
+            const positions = geometry.attributes.position;
+            for (let i = 0; i < positions.count; i++) {
+                const x = positions.getX(i);
+                const y = positions.getY(i);
+                const z = positions.getZ(i);
+                // Simple parabolic bend
+                const bend = (x * x) * curvature;
+                positions.setZ(i, z + bend);
+            }
+            geometry.computeVertexNormals();
+
+            const mesh = new THREE.Mesh(geometry, petalMaterial);
+            const wire = new THREE.Mesh(geometry, wireframeMaterial);
+            mesh.add(wire);
+            
+            // Pivot adjustment so it rotates from the base
+            mesh.geometry.translate(0, 0, 0);
+            
+            // Wrapper to handle pivot rotation easily
+            const pivot = new THREE.Object3D();
+            pivot.add(mesh);
+            return { pivot, mesh };
+        }
+
+        // Build the flower layers
+        const petals = [];
+        const layers = [
+            { count: 6, scale: 1.0, tilt: 0.5, y: 0.0, color: 0x00ffff },
+            { count: 8, scale: 1.5, tilt: 0.8, y: -0.1, color: 0x0088ff },
+            { count: 12, scale: 2.0, tilt: 1.1, y: -0.2, color: 0x0044ff }
+        ];
+
+        layers.forEach((layer, layerIndex) => {
+            for (let i = 0; i < layer.count; i++) {
+                const angle = (i / layer.count) * Math.PI * 2;
+                const { pivot, mesh } = createPetal(0.8 * layer.scale, 2.5 * layer.scale, 0.5);
+                
+                // Position in circle
+                pivot.position.y = layer.y;
+                pivot.rotation.y = angle;
+                
+                // Initial tilt (closed state)
+                // We store base rotation in userData to animate it later
+                pivot.userData = {
+                    baseTilt: Math.PI / 4 + (layerIndex * 0.1),
+                    bloomTilt: Math.PI / 2.5 + (layerIndex * 0.2),
+                    angleOffset: angle,
+                    layer: layerIndex
+                };
+                
+                // Rotate the mesh relative to pivot to face outward
+                mesh.rotation.x = -Math.PI / 4; // Initial closed stance
+
+                flowerGroup.add(pivot);
+                petals.push({ pivot, mesh });
+            }
+        });
+
+        // Center Core (Stamen)
+        const coreGeo = new THREE.IcosahedronGeometry(0.5, 1);
+        const core = new THREE.Mesh(coreGeo, coreMaterial);
+        flowerGroup.add(core);
+
+        // Lights
+        const pointLight = new THREE.PointLight(0x00ffff, 2, 10);
+        pointLight.position.set(0, 2, 0);
+        scene.add(pointLight);
+
+        const ambientLight = new THREE.AmbientLight(0x404040, 2);
+        scene.add(ambientLight);
+
+        // Particles
+        const particleCount = 200;
+        const particlesGeo = new THREE.BufferGeometry();
+        const posArray = new Float32Array(particleCount * 3);
+        for(let i=0; i<particleCount*3; i++) {
+            posArray[i] = (Math.random() - 0.5) * 10;
+        }
+        particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        const particlesMat = new THREE.PointsMaterial({
+            size: 0.05,
+            color: 0x00ffff,
+            transparent: true,
+            opacity: 0.6,
+            blending: THREE.AdditiveBlending
+        });
+        const particlesMesh = new THREE.Points(particlesGeo, particlesMat);
+        scene.add(particlesMesh);
+
+        // --- INPUT HANDLING ---
+        function onMouseMove(event) {
+            // Normalize mouse -1 to 1
+            state.mouseX = (event.clientX / window.innerWidth) * 2 - 1;
+            state.mouseY = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            // Keep flower open during interaction
+            state.targetBloom = 1.0;
+            
+            updateUI();
+        }
+
+        function updateUI() {
+            const ui = document.getElementById('ui');
+            ui.innerHTML = `SYSTEM: ONLINE<br>BLOOM: ${(state.bloomLevel * 100).toFixed(0)}%<br>X: ${state.mouseX.toFixed(2)} Y: ${state.mouseY.toFixed(2)}`;
+        }
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = clock.getDelta();
+            state.time += dt;
+
+            // Smoothly interpolate bloom level
+            state.bloomLevel += (state.targetBloom - state.bloomLevel) * dt * 2.0;
+
+            // Rotate entire flower to track mouse
+            // Invert Y rotation to look up/down correctly, and increase sensitivity
+            const targetRotY = state.mouseX * 0.8;
+            const targetRotX = -state.mouseY * 0.8;
+            
+            flowerGroup.rotation.y += (targetRotY - flowerGroup.rotation.y) * dt * 4.0;
+            flowerGroup.rotation.x += (targetRotX - flowerGroup.rotation.x) * dt * 4.0;
+            
+            // Idle rotation
+            flowerGroup.rotation.z = Math.sin(state.time * 0.2) * 0.1;
+
+            // Animate Petals
+            petals.forEach((p, i) => {
+                const { pivot, mesh } = p;
+                const data = pivot.userData;
+                
+                // Breathing effect
+                const breath = Math.sin(state.time * 1.5 + data.layer) * 0.05;
+                
+                // Calculate target angle based on bloom level
+                // Closed: -PI/4, Open: PI/6
+                const closedAngle = -Math.PI / 3;
+                const openAngle = Math.PI / 4;
+                
+                const currentTarget = THREE.MathUtils.lerp(closedAngle, openAngle, state.bloomLevel);
+                
+                // Apply rotation to mesh (the flap)
+                mesh.rotation.x = currentTarget + breath;
+            });
+
+            // Animate Core
+            core.rotation.y += dt;
+            core.rotation.z += dt * 0.5;
+            const pulse = 1 + Math.sin(state.time * 5) * 0.1 * state.bloomLevel;
+            core.scale.setScalar(pulse);
+
+            // Animate Particles
+            particlesMesh.rotation.y = state.time * 0.05;
+            const positions = particlesMesh.geometry.attributes.position.array;
+            for(let i=1; i<positions.length; i+=3) {
+                // Float up and reset
+                positions[i] += dt * 0.5;
+                if(positions[i] > 5) positions[i] = -5;
+            }
+            particlesMesh.geometry.attributes.position.needsUpdate = true;
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

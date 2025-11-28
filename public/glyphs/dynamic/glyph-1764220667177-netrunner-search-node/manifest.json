@@ -1,0 +1,13 @@
+{
+  "id": "glyph-1764220667177-netrunner-search-node",
+  "name": "Netrunner Search Node",
+  "type": "hud",
+  "prompt": "Make me a glyph that can search the internet",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-27T05:17:47.177Z"
+}

@@ -1,0 +1,227 @@
+/* Font imports - MUST be at the top */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+canvas {
+  display: block;
+}
+
+/* BACKGROUND RENDERER */
+.loom-background-root {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: radial-gradient(circle at top, rgba(10, 10, 30, 0.9), rgba(3, 3, 12, 1));
+  overflow: hidden;
+  color: #fff;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  pointer-events: auto;
+}
+
+.loom-background-shell {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+}
+
+.loom-background-full {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+}
+
+.loom-overlay-glyphs {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  padding: 48px;
+}
+
+.loom-glyph {
+  pointer-events: auto;
+  border-radius: 18px;
+  box-shadow:
+    0 25px 120px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(5, 5, 12, 0.6);
+  overflow: hidden;
+  transition: transform 0.35s ease, opacity 0.35s ease;
+  backdrop-filter: blur(20px);
+}
+
+.loom-glyph--hud {
+  width: min(80vw, 1000px);
+  height: clamp(260px, 45vh, 420px);
+}
+
+.loom-glyph--object {
+  width: min(60vw, 640px);
+  height: min(60vh, 600px);
+}
+
+.loom-default {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at top, rgba(15, 0, 40, 0.9), rgba(0, 0, 10, 1));
+  overflow: hidden;
+}
+
+.loom-default__grid {
+  position: absolute;
+  inset: -10%;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 40px;
+  opacity: 0.15;
+  filter: blur(6px);
+}
+
+.loom-default__stripe {
+  width: 220px;
+  height: 600px;
+  background: linear-gradient(180deg, rgba(0, 255, 255, 0.15), transparent);
+  border-radius: 999px;
+  animation: loomSweep 6s ease-in-out infinite;
+}
+
+.loom-default__stripe:nth-child(odd) {
+  animation-delay: 1.5s;
+}
+
+.loom-default__title {
+  position: relative;
+  text-align: center;
+  letter-spacing: 0.5em;
+  font-size: clamp(28px, 6vw, 64px);
+  color: #00f5ff;
+  text-shadow: 0 0 20px rgba(0, 255, 255, 0.35);
+}
+
+.loom-default__title small {
+  display: block;
+  margin-top: 12px;
+  letter-spacing: normal;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.loom-summoning {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 18px;
+  background: rgba(5, 5, 15, 0.75);
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.loom-summoning__pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ff4fd8;
+  box-shadow: 0 0 15px rgba(255, 79, 216, 0.8);
+  animation: loomPulse 1s ease-in-out infinite;
+}
+
+/* OVERLAY LAYER: Click-through by default, UI elements opt-in to receive clicks */
+html.overlay-layer,
+html.overlay-layer body,
+html.overlay-layer #root {
+  pointer-events: none;
+}
+
+/* UI elements in overlay are always clickable */
+html.overlay-layer .ui-interactive {
+  pointer-events: auto;
+}
+
+/* Custom scrollbar for the loom panel (in overlay) */
+.loom-panel ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.loom-panel ::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+.loom-panel ::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 255, 0.25);
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+.loom-panel ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 255, 0.4);
+}
+
+/* Selection color */
+::selection {
+  background: rgba(255, 0, 255, 0.3);
+  color: #ffffff;
+}
+
+@keyframes loomPulse {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.8);
+    opacity: 0.8;
+  }
+}
+
+@keyframes loomSweep {
+  0% {
+    transform: translateY(20%);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-20%);
+    opacity: 0;
+  }
+}

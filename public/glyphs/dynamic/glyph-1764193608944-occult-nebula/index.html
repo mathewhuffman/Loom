@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Occult Nebula</title>
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #ui {
+        position: absolute;
+        bottom: 20px;
+        left: 20px;
+        color: #00ffff;
+        font-family: monospace;
+        font-size: 12px;
+        pointer-events: none;
+        opacity: 0.7;
+        text-shadow: 0 0 5px #00ffff;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <div id="ui">SYSTEM: ACTIVE // INTERACTION: ENABLED</div>
+    <script type="module">
+      import * as THREE from 'https://esm.sh/three@0.168.0';
+
+      // Configuration
+      const CONF = {
+        count: 50000,
+        size: 0.015,
+        radius: 6,
+        branches: 4,
+        spin: 1,
+        randomness: 0.3,
+        randomnessPower: 3,
+        insideColor: '#ff0066',
+        outsideColor: '#00ffff'
+      };
+
+      // Setup
+      const canvas = document.querySelector('#scene');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      const scene = new THREE.Scene();
+      // Deep space fog
+      scene.fog = new THREE.FogExp2(0x050510, 0.05);
+
+      const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+      camera.position.set(0, 3, 4);
+      camera.lookAt(0, 0, 0);
+
+      // Galaxy Geometry
+      let geometry = null;
+      let material = null;
+      let points = null;
+
+      const generateGalaxy = () => {
+        if (points !== null) {
+          geometry.dispose();
+          material.dispose();
+          scene.remove(points);
+        }
+
+        geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(CONF.count * 3);
+        const colors = new Float32Array(CONF.count * 3);
+        const scales = new Float32Array(CONF.count * 1);
+        const randomness = new Float32Array(CONF.count * 3);
+
+        const colorInside = new THREE.Color(CONF.insideColor);
+        const colorOutside = new THREE.Color(CONF.outsideColor);
+
+        for (let i = 0; i < CONF.count; i++) {
+          const i3 = i * 3;
+
+          // Position along the radius
+          const r = Math.random() * CONF.radius;
+
+          // Spin angle
+          const spinAngle = r * CONF.spin;
+
+          // Branch angle
+          const branchAngle = (i % CONF.branches) / CONF.branches * Math.PI * 2;
+
+          // Randomness for nebula volume
+          const randomX = Math.pow(Math.random(), CONF.randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * CONF.randomness * r;
+          const randomY = Math.pow(Math.random(), CONF.randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * CONF.randomness * r;
+          const randomZ = Math.pow(Math.random(), CONF.randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * CONF.randomness * r;
+
+          positions[i3] = Math.cos(branchAngle + spinAngle) * r + randomX;
+          positions[i3 + 1] = randomY;
+          positions[i3 + 2] = Math.sin(branchAngle + spinAngle) * r + randomZ;
+
+          // Store randomness for animation
+          randomness[i3] = randomX;
+          randomness[i3+1] = randomY;
+          randomness[i3+2] = randomZ;
+
+          // Color mixing
+          const mixedColor = colorInside.clone();
+          mixedColor.lerp(colorOutside, r / CONF.radius);
+
+          colors[i3] = mixedColor.r;
+          colors[i3 + 1] = mixedColor.g;
+          colors[i3 + 2] = mixedColor.b;
+
+          // Scale variation
+          scales[i] = Math.random();
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.setAttribute('aScale', new THREE.BufferAttribute(scales, 1));
+        geometry.setAttribute('aRandomness', new THREE.BufferAttribute(randomness, 3));
+
+        // Custom Shader Material
+        material = new THREE.ShaderMaterial({
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          vertexColors: true,
+          uniforms: {
+            uTime: { value: 0 },
+            uSize: { value: 30 * renderer.getPixelRatio() }
+          },
+          vertexShader: `
+            uniform float uTime;
+            uniform float uSize;
+            attribute float aScale;
+            attribute vec3 aRandomness;
+            varying vec3 vColor;
+
+            void main() {
+              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+              
+              // Nebula Pulse / Flow
+              float angle = atan(modelPosition.x, modelPosition.z);
+              float distanceToCenter = length(modelPosition.xz);
+              float angleOffset = (1.0 / distanceToCenter) * uTime * 0.2;
+              
+              // Subtle wave
+              modelPosition.y += sin(uTime + distanceToCenter * 2.0) * 0.1;
+
+              vec4 viewPosition = viewMatrix * modelPosition;
+              vec4 projectedPosition = projectionMatrix * viewPosition;
+
+              gl_Position = projectedPosition;
+
+              // Size attenuation
+              gl_PointSize = uSize * aScale;
+              gl_PointSize *= (1.0 / -viewPosition.z);
+
+              vColor = color;
+            }
+          `,
+          fragmentShader: `
+            varying vec3 vColor;
+
+            void main() {
+              // Circular particle
+              float strength = distance(gl_PointCoord, vec2(0.5));
+              strength = 1.0 - strength;
+              strength = pow(strength, 5.0);
+
+              vec3 color = vColor * strength;
+              gl_FragColor = vec4(color, 1.0);
+            }
+          `
+        });
+
+        points = new THREE.Points(geometry, material);
+        scene.add(points);
+      };
+
+      generateGalaxy();
+
+      // Interaction
+      const mouse = new THREE.Vector2();
+      const targetRotation = new THREE.Vector2();
+      let isMouseDown = false;
+
+      window.addEventListener('mousemove', (event) => {
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        
+        // Parallax effect target
+        targetRotation.x = mouse.y * 0.5;
+        targetRotation.y = mouse.x * 0.5;
+      });
+
+      window.addEventListener('mousedown', () => {
+         isMouseDown = true;
+         // Pulse effect parameters
+         CONF.randomnessPower = 2;
+         generateGalaxy();
+      });
+
+      window.addEventListener('mouseup', () => {
+         isMouseDown = false;
+         CONF.randomnessPower = 3;
+         generateGalaxy();
+      });
+
+      // Resize
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        material.uniforms.uSize.value = 30 * renderer.getPixelRatio();
+      });
+
+      // Animation Loop
+      const clock = new THREE.Clock();
+
+      const tick = () => {
+        const elapsedTime = clock.getElapsedTime();
+
+        // Update Uniforms
+        if (material) {
+            material.uniforms.uTime.value = elapsedTime;
+        }
+
+        // Interactive Rotation smoothing
+        points.rotation.x += (targetRotation.x - points.rotation.x) * 0.05;
+        points.rotation.y += (targetRotation.y - points.rotation.y) * 0.05;
+        
+        // Continuous gentle spin
+        points.rotation.z = elapsedTime * 0.05;
+
+        // Camera float
+        camera.position.y = 3 + Math.sin(elapsedTime * 0.5) * 0.5;
+        camera.lookAt(0,0,0);
+
+        renderer.render(scene, camera);
+        window.requestAnimationFrame(tick);
+      };
+
+      tick();
+    </script>
+  </body>
+</html>

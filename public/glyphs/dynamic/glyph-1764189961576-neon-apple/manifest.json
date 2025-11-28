@@ -1,0 +1,11 @@
+{
+  "id": "glyph-1764189961576-neon-apple",
+  "name": "Neon Apple",
+  "type": "object",
+  "prompt": "make a 3d and interactive apple",
+  "entry": "index.html",
+  "files": [
+    "index.html"
+  ],
+  "savedAt": "2025-11-26T20:46:01.576Z"
+}

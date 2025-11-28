@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cursor AI Core</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: transparent;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .hud-text {
+            color: rgba(255, 255, 255, 0.8);
+            text-shadow: 0 0 5px currentColor;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .header {
+            border-left: 2px solid currentColor;
+            padding-left: 10px;
+        }
+
+        .footer {
+            text-align: right;
+            border-right: 2px solid currentColor;
+            padding-right: 10px;
+        }
+
+        .status-blink {
+            animation: blink 2s infinite;
+        }
+
+        .path-display {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-top: 5px;
+            display: inline-block;
+            font-size: 10px;
+            opacity: 0.7;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="ui-layer">
+        <div class="hud-text header" id="hud-header">
+            <div style="font-weight:bold; font-size:14px;">AI LINK ESTABLISHED</div>
+            <div class="status-blink">WAITING FOR INPUT...</div>
+        </div>
+        <div class="hud-text footer" id="hud-footer">
+            <div>TARGET INSTANCE</div>
+            <div class="path-display" id="path-output"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+        import { UnrealBloomPass } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+        import { EffectComposer } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/RenderPass.js';
+
+        // --- INPUT CONFIGURATION ---
+        const inputs = window.GLYPH_INPUTS || {};
+        const TARGET_PATH = inputs.targetPath || "E:\\cursor\\Cursor.exe";
+        const THEME_COLOR = new THREE.Color(inputs.themeColor || '#007AFF');
+        const SPIN_SPEED = inputs.spinSpeed !== undefined ? inputs.spinSpeed : 1.0;
+
+        // Update UI
+        const uiHeader = document.getElementById('hud-header');
+        const uiFooter = document.getElementById('hud-footer');
+        const pathOutput = document.getElementById('path-output');
+        
+        uiHeader.style.color = THEME_COLOR.getStyle();
+        uiFooter.style.color = THEME_COLOR.getStyle();
+        pathOutput.textContent = TARGET_PATH;
+
+        // --- THREE.JS SETUP ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        // scene.fog = new THREE.FogExp2(0x000000, 0.05);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 0, 8);
+
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        // --- POST PROCESSING (BLOOM) ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0;
+        bloomPass.strength = 1.2;
+        bloomPass.radius = 0.5;
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- OBJECTS ---
+        const cursorGroup = new THREE.Group();
+        scene.add(cursorGroup);
+
+        // 1. The Cursor Geometry (Cone)
+        const cursorGeo = new THREE.ConeGeometry(1, 3, 4, 1);
+        // Rotate to look like a pointer
+        cursorGeo.rotateZ(Math.PI / 4);
+        cursorGeo.rotateY(Math.PI / 4);
+        
+        const cursorMat = new THREE.MeshBasicMaterial({
+            color: 0x000000,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.1
+        });
+        
+        const cursorEdges = new THREE.EdgesGeometry(cursorGeo);
+        const cursorEdgeMat = new THREE.LineBasicMaterial({ color: THEME_COLOR });
+        const cursorMesh = new THREE.LineSegments(cursorEdges, cursorEdgeMat);
+        
+        // Inner fill for occlusion
+        const cursorFill = new THREE.Mesh(cursorGeo, new THREE.MeshBasicMaterial({ color: 0x000000 }));
+        
+        cursorGroup.add(cursorFill);
+        cursorGroup.add(cursorMesh);
+
+        // 2. Data Rings
+        const ringGroup = new THREE.Group();
+        cursorGroup.add(ringGroup);
+
+        const ringGeo = new THREE.TorusGeometry(2, 0.02, 16, 100);
+        const ringMat = new THREE.MeshBasicMaterial({ color: THEME_COLOR, transparent: true, opacity: 0.5 });
+        
+        const ring1 = new THREE.Mesh(ringGeo, ringMat);
+        const ring2 = new THREE.Mesh(ringGeo, ringMat);
+        const ring3 = new THREE.Mesh(ringGeo, ringMat);
+
+        ring1.rotation.x = Math.PI / 2;
+        ring2.rotation.x = Math.PI / 2;
+        ring2.rotation.y = Math.PI / 6;
+        ring3.rotation.x = Math.PI / 1.8;
+
+        ringGroup.add(ring1, ring2, ring3);
+
+        // 3. Floating Code Particles
+        const particlesGeo = new THREE.BufferGeometry();
+        const particleCount = 200;
+        const posArray = new Float32Array(particleCount * 3);
+        
+        for(let i = 0; i < particleCount * 3; i++) {
+            posArray[i] = (Math.random() - 0.5) * 10;
+        }
+        
+        particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        const particlesMat = new THREE.PointsMaterial({
+            size: 0.05,
+            color: THEME_COLOR,
+            transparent: true,
+            opacity: 0.6,
+            blending: THREE.AdditiveBlending
+        });
+        
+        const particlesMesh = new THREE.Points(particlesGeo, particlesMat);
+        scene.add(particlesMesh);
+
+        // --- INTERACTION ---
+        const mouse = new THREE.Vector2();
+        const targetRotation = new THREE.Vector2();
+
+        window.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- ANIMATION ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = clock.getElapsedTime();
+            const delta = clock.getDelta();
+
+            // Float animation
+            cursorGroup.position.y = Math.sin(time * 2) * 0.2;
+
+            // Rotation based on mouse
+            targetRotation.x = mouse.y * 0.5;
+            targetRotation.y = mouse.x * 0.5;
+            
+            cursorGroup.rotation.x += (targetRotation.x - cursorGroup.rotation.x) * 0.1;
+            cursorGroup.rotation.y += (targetRotation.y - cursorGroup.rotation.y) * 0.1;
+
+            // Spin rings
+            ring1.rotation.z += 0.01 * SPIN_SPEED;
+            ring2.rotation.z -= 0.015 * SPIN_SPEED;
+            ring3.rotation.z += 0.005 * SPIN_SPEED;
+            
+            // Scale pulse
+            const scale = 1 + Math.sin(time * 3) * 0.05;
+            ringGroup.scale.set(scale, scale, scale);
+
+            // Particles movement
+            particlesMesh.rotation.y = time * 0.1 * SPIN_SPEED;
+
+            composer.render();
+        }
+
+        animate();
+    </script>
+</body>
+</html>

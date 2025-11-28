@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764271181991-user",
+    "role": "user",
+    "content": "a file view/editor widget where I can input what file I want it to open and viewed on, or I can drag in another file to open it in the widget.. Also, have a modern design.",
+    "timestamp": 1764271181991,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764271181991-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Neon File Deck\" (undefined)\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764271181992,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764271181991-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764271181993,
+    "type": "info"
+  }
+]

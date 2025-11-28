@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Netrunner Search</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap');
+
+        :root {
+            --neon-cyan: #00f3ff;
+            --neon-pink: #ff00ff;
+            --neon-green: #00ff41;
+            --bg-color: transparent;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg-color);
+            overflow: hidden;
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none; /* Let clicks pass to canvas if needed, but input needs pointer-events auto */
+        }
+
+        .search-container {
+            position: relative;
+            width: 80%;
+            max-width: 600px;
+            pointer-events: auto;
+            background: rgba(0, 10, 20, 0.6);
+            border: 1px solid var(--neon-cyan);
+            padding: 20px;
+            box-shadow: 0 0 15px var(--neon-cyan), inset 0 0 20px rgba(0, 243, 255, 0.1);
+            backdrop-filter: blur(4px);
+            transform: perspective(1000px) rotateX(10deg);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .search-container:focus-within {
+            transform: perspective(1000px) rotateX(0deg) scale(1.02);
+            box-shadow: 0 0 30px var(--neon-cyan), inset 0 0 30px rgba(0, 243, 255, 0.2);
+        }
+
+        .label {
+            color: var(--neon-cyan);
+            font-size: 12px;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            text-transform: uppercase;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid var(--neon-pink);
+            color: #fff;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 24px;
+            padding: 10px 0;
+            outline: none;
+            text-shadow: 0 0 5px var(--neon-pink);
+            caret-color: var(--neon-green);
+        }
+
+        input[type="text"]::placeholder {
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        .status-bar {
+            margin-top: 10px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .status-progress {
+            position: absolute;
+            left: 0;
+            top: 0;
+            height: 100%;
+            width: 0%;
+            background: var(--neon-green);
+            box-shadow: 0 0 10px var(--neon-green);
+            transition: width 0.1s linear;
+        }
+
+        .decor-corners {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+        .corner {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            border: 2px solid var(--neon-pink);
+        }
+        .tl { top: -2px; left: -2px; border-right: none; border-bottom: none; }
+        .tr { top: -2px; right: -2px; border-left: none; border-bottom: none; }
+        .bl { bottom: -2px; left: -2px; border-right: none; border-top: none; }
+        .br { bottom: -2px; right: -2px; border-left: none; border-top: none; }
+
+        .scanline {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, transparent 50%, rgba(0, 0, 0, 0.3) 51%);
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 20;
+            opacity: 0.5;
+        }
+
+        /* Glitch Animation */
+        @keyframes glitch {
+            0% { transform: translate(0); }
+            20% { transform: translate(-2px, 2px); }
+            40% { transform: translate(-2px, -2px); }
+            60% { transform: translate(2px, 2px); }
+            80% { transform: translate(2px, -2px); }
+            100% { transform: translate(0); }
+        }
+
+        .searching .search-container {
+            animation: glitch 0.2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div class="scanline"></div>
+    
+    <div id="ui-layer">
+        <div class="search-container" id="searchBox">
+            <div class="decor-corners">
+                <div class="corner tl"></div>
+                <div class="corner tr"></div>
+                <div class="corner bl"></div>
+                <div class="corner br"></div>
+            </div>
+            <div class="label">
+                <span id="sys-status">NET_LINK: ACTIVE</span>
+                <span id="coordinates">LOC: 00.00.00</span>
+            </div>
+            <input type="text" id="queryInput" placeholder="ENTER_QUERY_KEYWORD" autocomplete="off" spellcheck="false">
+            <div class="status-bar">
+                <div class="status-progress" id="progressBar"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+
+        // --- THREE.JS SETUP ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        
+        // Camera setup
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 5;
+
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        // --- OBJECTS ---
+        
+        // 1. The Core Sphere (Wireframe)
+        const geometry = new THREE.IcosahedronGeometry(2, 2);
+        const material = new THREE.MeshBasicMaterial({ 
+            color: 0x00f3ff, 
+            wireframe: true, 
+            transparent: true, 
+            opacity: 0.3 
+        });
+        const sphere = new THREE.Mesh(geometry, material);
+        scene.add(sphere);
+
+        // 2. Data Particles
+        const particlesGeometry = new THREE.BufferGeometry();
+        const particlesCount = 700;
+        const posArray = new Float32Array(particlesCount * 3);
+
+        for(let i = 0; i < particlesCount * 3; i++) {
+            posArray[i] = (Math.random() - 0.5) * 10;
+        }
+
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        const particlesMaterial = new THREE.PointsMaterial({
+            size: 0.02,
+            color: 0xff00ff,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending
+        });
+        const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+        scene.add(particlesMesh);
+
+        // 3. Rings
+        const ringGeo = new THREE.TorusGeometry(3.5, 0.02, 16, 100);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ff41, transparent: true, opacity: 0.4 });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = Math.PI / 2;
+        scene.add(ring);
+
+        // --- ANIMATION STATE ---
+        let searchActive = false;
+        let speedMultiplier = 1.0;
+        const mouse = new THREE.Vector2();
+        const targetRotation = new THREE.Vector2();
+
+        // --- INTERACTIVITY ---
+        const input = document.getElementById('queryInput');
+        const progressBar = document.getElementById('progressBar');
+        const sysStatus = document.getElementById('sys-status');
+        const uiLayer = document.getElementById('ui-layer');
+
+        document.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        // Update coordinates randomly
+        setInterval(() => {
+            if(!searchActive) {
+                document.getElementById('coordinates').innerText = `LOC: ${Math.floor(Math.random()*99)}.${Math.floor(Math.random()*99)}.${Math.floor(Math.random()*99)}`;
+            }
+        }, 500);
+
+        // Input Logic
+        input.addEventListener('keydown', (e) => {
+            // Spin faster while typing
+            speedMultiplier = 5.0;
+            setTimeout(() => { speedMultiplier = 1.0 }, 200);
+
+            if (e.key === 'Enter' && input.value.trim() !== '') {
+                performSearch(input.value);
+            }
+        });
+
+        function performSearch(query) {
+            if (searchActive) return;
+            searchActive = true;
+            
+            // Visual effects
+            sysStatus.innerText = "ENCRYPTING PACKETS...";
+            sysStatus.style.color = "var(--neon-pink)";
+            uiLayer.classList.add('searching');
+            
+            // Progress Bar Animation
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += Math.random() * 5;
+                if (progress > 100) progress = 100;
+                progressBar.style.width = `${progress}%`;
+
+                // Glitch effect on sphere
+                sphere.scale.setScalar(1 + Math.random() * 0.2);
+                
+                if (progress === 100) {
+                    clearInterval(interval);
+                    finalizeSearch(query);
+                }
+            }, 30);
+        }
+
+        function finalizeSearch(query) {
+            sysStatus.innerText = "UPLINK ESTABLISHED";
+            
+            // Zoom effect
+            const zoomInterval = setInterval(() => {
+                camera.position.z -= 0.2;
+                if (camera.position.z < 0) {
+                    clearInterval(zoomInterval);
+                    
+                    // Execute Search
+                    // Construct URL (DuckDuckGo is privacy friendly and fits the theme)
+                    const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
+                    window.open(searchUrl, '_blank');
+
+                    // Reset UI
+                    setTimeout(resetInterface, 1000);
+                }
+            }, 16);
+        }
+
+        function resetInterface() {
+            searchActive = false;
+            uiLayer.classList.remove('searching');
+            progressBar.style.width = '0%';
+            input.value = '';
+            sysStatus.innerText = "NET_LINK: ACTIVE";
+            sysStatus.style.color = "var(--neon-cyan)";
+            camera.position.z = 5;
+            sphere.scale.setScalar(1);
+        }
+
+        // --- RENDER LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            // Smooth rotation based on mouse
+            targetRotation.x = mouse.y * 0.5;
+            targetRotation.y = mouse.x * 0.5;
+
+            // Base rotation
+            sphere.rotation.y += 0.005 * speedMultiplier;
+            sphere.rotation.x += 0.002 * speedMultiplier;
+            
+            particlesMesh.rotation.y -= 0.002 * speedMultiplier;
+            
+            ring.rotation.z += 0.01 * speedMultiplier;
+            ring.rotation.x = (Math.PI / 2) + (mouse.y * 0.2);
+            ring.rotation.y = mouse.x * 0.2;
+
+            // Mouse parallax for sphere
+            sphere.rotation.x += 0.05 * (targetRotation.x - sphere.rotation.x) * delta;
+            sphere.rotation.y += 0.05 * (targetRotation.y - sphere.rotation.y) * delta;
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

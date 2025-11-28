@@ -1,0 +1,30 @@
+[
+  {
+    "id": "msg-1764221829852-user",
+    "role": "user",
+    "content": "Make a fully functioning web browser glyph. You should have the iframe to display the webpage be living INSIDE the glyph you return",
+    "timestamp": 1764221829852,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764221829852-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"NetRunner HUD\" (hud)\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764221829853,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764221829852-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764221829854,
+    "type": "info"
+  },
+  {
+    "id": "msg-1764221924736",
+    "role": "user",
+    "content": "give me the ability to open multiple tabs",
+    "timestamp": 1764221924736,
+    "type": "refinement"
+  }
+]

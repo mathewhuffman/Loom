@@ -1,0 +1,30 @@
+[
+  {
+    "id": "msg-1764220667179-user",
+    "role": "user",
+    "content": "Make me a glyph that can search the internet",
+    "timestamp": 1764220667179,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764220667179-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Netrunner Search Node\" (hud)\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764220667180,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764220667179-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764220667181,
+    "type": "info"
+  },
+  {
+    "id": "msg-1764220716369",
+    "role": "user",
+    "content": "I want to search the web from inside this interface.. When I type in a URL, open up an iframe with that URL underneath this \"ENTER_QUERY_KEYWORD",
+    "timestamp": 1764220716369,
+    "type": "refinement"
+  }
+]

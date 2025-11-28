@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber Particle Core</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: monospace;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(255, 255, 255, 0.5);
+            pointer-events: none;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-layer">Interactive Field // Move Mouse to Disturb // Scroll to Zoom</div>
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+
+        const inputs = window.GLYPH_INPUTS || {};
+        const PARTICLE_COUNT = inputs.particleCount || 5000;
+        const PARTICLE_COLOR = inputs.particleColor || '#00ffff';
+        const CORE_COLOR = inputs.coreColor || '#ff00ff';
+        const INTERACTION_RADIUS = inputs.interactionRadius || 4;
+        const INTERACTION_MODE = inputs.interactionMode || 'repel';
+
+        // Scene Setup
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        let targetCameraZ = 15;
+        camera.position.z = targetCameraZ;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        // --- The Core (Square/Cube) ---
+        const geometryBox = new THREE.BoxGeometry(4, 4, 4);
+        const edges = new THREE.EdgesGeometry(geometryBox);
+        const materialBox = new THREE.LineBasicMaterial({ color: CORE_COLOR, transparent: true, opacity: 0.8 });
+        const core = new THREE.LineSegments(edges, materialBox);
+        scene.add(core);
+
+        // Inner solid core for depth
+        const innerGeo = new THREE.BoxGeometry(3.5, 3.5, 3.5);
+        const innerMat = new THREE.MeshBasicMaterial({ 
+            color: CORE_COLOR, 
+            transparent: true, 
+            opacity: 0.1, 
+            wireframe: false 
+        });
+        const innerCore = new THREE.Mesh(innerGeo, innerMat);
+        core.add(innerCore);
+
+        // --- Particles ---
+        const particlesGeometry = new THREE.BufferGeometry();
+        const posArray = new Float32Array(PARTICLE_COUNT * 3);
+        const originalPosArray = new Float32Array(PARTICLE_COUNT * 3);
+        const velocityArray = new Float32Array(PARTICLE_COUNT * 3);
+
+        const spread = 30;
+
+        for(let i = 0; i < PARTICLE_COUNT * 3; i++) {
+            // Random distribution
+            posArray[i] = (Math.random() - 0.5) * spread;
+            originalPosArray[i] = posArray[i];
+            // Slight random drift velocity
+            velocityArray[i] = (Math.random() - 0.5) * 0.02;
+        }
+
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+
+        const particlesMaterial = new THREE.PointsMaterial({
+            size: 0.15,
+            color: PARTICLE_COLOR,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending
+        });
+
+        const particleMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+        scene.add(particleMesh);
+
+        // Input Handling
+        const mouse = new THREE.Vector2(9999, 9999); // Start off-screen
+        const raycaster = new THREE.Raycaster();
+        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+        const planeIntersect = new THREE.Vector3();
+
+        function onMouseMove(event) {
+            // Normalized device coordinates
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }
+
+        function onTouchMove(event) {
+            if (event.touches.length > 0) {
+                mouse.x = (event.touches[0].clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.touches[0].clientY / window.innerHeight) * 2 + 1;
+            }
+        }
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('touchmove', onTouchMove, { passive: true });
+        window.addEventListener('wheel', (e) => {
+            targetCameraZ += e.deltaY * 0.05;
+            // Clamp zoom range
+            targetCameraZ = Math.max(5, Math.min(100, targetCameraZ));
+        }, { passive: true });
+
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Animation Loop
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+
+            // Rotate Core
+            core.rotation.x = time * 0.2;
+            core.rotation.y = time * 0.3;
+            
+            // Pulse Core
+            const scale = 1 + Math.sin(time * 2) * 0.05;
+            core.scale.set(scale, scale, scale);
+
+            // Calculate mouse position in 3D space at z=0
+            raycaster.setFromCamera(mouse, camera);
+            raycaster.ray.intersectPlane(plane, planeIntersect);
+
+            // Update Particles
+            const positions = particleMesh.geometry.attributes.position.array;
+
+            for(let i = 0; i < PARTICLE_COUNT; i++) {
+                const i3 = i * 3;
+                
+                // Current pos
+                let x = positions[i3];
+                let y = positions[i3 + 1];
+                let z = positions[i3 + 2];
+
+                // Original pos (target for return)
+                const ox = originalPosArray[i3];
+                const oy = originalPosArray[i3 + 1];
+                const oz = originalPosArray[i3 + 2];
+
+                // Distance to mouse (in 3D, assuming mouse projects to z=0 plane mostly, but we use sphere of influence)
+                const dx = x - planeIntersect.x;
+                const dy = y - planeIntersect.y;
+                const dz = z - planeIntersect.z;
+                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                // Interaction Logic
+                if (dist < INTERACTION_RADIUS) {
+                    const force = (INTERACTION_RADIUS - dist) / INTERACTION_RADIUS;
+                    const angle = Math.atan2(dy, dx);
+                    const zAngle = Math.atan2(dz, dx);
+
+                    const moveSpeed = 0.5 * force;
+
+                    if (INTERACTION_MODE === 'repel') {
+                        x += Math.cos(angle) * moveSpeed;
+                        y += Math.sin(angle) * moveSpeed;
+                        z += Math.sin(zAngle) * moveSpeed;
+                    } else {
+                        x -= Math.cos(angle) * moveSpeed;
+                        y -= Math.sin(angle) * moveSpeed;
+                        z -= Math.sin(zAngle) * moveSpeed;
+                    }
+                } else {
+                    // Return to original slowly + natural drift
+                    x += (ox - x) * 0.02 + Math.sin(time + x) * 0.005;
+                    y += (oy - y) * 0.02 + Math.cos(time + y) * 0.005;
+                    z += (oz - z) * 0.02;
+                }
+
+                positions[i3] = x;
+                positions[i3 + 1] = y;
+                positions[i3 + 2] = z;
+            }
+
+            particleMesh.geometry.attributes.position.needsUpdate = true;
+
+            // Camera movement: Sway + Smooth Zoom
+            camera.position.x += (mouse.x * 2 - camera.position.x) * 0.05;
+            camera.position.y += (mouse.y * 2 - camera.position.y) * 0.05;
+            camera.position.z += (targetCameraZ - camera.position.z) * 0.1;
+            camera.lookAt(scene.position);
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "id": "glyph-1764263957416-cyber-bloom",
+  "name": "Cyber Bloom",
+  "prompt": "create a red flower that the petals fall from when the user left clicks.. petals regrow after 10 seconds",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-27T17:19:17.416Z"
+}

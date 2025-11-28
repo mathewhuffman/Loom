@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Apple</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            overflow: hidden;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: #00ffff;
+            font-size: 12px;
+            pointer-events: none;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: 0 0 5px #00ffff;
+        }
+        .key {
+            display: inline-block;
+            border: 1px solid #00ffff;
+            padding: 2px 6px;
+            margin: 0 2px;
+            border-radius: 2px;
+            background: rgba(0, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="scene"></canvas>
+    <div id="ui">
+        State: <span id="status">IDLE</span><br>
+        Input: <span id="coords">0, 0</span><br>
+        Action: <span class="key">LMB</span> to BIT/GLITCH
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+
+        // --- CONFIGURATION ---
+        const COLORS = {
+            skin: 0xff0066,    // Neon Pink
+            stem: 0x88ff00,    // Neon Green
+            leaf: 0x00ffff,    // Cyan
+            glitch: 0xffffff,  // White
+            bg: 0x050505
+        };
+
+        // --- STATE ---
+        const state = {
+            mouseX: 0,
+            mouseY: 0,
+            targetRotationX: 0,
+            targetRotationY: 0,
+            isGlitching: false,
+            time: 0
+        };
+
+        // --- SCENE SETUP ---
+        const canvas = document.getElementById('scene');
+        const uiStatus = document.getElementById('status');
+        const uiCoords = document.getElementById('coords');
+
+        const scene = new THREE.Scene();
+        // Transparent background for iframe integration
+        scene.background = null; 
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 8;
+
+        const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+        // --- GEOMETRY GENERATION (Procedural Apple) ---
+        const appleGroup = new THREE.Group();
+        scene.add(appleGroup);
+
+        // 1. Apple Body using LatheGeometry
+        const points = [];
+        // Draw the profile of half an apple
+        points.push(new THREE.Vector2(0, -1.5));      // Bottom center
+        points.push(new THREE.Vector2(0.5, -1.45));   // Bottom curve
+        points.push(new THREE.Vector2(1.3, -0.8));    // Wide bottom
+        points.push(new THREE.Vector2(1.5, 0.3));     // Mid bulge
+        points.push(new THREE.Vector2(1.3, 1.1));     // Upper shoulder
+        points.push(new THREE.Vector2(0.4, 1.4));     // Top curve
+        points.push(new THREE.Vector2(0, 1.2));       // Top center (dip)
+
+        const appleGeo = new THREE.LatheGeometry(points, 32);
+        const appleMat = new THREE.MeshPhysicalMaterial({
+            color: COLORS.skin,
+            emissive: 0x220011,
+            metalness: 0.5,
+            roughness: 0.2,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.1,
+            flatShading: false,
+            side: THREE.DoubleSide
+        });
+        const appleMesh = new THREE.Mesh(appleGeo, appleMat);
+        appleGroup.add(appleMesh);
+
+        // Wireframe overlay for cyberpunk feel
+        const wireGeo = new THREE.WireframeGeometry(appleGeo);
+        const wireMat = new THREE.LineBasicMaterial({ color: 0xff00aa, transparent: true, opacity: 0.1 });
+        const wireMesh = new THREE.LineSegments(wireGeo, wireMat);
+        appleMesh.add(wireMesh);
+
+        // 2. Stem
+        const stemGeo = new THREE.CylinderGeometry(0.08, 0.05, 0.8, 8);
+        stemGeo.translate(0, 1.6, 0);
+        // Curve the stem slightly by moving top vertices
+        const stemPos = stemGeo.attributes.position;
+        for(let i=0; i<stemPos.count; i++){
+            if(stemPos.getY(i) > 1.5) {
+                stemPos.setX(i, stemPos.getX(i) + 0.2);
+            }
+        }
+        stemGeo.computeVertexNormals();
+        
+        const stemMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.8 });
+        const stemMesh = new THREE.Mesh(stemGeo, stemMat);
+        appleGroup.add(stemMesh);
+
+        // 3. Leaf (Neon)
+        const leafShape = new THREE.Shape();
+        leafShape.moveTo(0, 0);
+        leafShape.quadraticCurveTo(0.5, 0.5, 0, 1);
+        leafShape.quadraticCurveTo(-0.5, 0.5, 0, 0);
+        
+        const leafGeo = new THREE.ExtrudeGeometry(leafShape, { depth: 0.02, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 2 });
+        leafGeo.translate(0, 1.5, 0);
+        leafGeo.rotateZ(-0.5);
+        leafGeo.rotateY(0.5);
+
+        // Holographic Shader for Leaf
+        const leafMat = new THREE.ShaderMaterial({
+            uniforms: {
+                time: { value: 0 },
+                color: { value: new THREE.Color(COLORS.leaf) }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                varying vec3 vNormal;
+                void main() {
+                    vUv = uv;
+                    vNormal = normal;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float time;
+                uniform vec3 color;
+                varying vec2 vUv;
+                varying vec3 vNormal;
+                void main() {
+                    float scanline = sin(vUv.y * 50.0 - time * 5.0) * 0.5 + 0.5;
+                    float rim = pow(1.0 - max(0.0, dot(vNormal, vec3(0,0,1))), 3.0);
+                    gl_FragColor = vec4(color * (0.5 + scanline * 0.5) + rim, 0.8);
+                }
+            `,
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+
+        const leafMesh = new THREE.Mesh(leafGeo, leafMat);
+        appleGroup.add(leafMesh);
+
+        // --- LIGHTING ---
+        const ambientLight = new THREE.AmbientLight(0x404040, 2);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+        dirLight.position.set(5, 5, 5);
+        scene.add(dirLight);
+
+        const rimLight = new THREE.PointLight(COLORS.leaf, 5, 10);
+        rimLight.position.set(-3, 2, -3);
+        scene.add(rimLight);
+
+        const fillLight = new THREE.PointLight(COLORS.skin, 3, 10);
+        fillLight.position.set(3, -2, 3);
+        scene.add(fillLight);
+
+        // --- INPUT HANDLING ---
+        const updateMouse = (e) => {
+            // Normalize mouse -1 to 1
+            state.mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+            state.mouseY = -(e.clientY / window.innerHeight) * 2 + 1;
+            
+            state.targetRotationY = state.mouseX * Math.PI; // Rotate around Y based on X
+            state.targetRotationX = state.mouseY * 0.5;     // Tilt based on Y
+
+            uiCoords.innerText = `${state.mouseX.toFixed(2)}, ${state.mouseY.toFixed(2)}`;
+        };
+
+        const onMouseDown = () => {
+            state.isGlitching = true;
+            uiStatus.innerText = "GLITCHING";
+            uiStatus.style.color = "#ff0000";
+            appleMat.emissive.setHex(COLORS.glitch);
+            appleMat.emissiveIntensity = 2.0;
+        };
+
+        const onMouseUp = () => {
+            state.isGlitching = false;
+            uiStatus.innerText = "IDLE";
+            uiStatus.style.color = "#00ffff";
+            appleMat.emissive.setHex(0x220011);
+            appleMat.emissiveIntensity = 1.0;
+            // Reset scale
+            appleGroup.scale.set(1, 1, 1);
+        };
+
+        window.addEventListener('mousemove', updateMouse);
+        window.addEventListener('mousedown', onMouseDown);
+        window.addEventListener('mouseup', onMouseUp);
+        
+        // Touch support
+        window.addEventListener('touchmove', (e) => updateMouse(e.touches[0]));
+        window.addEventListener('touchstart', onMouseDown);
+        window.addEventListener('touchend', onMouseUp);
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            state.time += delta;
+
+            // Smooth rotation interpolation
+            appleGroup.rotation.y += (state.targetRotationY - appleGroup.rotation.y) * 5 * delta;
+            appleGroup.rotation.x += (state.targetRotationX - appleGroup.rotation.x) * 5 * delta;
+
+            // Idle floating animation
+            appleGroup.position.y = Math.sin(state.time) * 0.1;
+
+            // Leaf Shader Update
+            leafMat.uniforms.time.value = state.time;
+
+            // Glitch Effect logic
+            if (state.isGlitching) {
+                // Jitter position
+                appleGroup.position.x = (Math.random() - 0.5) * 0.2;
+                appleGroup.position.z = (Math.random() - 0.5) * 0.2;
+                
+                // Random scale distortion
+                const s = 1 + Math.sin(state.time * 50) * 0.1;
+                appleGroup.scale.set(s, s*0.9, s);
+
+                // Flash wireframe
+                wireMat.opacity = Math.random();
+            } else {
+                // Return to center X/Z
+                appleGroup.position.x += (0 - appleGroup.position.x) * 10 * delta;
+                appleGroup.position.z += (0 - appleGroup.position.z) * 10 * delta;
+                wireMat.opacity = 0.1;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

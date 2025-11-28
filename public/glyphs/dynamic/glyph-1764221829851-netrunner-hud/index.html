@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NetRunner HUD</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+        :root {
+            --primary: #00ffff;
+            --bg-opacity: 0.85;
+            --scan-color: rgba(0, 255, 255, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Share Tech Mono', monospace;
+            background: transparent;
+        }
+
+        /* Main Container */
+        .hud-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            background: rgba(10, 10, 16, var(--bg-opacity));
+            border: 1px solid var(--primary);
+            box-shadow: 0 0 15px var(--primary), inset 0 0 20px rgba(0,0,0,0.5);
+            /* Cyberpunk corner cuts */
+            clip-path: polygon(
+                0 10px, 10px 0, 
+                calc(100% - 10px) 0, 100% 10px, 
+                100% calc(100% - 10px), calc(100% - 10px) 100%, 
+                10px 100%, 0 calc(100% - 10px)
+            );
+            backdrop-filter: blur(4px);
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        /* Header / Address Bar */
+        .header {
+            display: flex;
+            align-items: center;
+            padding: 10px 15px;
+            border-bottom: 1px solid var(--primary);
+            gap: 10px;
+            background: rgba(0,0,0,0.3);
+        }
+
+        .nav-btn {
+            background: transparent;
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+
+        .nav-btn:hover {
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 0 8px var(--primary);
+        }
+
+        .nav-btn:active {
+            transform: scale(0.95);
+        }
+
+        .url-input-wrapper {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .url-input {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            padding: 6px 10px;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .url-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 5px var(--primary);
+        }
+
+        /* Browser Viewport */
+        .viewport {
+            flex: 1;
+            position: relative;
+            background: #fff;
+            overflow: hidden;
+        }
+
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+        }
+
+        /* Overlay for loading/error styling */
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.5);
+            mix-blend-mode: multiply;
+        }
+
+        /* Status Bar */
+        .status-bar {
+            padding: 5px 15px;
+            font-size: 12px;
+            color: var(--primary);
+            border-top: 1px solid var(--primary);
+            display: flex;
+            justify-content: space-between;
+            background: rgba(0,0,0,0.4);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: var(--primary);
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: blink 2s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Scanline Effect */
+        .scanlines {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.2) 50%,
+                rgba(0,0,0,0.2)
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.3;
+        }
+
+        /* Glitch text effect class */
+        .glitch-text {
+            position: relative;
+        }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #000;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--primary);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="hud-container" id="hud">
+        <div class="scanlines"></div>
+        
+        <!-- Toolbar -->
+        <div class="header">
+            <button class="nav-btn" id="btn-back" title="Back">&#9664;</button>
+            <button class="nav-btn" id="btn-fwd" title="Forward">&#9654;</button>
+            <button class="nav-btn" id="btn-refresh" title="Refresh">&#8635;</button>
+            <div class="url-input-wrapper">
+                <input type="text" class="url-input" id="url-bar" placeholder="Enter URL..." spellcheck="false">
+            </div>
+            <button class="nav-btn" id="btn-go" title="Load">GO</button>
+        </div>
+
+        <!-- Browser Window -->
+        <div class="viewport">
+            <iframe id="browser-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+            <div class="overlay"></div>
+        </div>
+
+        <!-- Status Footer -->
+        <div class="status-bar">
+            <span id="status-text"><span class="status-indicator"></span>READY :: SYSTEM ONLINE</span>
+            <span id="clock">00:00:00</span>
+        </div>
+    </div>
+
+    <script>
+        // --- Initialization ---
+        const inputs = window.GLYPH_INPUTS || {};
+        const START_URL = inputs.startUrl || 'https://en.wikipedia.org/wiki/Cyberpunk';
+        const THEME_COLOR = inputs.themeColor || '#00ffff';
+        const GLASS_OPACITY = (inputs.glassOpacity !== undefined ? inputs.glassOpacity : 85) / 100;
+
+        // Elements
+        const frame = document.getElementById('browser-frame');
+        const urlBar = document.getElementById('url-bar');
+        const btnGo = document.getElementById('btn-go');
+        const btnBack = document.getElementById('btn-back');
+        const btnFwd = document.getElementById('btn-fwd');
+        const btnRefresh = document.getElementById('btn-refresh');
+        const statusText = document.getElementById('status-text');
+        const clock = document.getElementById('clock');
+        const hud = document.getElementById('hud');
+
+        // Apply Theme
+        document.documentElement.style.setProperty('--primary', THEME_COLOR);
+        document.documentElement.style.setProperty('--bg-opacity', GLASS_OPACITY);
+
+        // --- Logic ---
+
+        function loadUrl(url) {
+            let targetUrl = url.trim();
+            if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+                targetUrl = 'https://' + targetUrl;
+            }
+            
+            statusText.innerHTML = `<span class="status-indicator"></span>LOADING DATA STREAM...`;
+            urlBar.value = targetUrl;
+            
+            // Add timestamp to force reload if needed, though standard src change is usually enough
+            frame.src = targetUrl;
+        }
+
+        // Event Listeners
+        btnGo.addEventListener('click', () => loadUrl(urlBar.value));
+        
+        urlBar.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') loadUrl(urlBar.value);
+        });
+
+        btnRefresh.addEventListener('click', () => {
+            frame.src = frame.src;
+        });
+
+        // Note: History API (back/forward) inside a sandboxed iframe is often restricted.
+        // We simulate UI feedback even if the browser prevents actual history manipulation.
+        btnBack.addEventListener('click', () => {
+             try { frame.contentWindow.history.back(); } catch(e) { 
+                 statusText.innerText = "ERR: HISTORY ACCESS DENIED";
+             }
+        });
+
+        btnFwd.addEventListener('click', () => {
+             try { frame.contentWindow.history.forward(); } catch(e) {
+                 statusText.innerText = "ERR: HISTORY ACCESS DENIED";
+             }
+        });
+
+        // Iframe Load Event
+        frame.addEventListener('load', () => {
+            statusText.innerHTML = `<span class="status-indicator"></span>CONNECTION ESTABLISHED`;
+            // Attempt to read URL (will fail if cross-origin)
+            try {
+                // urlBar.value = frame.contentWindow.location.href;
+            } catch(e) {
+                // Cross-origin protection prevents reading the URL of external sites
+                // We leave the user-typed URL in the bar.
+            }
+        });
+
+        // Clock
+        setInterval(() => {
+            const now = new Date();
+            clock.innerText = now.toISOString().split('T')[1].split('.')[0] + " UTC";
+        }, 1000);
+
+        // Initial Load
+        loadUrl(START_URL);
+
+        // Handle Resize (Responsive CSS handles most, but we ensure layout triggers)
+        window.addEventListener('resize', () => {
+            // Optional: Dynamic adjustments if needed
+        });
+
+    </script>
+</body>
+</html>
