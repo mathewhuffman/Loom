@@ -4,11 +4,257 @@
 // Ctrl+Alt+L to open the Loom Panel
 // SECURE: All API keys live here, never exposed to renderer
 
-import { app, BrowserWindow, screen, globalShortcut, ipcMain, IpcMainInvokeEvent, Tray, Menu, nativeImage, safeStorage } from 'electron';
+import { app, BrowserWindow, screen, globalShortcut, ipcMain, IpcMainInvokeEvent, Tray, Menu, nativeImage, safeStorage, dialog } from 'electron';
 import path from 'path';
 import { attach, detach } from 'electron-as-wallpaper';
 import fs from 'fs';
 import type { LoomUIState, LoomUiStatePatch } from './src/types/ui-state';
+import { autoUpdater, UpdateInfo } from 'electron-updater';
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔄 AUTO-UPDATER CONFIGURATION
+// ════════════════════════════════════════════════════════════════════════════
+
+interface ChangelogEntry {
+  version: string;
+  date: string;
+  sections: {
+    type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+    icon: string;
+    title: string;
+    items: string[];
+  }[];
+}
+
+interface UpdateState {
+  checking: boolean;
+  available: boolean;
+  downloading: boolean;
+  downloaded: boolean;
+  progress: number;
+  error: string | null;
+  updateInfo: UpdateInfo | null;
+  changelog: ChangelogEntry[];
+}
+
+let updateState: UpdateState = {
+  checking: false,
+  available: false,
+  downloading: false,
+  downloaded: false,
+  progress: 0,
+  error: null,
+  updateInfo: null,
+  changelog: [],
+};
+
+// Configure auto-updater
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+
+function parseChangelog(): ChangelogEntry[] {
+  try {
+    // Try to read CHANGELOG.md from the app directory
+    const changelogPath = app.isPackaged 
+      ? path.join(process.resourcesPath, 'CHANGELOG.md')
+      : path.join(__dirname, '..', 'CHANGELOG.md');
+    
+    if (!fs.existsSync(changelogPath)) {
+      log('[Updater] CHANGELOG.md not found at:', changelogPath);
+      return [];
+    }
+    
+    const content = fs.readFileSync(changelogPath, 'utf-8');
+    const entries: ChangelogEntry[] = [];
+    
+    // Split by version headers (## [X.X.X])
+    const versionRegex = /^## \[(\d+\.\d+\.\d+)\]\s*-?\s*(\d{4}-\d{2}-\d{2})?/gm;
+    const matches = [...content.matchAll(versionRegex)];
+    
+    for (let i = 0; i < matches.length; i++) {
+      const match = matches[i];
+      const version = match[1];
+      const date = match[2] || 'Unknown';
+      const startIndex = match.index! + match[0].length;
+      const endIndex = matches[i + 1]?.index ?? content.length;
+      const sectionContent = content.slice(startIndex, endIndex);
+      
+      const entry: ChangelogEntry = {
+        version,
+        date,
+        sections: [],
+      };
+      
+      // Parse sections (### ✨ New Features, etc.)
+      const sectionPatterns = [
+        { regex: /### ✨ New Features\n([\s\S]*?)(?=###|$)/i, type: 'features' as const, icon: '✨', title: 'New Features' },
+        { regex: /### 🔧 Improvements\n([\s\S]*?)(?=###|$)/i, type: 'improvements' as const, icon: '🔧', title: 'Improvements' },
+        { regex: /### 🐛 Bug Fixes\n([\s\S]*?)(?=###|$)/i, type: 'bugfixes' as const, icon: '🐛', title: 'Bug Fixes' },
+        { regex: /### 💀 Breaking Changes\n([\s\S]*?)(?=###|$)/i, type: 'breaking' as const, icon: '💀', title: 'Breaking Changes' },
+      ];
+      
+      for (const pattern of sectionPatterns) {
+        const sectionMatch = sectionContent.match(pattern.regex);
+        if (sectionMatch) {
+          const items = sectionMatch[1]
+            .split('\n')
+            .map(line => line.replace(/^-\s*/, '').trim())
+            .filter(line => line.length > 0 && !line.startsWith('#'));
+          
+          if (items.length > 0) {
+            entry.sections.push({
+              type: pattern.type,
+              icon: pattern.icon,
+              title: pattern.title,
+              items,
+            });
+          }
+        }
+      }
+      
+      if (entry.sections.length > 0) {
+        entries.push(entry);
+      }
+    }
+    
+    log('[Updater] Parsed changelog:', entries.length, 'versions');
+    return entries;
+  } catch (error) {
+    log('[Updater] Failed to parse changelog:', error);
+    return [];
+  }
+}
+
+function broadcastUpdateState() {
+  const state = {
+    ...updateState,
+    currentVersion: app.getVersion(),
+  };
+  
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('updater-state', state);
+  }
+}
+
+// Auto-updater event handlers
+autoUpdater.on('checking-for-update', () => {
+  log('[Updater] 🔍 Checking for updates...');
+  updateState = { ...updateState, checking: true, error: null };
+  broadcastUpdateState();
+});
+
+autoUpdater.on('update-available', (info: UpdateInfo) => {
+  log('[Updater] 🆕 Update available:', info.version);
+  updateState = {
+    ...updateState,
+    checking: false,
+    available: true,
+    updateInfo: info,
+    changelog: parseChangelog(),
+  };
+  broadcastUpdateState();
+});
+
+autoUpdater.on('update-not-available', (info: UpdateInfo) => {
+  log('[Updater] ✅ Already on latest version:', info.version);
+  updateState = {
+    ...updateState,
+    checking: false,
+    available: false,
+    updateInfo: info,
+    changelog: parseChangelog(),
+  };
+  broadcastUpdateState();
+});
+
+autoUpdater.on('download-progress', (progress: { percent: number; bytesPerSecond: number; total: number; transferred: number }) => {
+  log('[Updater] ⬇️  Download progress:', Math.round(progress.percent) + '%');
+  updateState = {
+    ...updateState,
+    downloading: true,
+    progress: progress.percent,
+  };
+  broadcastUpdateState();
+});
+
+autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+  log('[Updater] ✅ Update downloaded:', info.version);
+  updateState = {
+    ...updateState,
+    downloading: false,
+    downloaded: true,
+    progress: 100,
+    updateInfo: info,
+  };
+  broadcastUpdateState();
+});
+
+autoUpdater.on('error', (error: Error) => {
+  log('[Updater] ❌ Error:', error.message);
+  updateState = {
+    ...updateState,
+    checking: false,
+    downloading: false,
+    error: error.message,
+  };
+  broadcastUpdateState();
+});
+
+// IPC handlers for updater
+ipcMain.handle('updater:check', async () => {
+  log('[Updater] Manual check triggered');
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { success: true, result };
+  } catch (error: any) {
+    log('[Updater] Check failed:', error.message);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('updater:download', async () => {
+  log('[Updater] Download triggered');
+  try {
+    await autoUpdater.downloadUpdate();
+    return { success: true };
+  } catch (error: any) {
+    log('[Updater] Download failed:', error.message);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('updater:install', async () => {
+  log('[Updater] Install triggered - quitting and installing...');
+  // Detach wallpaper before quitting
+  detachBackgroundFromDesktop();
+  autoUpdater.quitAndInstall(false, true);
+  return { success: true };
+});
+
+ipcMain.handle('updater:get-state', async () => {
+  return {
+    ...updateState,
+    currentVersion: app.getVersion(),
+    changelog: parseChangelog(),
+  };
+});
+
+ipcMain.handle('updater:get-changelog', async () => {
+  return {
+    changelog: parseChangelog(),
+    currentVersion: app.getVersion(),
+  };
+});
+
+ipcMain.handle('updater:dismiss', async () => {
+  log('[Updater] Update dismissed by user');
+  updateState = {
+    ...updateState,
+    available: false,
+  };
+  broadcastUpdateState();
+  return { success: true };
+});
 
 // ════════════════════════════════════════════════════════════════════════════
 // 📁 DYNAMIC GLYPH FILE SYSTEM
@@ -39,6 +285,131 @@ const glyphLibraryPath = resolveGlyphLibraryPath();
 if (!fs.existsSync(glyphLibraryPath)) {
   fs.mkdirSync(glyphLibraryPath, { recursive: true });
   console.log('[LOOM] 📁 Created glyph library:', glyphLibraryPath);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📦 BUNDLED GLYPHS — Pre-installed glyphs that ship with the app
+// ════════════════════════════════════════════════════════════════════════════
+
+const bundledGlyphsPath = isDev
+  ? path.join(__dirname, '..', 'bundled-glyphs')
+  : path.join(process.resourcesPath, 'bundled-glyphs');
+
+const installedBundledGlyphsPath = path.join(app.getPath('userData'), 'installed-bundled-glyphs.json');
+
+interface BundledGlyphManifest {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  author?: string;
+  bundled: true;
+}
+
+function getInstalledBundledGlyphs(): Record<string, string> {
+  try {
+    if (fs.existsSync(installedBundledGlyphsPath)) {
+      return JSON.parse(fs.readFileSync(installedBundledGlyphsPath, 'utf-8'));
+    }
+  } catch (err) {
+    console.warn('[LOOM] ⚠️ Failed to read installed bundled glyphs:', err);
+  }
+  return {};
+}
+
+function saveInstalledBundledGlyphs(installed: Record<string, string>) {
+  try {
+    fs.writeFileSync(installedBundledGlyphsPath, JSON.stringify(installed, null, 2));
+  } catch (err) {
+    console.warn('[LOOM] ⚠️ Failed to save installed bundled glyphs:', err);
+  }
+}
+
+function installBundledGlyphs() {
+  if (!fs.existsSync(bundledGlyphsPath)) {
+    console.log('[LOOM] 📦 No bundled glyphs folder found');
+    return;
+  }
+
+  const installedVersions = getInstalledBundledGlyphs();
+  let installedCount = 0;
+  let updatedCount = 0;
+
+  try {
+    const bundledFolders = fs.readdirSync(bundledGlyphsPath, { withFileTypes: true })
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => dirent.name);
+
+    for (const folderName of bundledFolders) {
+      const bundledGlyphDir = path.join(bundledGlyphsPath, folderName);
+      const manifestPath = path.join(bundledGlyphDir, 'manifest.json');
+
+      if (!fs.existsSync(manifestPath)) {
+        console.warn(`[LOOM] ⚠️ Bundled glyph ${folderName} has no manifest.json, skipping`);
+        continue;
+      }
+
+      try {
+        const manifest: BundledGlyphManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const glyphId = manifest.id || `bundled-${folderName}`;
+        const currentVersion = manifest.version || '1.0.0';
+        const installedVersion = installedVersions[glyphId];
+
+        // Skip if same version already installed
+        if (installedVersion === currentVersion) {
+          continue;
+        }
+
+        // Copy the glyph to user's library
+        const targetDir = path.join(glyphLibraryPath, glyphId);
+        
+        // Remove old version if exists
+        if (fs.existsSync(targetDir)) {
+          fs.rmSync(targetDir, { recursive: true, force: true });
+          updatedCount++;
+        } else {
+          installedCount++;
+        }
+
+        // Copy all files from bundled glyph
+        fs.mkdirSync(targetDir, { recursive: true });
+        const files = fs.readdirSync(bundledGlyphDir);
+        for (const file of files) {
+          const srcPath = path.join(bundledGlyphDir, file);
+          const destPath = path.join(targetDir, file);
+          
+          if (fs.statSync(srcPath).isDirectory()) {
+            // Recursively copy directories
+            fs.cpSync(srcPath, destPath, { recursive: true });
+          } else {
+            fs.copyFileSync(srcPath, destPath);
+          }
+        }
+
+        // Mark as bundled in the manifest (ensure the flag is set)
+        const targetManifestPath = path.join(targetDir, 'manifest.json');
+        const targetManifest = JSON.parse(fs.readFileSync(targetManifestPath, 'utf-8'));
+        targetManifest.bundled = true;
+        targetManifest.bundledVersion = currentVersion;
+        fs.writeFileSync(targetManifestPath, JSON.stringify(targetManifest, null, 2));
+
+        installedVersions[glyphId] = currentVersion;
+        console.log(`[LOOM] 📦 ${installedVersion ? 'Updated' : 'Installed'} bundled glyph: ${manifest.name} v${currentVersion}`);
+
+      } catch (err) {
+        console.error(`[LOOM] ❌ Failed to install bundled glyph ${folderName}:`, err);
+      }
+    }
+
+    saveInstalledBundledGlyphs(installedVersions);
+
+    if (installedCount > 0 || updatedCount > 0) {
+      console.log(`[LOOM] 📦 Bundled glyphs: ${installedCount} installed, ${updatedCount} updated`);
+    }
+
+  } catch (err) {
+    console.error('[LOOM] ❌ Failed to read bundled glyphs folder:', err);
+  }
 }
 
 function ensureDirectoryExists(dirPath: string) {
@@ -4858,6 +5229,9 @@ app.whenReady().then(() => {
 
   refreshBackgroundShortcutBinding();
   
+  // Install/update bundled glyphs (example glyphs that ship with the app)
+  installBundledGlyphs();
+  
   // Create system tray
   createTray();
   
@@ -4878,6 +5252,29 @@ app.whenReady().then(() => {
   log('🔔 System tray icon active');
   log('');
   log('🧙 LOOM SUMMONER v2 READY — Manifest reality');
+  
+  // ════════════════════════════════════════════════════════════════════════════
+  // 🔄 AUTO-UPDATER — Check for updates after app is ready
+  // ════════════════════════════════════════════════════════════════════════════
+  if (!isDev) {
+    // Check for updates 5 seconds after launch (don't block startup)
+    setTimeout(() => {
+      log('[Updater] 🔄 Initiating startup update check...');
+      autoUpdater.checkForUpdates().catch((err: Error) => {
+        log('[Updater] ⚠️  Startup update check failed:', err.message);
+      });
+    }, 5000);
+    
+    // Also check periodically (every 4 hours)
+    setInterval(() => {
+      log('[Updater] 🔄 Periodic update check...');
+      autoUpdater.checkForUpdates().catch((err: Error) => {
+        log('[Updater] ⚠️  Periodic update check failed:', err.message);
+      });
+    }, 4 * 60 * 60 * 1000);
+  } else {
+    log('[Updater] 🔧 Dev mode - auto-updates disabled');
+  }
 });
 
 app.on('will-quit', () => {

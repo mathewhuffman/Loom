@@ -460,6 +460,76 @@ interface LoomAPI {
   onSummonStream: (callback: (data: { code: string }) => void) => () => void;
   onInteractionState: (callback: (state: { enabled: boolean }) => void) => () => void;
   removeAllListeners: () => void;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔄 AUTO-UPDATER — Check for updates and manage installation
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  checkForUpdates?: () => Promise<{ success: boolean; result?: unknown; error?: string }>;
+  downloadUpdate?: () => Promise<{ success: boolean; error?: string }>;
+  installUpdate?: () => Promise<{ success: boolean }>;
+  getUpdaterState?: () => Promise<{
+    checking: boolean;
+    available: boolean;
+    downloading: boolean;
+    downloaded: boolean;
+    progress: number;
+    error: string | null;
+    currentVersion: string;
+    updateInfo: {
+      version: string;
+      releaseDate?: string;
+      releaseNotes?: string;
+    } | null;
+    changelog: Array<{
+      version: string;
+      date: string;
+      sections: Array<{
+        type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+        icon: string;
+        title: string;
+        items: string[];
+      }>;
+    }>;
+  }>;
+  getChangelog?: () => Promise<{
+    changelog: Array<{
+      version: string;
+      date: string;
+      sections: Array<{
+        type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+        icon: string;
+        title: string;
+        items: string[];
+      }>;
+    }>;
+    currentVersion: string;
+  }>;
+  dismissUpdate?: () => Promise<{ success: boolean }>;
+  onUpdaterState?: (callback: (state: {
+    checking: boolean;
+    available: boolean;
+    downloading: boolean;
+    downloaded: boolean;
+    progress: number;
+    error: string | null;
+    currentVersion: string;
+    updateInfo: {
+      version: string;
+      releaseDate?: string;
+      releaseNotes?: string;
+    } | null;
+    changelog: Array<{
+      version: string;
+      date: string;
+      sections: Array<{
+        type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+        icon: string;
+        title: string;
+        items: string[];
+      }>;
+    }>;
+  }) => void) => (() => void) | void;
 }
 
 // Diagnostic API

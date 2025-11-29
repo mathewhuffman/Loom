@@ -3,6 +3,7 @@
   "name": "Neon Flora",
   "prompt": "a scene with a field of flowers",
   "entry": "index.html",
+  "bundled": true,
   "files": [
     "manifest.json",
     "index.html"

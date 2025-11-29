@@ -1,0 +1,112 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags like v0.1.0, v1.0.0, etc.
+  workflow_dispatch: # Allow manual trigger
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: false
+        type: string
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-latest
+            platform: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'loom/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: loom
+        run: npm ci
+
+      - name: Build application
+        working-directory: loom
+        run: npm run build:${{ matrix.platform }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: loom-${{ matrix.platform }}
+          path: |
+            loom/release/*.exe
+            loom/release/*.dmg
+            loom/release/*.AppImage
+            loom/release/*.yml
+            loom/release/*.yaml
+          if-no-files-found: warn
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
+            artifacts/**/*.yml
+            artifacts/**/*.yaml
+            artifacts/**/*.blockmap
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## 🔮 LOOM Update
+            
+            This release includes the latest features and improvements. See the changelog below for details.
+            
+            ### Installation
+            
+            **Windows:** Download and run the `.exe` installer
+            **macOS:** Download the `.dmg` file, open it, and drag LOOM to Applications
+            **Linux:** Download the `.AppImage` file, make it executable (`chmod +x`), and run it
+            
+            ---
+            
+            *If you already have LOOM installed, it will auto-update to this version.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

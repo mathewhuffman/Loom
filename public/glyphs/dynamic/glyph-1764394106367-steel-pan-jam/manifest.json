@@ -3,6 +3,7 @@
   "name": "Steel Pan Jam",
   "prompt": "make a super intuitive and fun steel drums music widget, capable of looping, etc",
   "entry": "index.html",
+  "bundled": true,
   "files": [
     "manifest.json",
     "index.html"

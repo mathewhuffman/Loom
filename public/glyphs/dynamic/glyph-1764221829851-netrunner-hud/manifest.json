@@ -4,6 +4,7 @@
   "type": "hud",
   "prompt": "Make a fully functioning web browser glyph. You should have the iframe to display the webpage be living INSIDE the glyph you return",
   "entry": "index.html",
+  "bundled": true,
   "files": [
     "manifest.json",
     "index.html"

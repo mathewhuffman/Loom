@@ -4,6 +4,7 @@
   "type": "background",
   "prompt": "generate an interactive tie fighter game where I can shoot astroid and gain points, and if I run into a astroid I die and the game restarts",
   "entry": "index.html",
+  "bundled": true,
   "files": [
     "index.html"
   ],

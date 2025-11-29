@@ -605,6 +605,60 @@ contextBridge.exposeInMainWorld('loom', {
     ipcRenderer.invoke('delete-llm-api-key', provider),
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🔄 AUTO-UPDATER — Check for updates and manage installation
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Check for updates
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  
+  // Download available update
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  
+  // Install downloaded update (quits app and installs)
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  
+  // Get current updater state
+  getUpdaterState: () => ipcRenderer.invoke('updater:get-state'),
+  
+  // Get changelog only
+  getChangelog: () => ipcRenderer.invoke('updater:get-changelog'),
+  
+  // Dismiss update notification
+  dismissUpdate: () => ipcRenderer.invoke('updater:dismiss'),
+  
+  // Listen for updater state changes
+  onUpdaterState: (callback: (state: {
+    checking: boolean;
+    available: boolean;
+    downloading: boolean;
+    downloaded: boolean;
+    progress: number;
+    error: string | null;
+    currentVersion: string;
+    updateInfo: {
+      version: string;
+      releaseDate?: string;
+      releaseNotes?: string;
+    } | null;
+    changelog: Array<{
+      version: string;
+      date: string;
+      sections: Array<{
+        type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+        icon: string;
+        title: string;
+        items: string[];
+      }>;
+    }>;
+  }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: any) => {
+      callback(state);
+    };
+    ipcRenderer.on('updater-state', listener);
+    return () => ipcRenderer.removeListener('updater-state', listener);
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 🔗 GLYPH KEY LINKING — Connect vault keys to glyphs
   // ═══════════════════════════════════════════════════════════════════════════
   
@@ -819,6 +873,73 @@ declare global {
       }>;
       saveLlmApiKey: (provider: 'grok' | 'gemini' | 'openai', apiKey: string) => Promise<{ success: boolean; error?: string }>;
       deleteLlmApiKey: (provider: 'grok' | 'gemini' | 'openai') => Promise<{ success: boolean; error?: string }>;
+      
+      // Auto-Updater
+      checkForUpdates: () => Promise<{ success: boolean; result?: unknown; error?: string }>;
+      downloadUpdate: () => Promise<{ success: boolean; error?: string }>;
+      installUpdate: () => Promise<{ success: boolean }>;
+      getUpdaterState: () => Promise<{
+        checking: boolean;
+        available: boolean;
+        downloading: boolean;
+        downloaded: boolean;
+        progress: number;
+        error: string | null;
+        currentVersion: string;
+        updateInfo: {
+          version: string;
+          releaseDate?: string;
+          releaseNotes?: string;
+        } | null;
+        changelog: Array<{
+          version: string;
+          date: string;
+          sections: Array<{
+            type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+            icon: string;
+            title: string;
+            items: string[];
+          }>;
+        }>;
+      }>;
+      getChangelog: () => Promise<{
+        changelog: Array<{
+          version: string;
+          date: string;
+          sections: Array<{
+            type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+            icon: string;
+            title: string;
+            items: string[];
+          }>;
+        }>;
+        currentVersion: string;
+      }>;
+      dismissUpdate: () => Promise<{ success: boolean }>;
+      onUpdaterState: (callback: (state: {
+        checking: boolean;
+        available: boolean;
+        downloading: boolean;
+        downloaded: boolean;
+        progress: number;
+        error: string | null;
+        currentVersion: string;
+        updateInfo: {
+          version: string;
+          releaseDate?: string;
+          releaseNotes?: string;
+        } | null;
+        changelog: Array<{
+          version: string;
+          date: string;
+          sections: Array<{
+            type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+            icon: string;
+            title: string;
+            items: string[];
+          }>;
+        }>;
+      }) => void) => (() => void) | void;
     };
   }
 }

@@ -3,6 +3,7 @@
   "name": "Synth",
   "prompt": "make a super intuitive and fun, functional, esoteric coded Synthesizer, cappable of a ton of useful tricks",
   "entry": "index.html",
+  "bundled": true,
   "files": [
     "manifest.json",
     "index.html"

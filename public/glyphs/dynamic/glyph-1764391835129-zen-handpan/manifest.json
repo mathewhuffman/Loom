@@ -3,6 +3,7 @@
   "name": "Zen Handpan",
   "prompt": "make a super intuitive and fun handpan music widget, capable of looping, etc",
   "entry": "index.html",
+  "bundled": true,
   "files": [
     "manifest.json",
     "index.html"

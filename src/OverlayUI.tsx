@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import LoomPanel from './components/LoomPanel';
 import GlyphIframe from './components/GlyphIframe';
+import UpdaterView from './components/views/UpdaterView';
 import type { CodeEditorState, LoomPanelState, OverlayUiState, PersistedWidgetState, WidgetLayer } from './types/ui-state';
 import { loadUiState, queueUiStatePatch } from './utils/uiState';
 
@@ -508,6 +509,9 @@ export default function OverlayUI() {
   const [storedPanelState, setStoredPanelState] = useState<LoomPanelState | undefined>(undefined);
   const [storedEditorState, setStoredEditorState] = useState<CodeEditorState | undefined>(undefined);
   const hasHydratedStateRef = useRef(false);
+  
+  // Auto-updater state
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
 
   const persistOverlayState = useCallback((patch: Partial<OverlayUiState>) => {
     if (!hasHydratedStateRef.current) {
@@ -642,6 +646,21 @@ export default function OverlayUI() {
     persistOverlayState({ widgets });
   }, [widgets, persistOverlayState]);
 
+  // Listen for auto-update state changes
+  useEffect(() => {
+    const unsubscribe = window.loom?.onUpdaterState?.((state: { available: boolean; downloaded: boolean }) => {
+      // Auto-show dialog when update is available or downloaded
+      if (state.available || state.downloaded) {
+        setShowUpdateDialog(true);
+      }
+    });
+    
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
 
   const clearPendingRefinementTimer = useCallback(() => {
     if (pendingRefinementTimerRef.current) {
@@ -1386,6 +1405,60 @@ export default function OverlayUI() {
           editorState={storedEditorState}
           onEditorStateChange={handleEditorStateChange}
         />
+      )}
+
+      {/* Auto-Update Dialog - Goopy changelog viewer */}
+      {showUpdateDialog && (
+        <div 
+          className="ui-interactive"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.7)',
+            backdropFilter: 'blur(8px)',
+            animation: 'fadeIn 0.3s ease',
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowUpdateDialog(false);
+            }
+          }}
+        >
+          <div style={{
+            width: 'min(90vw, 540px)',
+            height: 'min(85vh, 680px)',
+            animation: 'goopyModalIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+          }}>
+            <UpdaterView onClose={() => setShowUpdateDialog(false)} />
+          </div>
+          <style>{`
+            @keyframes fadeIn {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+            @keyframes goopyModalIn {
+              0% {
+                transform: scale(0.5) translateY(100px);
+                opacity: 0;
+                filter: blur(20px);
+              }
+              50% {
+                transform: scale(1.05) translateY(-10px);
+                opacity: 0.9;
+                filter: blur(2px);
+              }
+              100% {
+                transform: scale(1) translateY(0);
+                opacity: 1;
+                filter: blur(0);
+              }
+            }
+          `}</style>
+        </div>
       )}
 
       {/* Summon Bar UI - with goopy morph transition */}

@@ -1,0 +1,11 @@
+{
+  "id": "bundled-welcome-portal",
+  "name": "Welcome Portal",
+  "version": "1.0.0",
+  "type": "object",
+  "description": "A mystical welcome glyph that greets new LOOM users",
+  "author": "LOOM Team",
+  "bundled": true,
+  "tags": ["welcome", "example", "interactive"]
+}
+
