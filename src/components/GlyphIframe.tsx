@@ -16,18 +16,7 @@ interface GlyphIframeProps {
   allowExternalUrls?: boolean; // Allow loading external URLs (removes sandbox restrictions)
 }
 
-// Type for window.loom API
-declare global {
-  interface Window {
-    loom?: {
-      readLocalFile?: (path: string) => Promise<unknown>;
-      listDirectory?: (path: string) => Promise<unknown>;
-      getSystemPaths?: () => Promise<unknown>;
-      readGlyphFile?: (glyphId: string, fileName: string) => Promise<unknown>;
-      saveGlyphFile?: (glyphId: string, fileName: string, content: string) => Promise<unknown>;
-    };
-  }
-}
+// Type for window.loom API is defined in vite-env.d.ts
 
 export default function GlyphIframe({
   code,
@@ -171,7 +160,8 @@ export default function GlyphIframe({
         border: 'none',
         width: '100%',
         height: '100%',
-        background: 'transparent',
+        // Transparent background - let glyph content show through
+        background: background || 'transparent',
         pointerEvents: allowPointerEvents ? 'auto' : 'none',
         ...style,
       }}

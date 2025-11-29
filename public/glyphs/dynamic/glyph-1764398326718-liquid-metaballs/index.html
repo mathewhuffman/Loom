@@ -1,0 +1,223 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Liquid Metaballs Shader</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('glcanvas');
+        const gl = canvas.getContext('webgl');
+
+        if (!gl) {
+            alert('Unable to initialize WebGL. Your browser or machine may not support it.');
+        }
+
+        // --- SHADER SOURCES ---
+
+        const vsSource = `
+            attribute vec2 position;
+            void main() {
+                gl_Position = vec4(position, 0.0, 1.0);
+            }
+        `;
+
+        // We inject the user's shader code into a wrapper
+        const fsSource = `
+            precision highp float;
+
+            uniform vec3 iResolution;
+            uniform float iTime;
+            uniform float uSmoothness;
+            uniform float uZoom;
+
+            // --- USER CODE START ---
+            
+            float opSmoothUnion( float d1, float d2, float k )
+            {
+                float h = clamp( 0.5 + 0.5*(d2-d1)/k, 0.0, 1.0 );
+                return mix( d2, d1, h ) - k*h*(1.0-h);
+            }
+
+            float sdSphere( vec3 p, float s )
+            {
+              return length(p)-s;
+            } 
+
+            float map(vec3 p)
+            {
+                float d = 2.0;
+                for (int i = 0; i < 16; i++) {
+                    float fi = float(i);
+                    float time = iTime * (fract(fi * 412.531 + 0.513) - 0.5) * 2.0;
+                    d = opSmoothUnion(
+                        sdSphere(p + sin(time + fi * vec3(52.5126, 64.62744, 632.25)) * vec3(2.0, 2.0, 0.8), mix(0.5, 1.0, fract(fi * 412.531 + 0.5124))),
+                        d,
+                        uSmoothness // Replaced hardcoded 0.4 with uniform
+                    );
+                }
+                return d;
+            }
+
+            vec3 calcNormal( in vec3 p )
+            {
+                const float h = 1e-5; 
+                const vec2 k = vec2(1,-1);
+                return normalize( k.xyy*map( p + k.xyy*h ) + 
+                                  k.yyx*map( p + k.yyx*h ) + 
+                                  k.yxy*map( p + k.yxy*h ) + 
+                                  k.xxx*map( p + k.xxx*h ) );
+            }
+
+            void mainImage( out vec4 fragColor, in vec2 fragCoord )
+            {
+                vec2 uv = fragCoord/iResolution.xy;
+                
+                // screen size is 6m x 6m, modified by zoom
+                float fovScale = 6.0 / uZoom;
+                vec3 rayOri = vec3((uv - 0.5) * vec2(iResolution.x/iResolution.y, 1.0) * fovScale, 3.0);
+                vec3 rayDir = vec3(0.0, 0.0, -1.0);
+                
+                float depth = 0.0;
+                vec3 p;
+                
+                for(int i = 0; i < 64; i++) {
+                    p = rayOri + rayDir * depth;
+                    float dist = map(p);
+                    depth += dist;
+                    if (dist < 1e-6) {
+                        break;
+                    }
+                }
+                
+                depth = min(6.0, depth);
+                vec3 n = calcNormal(p);
+                float b = max(0.0, dot(n, vec3(0.577)));
+                
+                // Color calculation
+                vec3 col = (0.5 + 0.5 * cos((b + iTime * 3.0) + uv.xyx * 2.0 + vec3(0,2,4))) * (0.85 + b * 0.35);
+                col *= exp( -depth * 0.15 );
+                
+                // maximum thickness is 2m in alpha channel
+                fragColor = vec4(col, 1.0 - (depth - 0.5) / 2.0);
+            }
+
+            // --- USER CODE END ---
+
+            void main() {
+                mainImage(gl_FragColor, gl_FragCoord.xy);
+            }
+        `;
+
+        // --- WEBGL SETUP ---
+
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('An error occurred compiling the shaders: ' + gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+        const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+        const shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            console.error('Unable to initialize the shader program: ' + gl.getProgramInfoLog(shaderProgram));
+        }
+
+        // Locations
+        const positionAttributeLocation = gl.getAttribLocation(shaderProgram, 'position');
+        const iResolutionLocation = gl.getUniformLocation(shaderProgram, 'iResolution');
+        const iTimeLocation = gl.getUniformLocation(shaderProgram, 'iTime');
+        const uSmoothnessLocation = gl.getUniformLocation(shaderProgram, 'uSmoothness');
+        const uZoomLocation = gl.getUniformLocation(shaderProgram, 'uZoom');
+
+        // Buffer setup
+        const positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        const positions = [
+            -1.0,  1.0,
+             1.0,  1.0,
+            -1.0, -1.0,
+             1.0, -1.0,
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+        // --- RENDER LOOP ---
+
+        let currentTime = 0;
+        let lastFrameTime = performance.now();
+
+        function render(now) {
+            // Calculate delta time
+            const inputs = window.GLYPH_INPUTS || {};
+            const speed = inputs.speed !== undefined ? inputs.speed : 1.0;
+            const smoothness = inputs.smoothness !== undefined ? inputs.smoothness : 0.4;
+            const zoom = inputs.zoom !== undefined ? inputs.zoom : 1.0;
+
+            const dt = (now - lastFrameTime) / 1000;
+            lastFrameTime = now;
+            currentTime += dt * speed;
+
+            // Resize canvas
+            const displayWidth  = canvas.clientWidth;
+            const displayHeight = canvas.clientHeight;
+
+            if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+                canvas.width  = displayWidth;
+                canvas.height = displayHeight;
+                gl.viewport(0, 0, canvas.width, canvas.height);
+            }
+
+            gl.useProgram(shaderProgram);
+
+            // Bind attributes
+            gl.enableVertexAttribArray(positionAttributeLocation);
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.vertexAttribPointer(positionAttributeLocation, 2, gl.FLOAT, false, 0, 0);
+
+            // Set uniforms
+            gl.uniform3f(iResolutionLocation, canvas.width, canvas.height, 1.0);
+            gl.uniform1f(iTimeLocation, currentTime);
+            gl.uniform1f(uSmoothnessLocation, smoothness);
+            gl.uniform1f(uZoomLocation, zoom);
+
+            // Draw
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            requestAnimationFrame(render);
+        }
+
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>

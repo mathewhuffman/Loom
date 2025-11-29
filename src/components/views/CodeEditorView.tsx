@@ -15,15 +15,98 @@ import type { CodeEditorState } from '../../types/ui-state';
  * The LLM generates: {"name": "...", "files": {"index.html": "<!DOCTYPE html>..."}}
  * We want to extract just the HTML content as it streams in
  */
-function extractHtmlFromStreamingJson(jsonStr: string): { html: string; glyphName: string; isComplete: boolean } {
+interface ExtractedManifestData {
+  html: string;
+  glyphName: string;
+  isComplete: boolean;
+  icon?: string;
+  inputs?: Array<{
+    id: string;
+    type: string;
+    label: string;
+    description?: string;
+    required?: boolean;
+    service?: string;
+    defaultValue?: unknown;
+    placeholder?: string;
+    options?: Array<{ value: string; label: string }>;
+  }>;
+  entry?: string;
+  isMarkerFormat?: boolean;
+}
+
+function extractFromStreamingResponse(rawResponse: string): ExtractedManifestData {
   let html = '';
   let glyphName = '';
   let isComplete = false;
+  let icon: string | undefined;
+  let inputs: ExtractedManifestData['inputs'] | undefined;
+  let entry: string | undefined;
+  let isMarkerFormat = false;
   
+  // Check if this is the new marker-based format
+  if (rawResponse.includes('<<<MANIFEST>>>')) {
+    isMarkerFormat = true;
+    
+    // Extract manifest JSON
+    const manifestMatch = rawResponse.match(/<<<MANIFEST>>>([\s\S]*?)<<<END_MANIFEST>>>/);
+    if (manifestMatch) {
+      try {
+        const manifest = JSON.parse(manifestMatch[1].trim());
+        glyphName = manifest.name || '';
+        icon = manifest.icon;
+        entry = manifest.entry;
+        inputs = manifest.inputs;
+      } catch {
+        // Manifest might be incomplete during streaming
+        // Try to extract name at least
+        const nameMatch = manifestMatch[1].match(/"name"\s*:\s*"([^"]+)"/);
+        if (nameMatch) glyphName = nameMatch[1];
+      }
+    } else {
+      // Manifest section still streaming - try partial extraction
+      const partialManifest = rawResponse.slice(rawResponse.indexOf('<<<MANIFEST>>>') + 14);
+      const nameMatch = partialManifest.match(/"name"\s*:\s*"([^"]+)"/);
+      if (nameMatch) glyphName = nameMatch[1];
+    }
+    
+    // Extract HTML file content
+    const htmlFileMatch = rawResponse.match(/<<<FILE:index\.html>>>([\s\S]*?)(?:<<<END_FILE>>>|$)/);
+    if (htmlFileMatch) {
+      html = htmlFileMatch[1];
+      isComplete = rawResponse.includes('<<<END_FILE>>>') && rawResponse.includes('<<<END>>>');
+    }
+    
+    return { html, glyphName, isComplete, icon, inputs, entry, isMarkerFormat };
+  }
+  
+  // Legacy JSON format parsing
   // Try to extract glyph name
-  const nameMatch = jsonStr.match(/"name"\s*:\s*"([^"]+)"/);
+  const nameMatch = rawResponse.match(/"name"\s*:\s*"([^"]+)"/);
   if (nameMatch) {
     glyphName = nameMatch[1];
+  }
+  
+  // Try to extract icon
+  const iconMatch = rawResponse.match(/"icon"\s*:\s*"([^"]+)"/);
+  if (iconMatch) {
+    icon = iconMatch[1];
+  }
+  
+  // Try to extract entry
+  const entryMatch = rawResponse.match(/"entry"\s*:\s*"([^"]+)"/);
+  if (entryMatch) {
+    entry = entryMatch[1];
+  }
+  
+  // Try to extract inputs array - look for complete inputs array
+  const inputsMatch = rawResponse.match(/"inputs"\s*:\s*(\[[\s\S]*?\])\s*(?:,|\})/);
+  if (inputsMatch) {
+    try {
+      inputs = JSON.parse(inputsMatch[1]);
+    } catch {
+      // Inputs array might be incomplete during streaming, ignore parse errors
+    }
   }
   
   // Look for the index.html content start
@@ -35,7 +118,7 @@ function extractHtmlFromStreamingJson(jsonStr: string): { html: string; glyphNam
   
   let htmlStartIndex = -1;
   for (const pattern of htmlStartPatterns) {
-    const match = jsonStr.match(pattern);
+    const match = rawResponse.match(pattern);
     if (match && match.index !== undefined) {
       htmlStartIndex = match.index + match[0].length;
       break;
@@ -44,11 +127,11 @@ function extractHtmlFromStreamingJson(jsonStr: string): { html: string; glyphNam
   
   if (htmlStartIndex === -1) {
     // Haven't reached the HTML content yet - show what we have
-    return { html: '', glyphName, isComplete: false };
+    return { html: '', glyphName, isComplete: false, icon, inputs, entry, isMarkerFormat: false };
   }
   
   // Extract everything after the pattern
-  let htmlContent = jsonStr.slice(htmlStartIndex);
+  let htmlContent = rawResponse.slice(htmlStartIndex);
   
   // Check if the JSON is complete (ends with proper closing)
   if (htmlContent.endsWith('"}}') || htmlContent.endsWith('"}}\n')) {
@@ -73,7 +156,7 @@ function extractHtmlFromStreamingJson(jsonStr: string): { html: string; glyphNam
     html = htmlContent;
   }
   
-  return { html, glyphName, isComplete };
+  return { html, glyphName, isComplete, icon, inputs, entry, isMarkerFormat: false };
 }
 
 interface GlyphManifest {
@@ -563,7 +646,8 @@ export default function CodeEditorView({
             console.log('[CodeEditorView] 📂 Auto-selecting glyph:', targetGlyph.name);
             await handleGlyphSelect(targetGlyph);
           }
-        } else if (persistedGlyphIdRef.current) {
+        } else if (persistedGlyphIdRef.current && !externalIsStreaming && !externalStreamingCode) {
+          // Only restore persisted glyph if NOT streaming a new one
           const targetGlyph = loadedGlyphs.find((g: GlyphManifest) => g.id === persistedGlyphIdRef.current);
           if (targetGlyph) {
             await handleGlyphSelect(targetGlyph, persistedFileRef.current);
@@ -620,18 +704,18 @@ export default function CodeEditorView({
   // Track which file to view during streaming (manifest.json or index.html)
   const [streamingViewFile, setStreamingViewFile] = useState<'manifest.json' | 'index.html'>('index.html');
   
-  // Parsed manifest content for viewing during streaming
-  const [parsedManifestContent, setParsedManifestContent] = useState<string>('');
   
   // Handle external streaming code (from summon bar)
-  // The LLM generates JSON like: {"name": "...", "files": {"index.html": "<!DOCTYPE..."}}
-  // We extract just the HTML content to show in the editor
+  // The LLM generates either:
+  //   1. New marker format: <<<MANIFEST>>>...<<<END_MANIFEST>>><<<FILE:index.html>>>...<<<END_FILE>>><<<END>>>
+  //   2. Legacy JSON format: {"name": "...", "files": {"index.html": "..."}}
+  // We show the appropriate content for each file being viewed
   useEffect(() => {
     if (externalStreamingCode) {
       setRawStreamingJson(externalStreamingCode);
       
-      // Extract HTML from the streaming JSON
-      const { html, glyphName, isComplete } = extractHtmlFromStreamingJson(externalStreamingCode);
+      // Extract HTML and manifest data from the streaming response
+      const { html, glyphName, isComplete, isMarkerFormat } = extractFromStreamingResponse(externalStreamingCode);
       
       if (glyphName && glyphName !== extractedGlyphName) {
         setExtractedGlyphName(glyphName);
@@ -643,44 +727,45 @@ export default function CodeEditorView({
         setStreamingPhase(isComplete ? 'complete' : 'html');
         console.log('[CodeEditorView] 📡 HTML streaming:', html.length, 'chars', isComplete ? '(complete)' : '(streaming)');
         
-        // Store parsed manifest for viewing
-        try {
-          // Try to extract and format the manifest portion
-          const manifestMatch = externalStreamingCode.match(/^\{[\s\S]*?"files"\s*:\s*\{/);
-          if (manifestMatch) {
-            // Create a readable manifest preview
-            const manifestPreview = JSON.stringify({
-              name: glyphName || 'Unknown',
-              type: 'glyph',
-              entry: 'index.html',
-              files: ['index.html', 'manifest.json'],
-            }, null, 2);
-            setParsedManifestContent(manifestPreview);
-          }
-        } catch {
-          // Ignore parse errors during streaming
-        }
-        
         // Update displayed content based on which file is being viewed
         if (streamingViewFile === 'index.html') {
           setFileContent(html);
           setPreviewCode(html);
         } else {
-          // Show manifest content
-          setFileContent(parsedManifestContent || '// Manifest data loading...');
+          // Show ONLY the manifest section for manifest.json, not the whole response
+          if (isMarkerFormat) {
+            // Extract just the manifest JSON from marker format
+            const manifestMatch = externalStreamingCode.match(/<<<MANIFEST>>>([\s\S]*?)(?:<<<END_MANIFEST>>>|$)/);
+            if (manifestMatch) {
+              const manifestJson = manifestMatch[1].trim();
+              setFileContent(manifestJson);
+            } else {
+              setFileContent('// Waiting for manifest data...');
+            }
+          } else {
+            // For legacy JSON format, extract just the manifest part (without file contents)
+            try {
+              const jsonMatch = externalStreamingCode.match(/\{[\s\S]*?"files"\s*:/);
+              if (jsonMatch) {
+                // Show everything up to and including "files": { but not the actual file contents
+                const manifestPart = jsonMatch[0] + ' { /* streaming... */ }';
+                setFileContent(manifestPart);
+              } else {
+                setFileContent(externalStreamingCode.slice(0, 500) + '\n// ...(streaming)');
+              }
+            } catch {
+              setFileContent(externalStreamingCode.slice(0, 500) + '\n// ...(streaming)');
+            }
+          }
         }
       } else {
-        // Still in the manifest header portion
+        // Still in the manifest header portion - show raw streaming data directly
         setStreamingPhase('manifest');
-        // Show a placeholder indicating we're receiving manifest data
-        const manifestPlaceholder = '// Receiving glyph manifest...\n// HTML content will appear shortly...\n\n' + 
-          (glyphName ? `// Glyph: ${glyphName}\n` : '') +
-          `// Received: ${externalStreamingCode.length} chars`;
-        setParsedManifestContent(manifestPlaceholder);
-        setFileContent(manifestPlaceholder);
+        // Show the raw LLM response as-is (it's just manifest data, no file content yet)
+        setFileContent(externalStreamingCode);
       }
     }
-  }, [externalStreamingCode, extractedGlyphName, streamingViewFile, parsedManifestContent]);
+  }, [externalStreamingCode, extractedGlyphName, streamingViewFile]);
   
   // When streaming completes, keep the content but allow glyph selection
   useEffect(() => {
@@ -722,6 +807,17 @@ export default function CodeEditorView({
       setRawStreamingJson('');
     }
   }, [externalStreamingCode, externalIsStreaming]);
+  
+  // Clear selected glyph when starting a new streaming session
+  // This ensures we don't show an old glyph while generating a new one
+  useEffect(() => {
+    if (externalIsStreaming && externalStreamingCode && !initialGlyphId) {
+      // New streaming started - clear any previously selected glyph
+      console.log('[CodeEditorView] 🆕 New streaming session started, clearing selected glyph');
+      setSelectedGlyph(null);
+      setSelectedFile(null);
+    }
+  }, [externalIsStreaming, externalStreamingCode, initialGlyphId]);
   
   // Update preview code LIVE when file content changes or when viewing HTML
   // This provides instant preview feedback without needing to save
@@ -1664,7 +1760,6 @@ export default function CodeEditorView({
                       height: '6px',
                       borderRadius: '50%',
                       background: '#ff00ff',
-                      animation: 'pulse 1s ease-in-out infinite',
                       boxShadow: '0 0 8px rgba(255, 0, 255, 0.5)',
                     }} />
                   )}
@@ -1820,7 +1915,6 @@ export default function CodeEditorView({
                         height: '5px',
                         borderRadius: '50%',
                         background: '#ffc800',
-                        animation: 'pulse 1s ease-in-out infinite',
                       }} />
                       parsing
                     </span>
@@ -1874,7 +1968,6 @@ export default function CodeEditorView({
                         height: '5px',
                         borderRadius: '50%',
                         background: '#ff00ff',
-                        animation: 'pulse 1s ease-in-out infinite',
                       }} />
                       writing
                     </span>
@@ -2358,7 +2451,6 @@ export default function CodeEditorView({
                     boxShadow: streamingPhase === 'complete' 
                       ? '0 0 10px rgba(0, 255, 128, 0.5)' 
                       : '0 0 10px rgba(255, 0, 255, 0.5)',
-                    animation: externalIsStreaming ? 'pulse 1s ease-in-out infinite' : 'none',
                   }} />
                   {extractedGlyphName || (externalIsStreaming ? 'Creating Glyph...' : 'New Glyph')}
                 </span>
@@ -2438,7 +2530,6 @@ export default function CodeEditorView({
                           setExtractedGlyphName('');
                           setRawStreamingJson('');
                           setStreamingViewFile('index.html');
-                          setParsedManifestContent('');
                           // Load chat history
                           const history = await window.loom?.loadGlyphChatHistory?.(targetGlyph.id) || [];
                           setChatMessages(history);
@@ -3378,10 +3469,6 @@ export default function CodeEditorView({
           from { opacity: 0; transform: translateY(10px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        @keyframes pulse {
-          0%, 100% { opacity: 0.6; transform: scale(0.8); }
-          50% { opacity: 1; transform: scale(1.2); }
-        }
         textarea::placeholder {
           color: rgba(255, 255, 255, 0.3);
         }
@@ -3907,7 +3994,6 @@ const styles: Record<string, React.CSSProperties> = {
     height: '6px',
     borderRadius: '50%',
     background: '#ff00ff',
-    animation: 'pulse 1s ease-in-out infinite',
     boxShadow: '0 0 10px rgba(255, 0, 255, 0.5)',
   },
   streamingBadge: {
@@ -3927,7 +4013,6 @@ const styles: Record<string, React.CSSProperties> = {
     height: '5px',
     borderRadius: '50%',
     background: '#ff00ff',
-    animation: 'pulse 1s ease-in-out infinite',
     boxShadow: '0 0 8px rgba(255, 0, 255, 0.6)',
   },
   previewContent: {

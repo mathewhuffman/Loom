@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764394652632-user",
+    "role": "user",
+    "content": "ake a super intuitive and fun piano music widget, capable of looping, etc",
+    "timestamp": 1764394652632,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764394652632-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Neon Loop Piano\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764394652633,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764394652632-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764394652634,
+    "type": "info"
+  }
+]

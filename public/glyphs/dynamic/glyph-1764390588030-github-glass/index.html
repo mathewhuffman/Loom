@@ -1,0 +1,686 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Glass</title>
+    <style>
+        :root {
+            --bg-glass: rgba(13, 17, 23, 0.85);
+            --border-glass: rgba(240, 246, 252, 0.1);
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent: #58a6ff;
+            --success: #238636;
+            --danger: #da3633;
+            --warning: #d29922;
+            --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            font-family: var(--font-stack);
+            color: var(--text-primary);
+            overflow: hidden; /* App handles scrolling */
+            background: transparent;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+
+        #app {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 12px;
+            overflow: hidden;
+            transition: opacity 0.3s ease;
+        }
+
+        /* Header */
+        header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-glass);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(22, 27, 34, 0.9);
+            flex-shrink: 0;
+            height: 56px;
+        }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .breadcrumb span {
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .breadcrumb span:hover { opacity: 1; color: var(--accent); }
+        .breadcrumb span:last-child { cursor: default; opacity: 1; color: var(--text-primary); }
+        .breadcrumb .sep { opacity: 0.3; cursor: default; }
+
+        .refresh-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+        }
+        .refresh-btn:hover { color: var(--accent); background: rgba(255,255,255,0.05); }
+
+        /* Main Content Area */
+        main {
+            flex: 1;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        /* Views */
+        .view {
+            padding: 16px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Dashboard (Repo Home) */
+        .repo-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .repo-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            background: var(--border-glass);
+        }
+        .repo-title h1 { margin: 0; font-size: 20px; }
+        .repo-desc { margin: 4px 0 0; font-size: 13px; color: var(--text-secondary); line-height: 1.4; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-glass);
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-val { font-size: 18px; font-weight: 700; display: block; }
+        .stat-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+
+        .nav-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+        .nav-btn {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-glass);
+            padding: 16px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 600;
+        }
+        .nav-btn:hover {
+            background: rgba(255,255,255,0.08);
+            border-color: var(--accent);
+            transform: translateX(2px);
+        }
+        .nav-icon { margin-right: 12px; }
+
+        /* List View (PRs, Issues) */
+        .list-item {
+            display: flex;
+            gap: 12px;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-glass);
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+        .list-item:hover { background: rgba(255,255,255,0.03); }
+        .list-item:last-child { border-bottom: none; }
+        
+        .item-icon { margin-top: 2px; }
+        .item-content { flex: 1; min-width: 0; }
+        .item-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; line-height: 1.4; }
+        .item-meta { font-size: 12px; color: var(--text-secondary); }
+        
+        .state-open { color: var(--success); }
+        .state-closed { color: #a371f7; } /* Merged purple */
+        .state-closed-issue { color: var(--text-secondary); }
+
+        /* Detail View */
+        .detail-header {
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-glass);
+            margin-bottom: 16px;
+        }
+        .detail-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; line-height: 1.3; }
+        .detail-meta { font-size: 13px; color: var(--text-secondary); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        
+        .badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            border: 1px solid transparent;
+        }
+        .badge.open { background: rgba(35, 134, 54, 0.2); color: #3fb950; border-color: rgba(35, 134, 54, 0.4); }
+        .badge.closed { background: rgba(137, 87, 229, 0.2); color: #a371f7; border-color: rgba(137, 87, 229, 0.4); }
+
+        .markdown-body {
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-primary);
+            word-wrap: break-word;
+        }
+        .markdown-body p { margin-bottom: 12px; }
+        .markdown-body pre { background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; overflow-x: auto; }
+        .markdown-body code { background: rgba(110,118,129,0.4); padding: 2px 4px; border-radius: 4px; font-family: monospace; font-size: 85%; }
+        .markdown-body img { max-width: 100%; border-radius: 4px; }
+
+        .timeline { margin-top: 24px; position: relative; }
+        .timeline::before {
+            content: '';
+            position: absolute;
+            top: 0; bottom: 0; left: 16px;
+            width: 2px;
+            background: var(--border-glass);
+            z-index: 0;
+        }
+        .timeline-item {
+            position: relative;
+            margin-bottom: 24px;
+            padding-left: 48px;
+            z-index: 1;
+        }
+        .timeline-avatar {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-glass);
+        }
+        .timeline-box {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-glass);
+            border-radius: 6px;
+            padding: 12px;
+        }
+        .timeline-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        .timeline-author { font-weight: 600; color: var(--text-primary); }
+
+        /* Loading & Error */
+        .center-msg {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            text-align: center;
+            color: var(--text-secondary);
+            padding: 20px;
+        }
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .error-msg { color: var(--danger); }
+        .config-needed { background: rgba(210, 153, 34, 0.1); border: 1px solid var(--warning); padding: 20px; border-radius: 8px; }
+
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <header>
+        <div class="breadcrumb" id="breadcrumb">
+            <!-- Populated by JS -->
+        </div>
+        <button class="refresh-btn" id="refreshBtn" title="Refresh">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5zM1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834z"/></svg>
+        </button>
+    </header>
+    <main id="mainContent">
+        <!-- Views injected here -->
+    </main>
+</div>
+
+<script type="module">
+    // State
+    const state = {
+        token: null,
+        repo: null,
+        repoData: null,
+        viewStack: [], // Array of { type, data, title }
+        cache: {}
+    };
+
+    const UI = {
+        main: document.getElementById('mainContent'),
+        bread: document.getElementById('breadcrumb'),
+        refresh: document.getElementById('refreshBtn'),
+        app: document.getElementById('app')
+    };
+
+    // Icons
+    const ICONS = {
+        pr: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M7.177 3.073L9.573.677A.25.25 0 0110 .854v4.792a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354zM3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 114.5 0 2.25 2.25 0 01-4.5 0zm2.25 7.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 114.5 0 2.25 2.25 0 01-4.5 0zM8.75 8.75a.75.75 0 100-1.5.75.75 0 000 1.5.75.75 0 000-1.5z"></path><path d="M12 1.75a.75.75 0 01.75-.75h.75a.75.75 0 01.75.75v11.5a.75.75 0 01-.75.75h-.75a.75.75 0 01-.75-.75V1.75zM8.75 1.75a.75.75 0 100-1.5.75.75 0 000 1.5.75.75 0 000-1.5z"></path></svg>',
+        issue: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 9.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm0-9a8 8 0 100 16A8 8 0 008 .5zM1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0z"></path></svg>',
+        action: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0zM8 0a8 8 0 100 16A8 8 0 008 0zM6.379 5.227A.25.25 0 006 5.442v5.117a.25.25 0 00.379.214l4.264-2.559a.25.25 0 000-.428L6.379 5.227z"></path></svg>',
+        fork: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M5 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm0 2.122a2.25 2.25 0 10-1.5 0v.878A2.25 2.25 0 005.75 8.5h1.5v2.128a2.251 2.251 0 101.5 0V8.5h1.5a2.25 2.25 0 002.25-2.25v-.878a2.25 2.25 0 10-1.5 0v.878a.75.75 0 01-.75.75h-4.5A.75.75 0 015 6.25v-.878zm3.75 7.378a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm3-8.75a.75.75 0 100-1.5.75.75 0 000 1.5z"></path></svg>',
+        star: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"></path></svg>'
+    };
+
+    // Utils
+    const sanitize = (str) => {
+        const div = document.createElement('div');
+        div.innerText = str || '';
+        return div.innerHTML;
+    };
+    
+    const formatDate = (dateStr) => {
+        const d = new Date(dateStr);
+        const now = new Date();
+        const diff = (now - d) / 1000;
+        if (diff < 60) return 'just now';
+        if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+        if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+        return d.toLocaleDateString();
+    };
+
+    const renderMarkdown = (text) => {
+        if (!text) return '<i>No description provided.</i>';
+        // Very basic markdown to HTML
+        let html = sanitize(text)
+            .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+            .replace(/`(.*?)`/g, '<code>$1</code>')
+            .replace(/\[(.*?)\]\((.*?)\)/g, '<span style="color:var(--accent); text-decoration:underline;">$1</span>') // No links
+            .replace(/\n/g, '<br>');
+        return html;
+    };
+
+    // API
+    async function api(path) {
+        if (!state.token) throw new Error("No token");
+        const url = `https://api.github.com${path}`;
+        const res = await fetch(url, {
+            headers: {
+                'Authorization': `token ${state.token}`,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.message || res.statusText);
+        }
+        return res.json();
+    }
+
+    // Navigation
+    function pushView(type, data, title) {
+        state.viewStack.push({ type, data, title });
+        render();
+    }
+
+    function popView(index = null) {
+        if (index !== null) {
+            // Pop until index is the last one
+            state.viewStack = state.viewStack.slice(0, index + 1);
+        } else if (state.viewStack.length > 1) {
+            state.viewStack.pop();
+        }
+        render();
+    }
+
+    // Renderers
+    function renderBreadcrumbs() {
+        UI.bread.innerHTML = '';
+        state.viewStack.forEach((view, idx) => {
+            const span = document.createElement('span');
+            span.innerText = view.title;
+            span.onclick = () => popView(idx);
+            UI.bread.appendChild(span);
+
+            if (idx < state.viewStack.length - 1) {
+                const sep = document.createElement('span');
+                sep.className = 'sep';
+                sep.innerText = '/';
+                UI.bread.appendChild(sep);
+            }
+        });
+    }
+
+    function renderLoading() {
+        UI.main.innerHTML = `<div class="center-msg"><div class="spinner"></div>Loading...</div>`;
+    }
+
+    function renderError(msg) {
+        UI.main.innerHTML = `<div class="center-msg error-msg">⚠️ ${sanitize(msg)}</div>`;
+    }
+
+    async function loadRepo() {
+        renderLoading();
+        try {
+            const data = await api(`/repos/${state.repo}`);
+            state.repoData = data;
+            state.viewStack = [{ type: 'home', data, title: data.name }];
+            render();
+        } catch (e) {
+            renderError(e.message);
+        }
+    }
+
+    async function loadList(type) {
+        renderLoading();
+        try {
+            let path = `/repos/${state.repo}`;
+            let title = '';
+            if (type === 'pr') { path += '/pulls?state=all&per_page=20'; title = 'Pull Requests'; }
+            if (type === 'issue') { path += '/issues?state=all&per_page=20'; title = 'Issues'; }
+            if (type === 'action') { path += '/actions/runs?per_page=20'; title = 'Actions'; }
+
+            const data = await api(path);
+            const items = type === 'action' ? data.workflow_runs : data;
+            
+            // Filter out PRs from issue list (GitHub API returns PRs in issues endpoint)
+            const filtered = type === 'issue' ? items.filter(i => !i.pull_request) : items;
+
+            pushView('list', { type, items: filtered }, title);
+        } catch (e) {
+            renderError(e.message);
+            setTimeout(() => popView(), 2000); // Auto back on error
+        }
+    }
+
+    async function loadDetail(item, type) {
+        // If it's a PR or Issue, we might want comments
+        renderLoading();
+        try {
+            let comments = [];
+            if (type === 'pr' || type === 'issue') {
+                const commentsUrl = item.comments_url; // API url provided in item
+                // Need to strip base to use our api wrapper easily or just use full url
+                // Our api wrapper expects path relative to api root
+                const path = commentsUrl.replace('https://api.github.com', '');
+                comments = await api(path);
+            }
+            
+            pushView('detail', { item, type, comments }, `#${item.number || item.id}`);
+        } catch (e) {
+            renderError(e.message);
+            setTimeout(() => popView(), 2000);
+        }
+    }
+
+    function renderHome(data) {
+        const html = `
+            <div class="view">
+                <div class="repo-header">
+                    <img src="${data.owner.avatar_url}" class="repo-avatar" />
+                    <div class="repo-title">
+                        <h1>${sanitize(data.full_name)}</h1>
+                        <p class="repo-desc">${sanitize(data.description)}</p>
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-val" style="color:#e3b341">${data.stargazers_count}</span>
+                        <span class="stat-label">Stars</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-val" style="color:#a371f7">${data.forks_count}</span>
+                        <span class="stat-label">Forks</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-val" style="color:#3fb950">${data.open_issues_count}</span>
+                        <span class="stat-label">Open Issues</span>
+                    </div>
+                </div>
+
+                <div class="nav-grid">
+                    <div class="nav-btn" onclick="window.app.loadList('pr')">
+                        <div style="display:flex;align-items:center;">
+                            <span class="nav-icon" style="color:#3fb950">${ICONS.pr}</span>
+                            Pull Requests
+                        </div>
+                        <span>→</span>
+                    </div>
+                    <div class="nav-btn" onclick="window.app.loadList('issue')">
+                        <div style="display:flex;align-items:center;">
+                            <span class="nav-icon" style="color:#e3b341">${ICONS.issue}</span>
+                            Issues
+                        </div>
+                        <span>→</span>
+                    </div>
+                    <div class="nav-btn" onclick="window.app.loadList('action')">
+                        <div style="display:flex;align-items:center;">
+                            <span class="nav-icon" style="color:#79c0ff">${ICONS.action}</span>
+                            Actions
+                        </div>
+                        <span>→</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        UI.main.innerHTML = html;
+    }
+
+    function renderList(viewData) {
+        const { type, items } = viewData;
+        const container = document.createElement('div');
+        container.className = 'view';
+        
+        if (items.length === 0) {
+            container.innerHTML = `<div class="center-msg">No items found.</div>`;
+            UI.main.innerHTML = '';
+            UI.main.appendChild(container);
+            return;
+        }
+
+        items.forEach(item => {
+            const el = document.createElement('div');
+            el.className = 'list-item';
+            
+            let icon = '';
+            let stateClass = '';
+            
+            if (type === 'action') {
+                icon = ICONS.action;
+                stateClass = item.conclusion === 'success' ? 'state-open' : 'state-closed'; // Reuse colors
+            } else {
+                icon = type === 'pr' ? ICONS.pr : ICONS.issue;
+                stateClass = item.state === 'open' ? 'state-open' : (type==='issue'?'state-closed-issue':'state-closed');
+            }
+
+            el.innerHTML = `
+                <div class="item-icon ${stateClass}">${icon}</div>
+                <div class="item-content">
+                    <div class="item-title">${sanitize(item.title || item.name)}</div>
+                    <div class="item-meta">
+                        #${item.number || item.id} • 
+                        ${sanitize(item.user?.login || item.actor?.login)} • 
+                        ${formatDate(item.created_at)}
+                    </div>
+                </div>
+            `;
+            
+            // Actions don't have detail view in this simple version unless we parse logs
+            if (type !== 'action') {
+                el.onclick = () => loadDetail(item, type);
+            }
+            container.appendChild(el);
+        });
+
+        UI.main.innerHTML = '';
+        UI.main.appendChild(container);
+    }
+
+    function renderDetail(viewData) {
+        const { item, type, comments } = viewData;
+        const container = document.createElement('div');
+        container.className = 'view';
+
+        const stateBadges = `
+            <span class="badge ${item.state}">${item.state}</span>
+            ${item.merged_at ? '<span class="badge closed">merged</span>' : ''}
+        `;
+
+        const commentsHtml = comments.map(c => `
+            <div class="timeline-item">
+                <img src="${c.user.avatar_url}" class="timeline-avatar" title="${c.user.login}">
+                <div class="timeline-box">
+                    <div class="timeline-header">
+                        <span class="timeline-author">${sanitize(c.user.login)}</span>
+                        <span>${formatDate(c.created_at)}</span>
+                    </div>
+                    <div class="markdown-body">${renderMarkdown(c.body)}</div>
+                </div>
+            </div>
+        `).join('');
+
+        container.innerHTML = `
+            <div class="detail-header">
+                <div class="detail-title">
+                    ${sanitize(item.title)} <span style="color:var(--text-secondary);font-weight:400">#${item.number}</span>
+                </div>
+                <div class="detail-meta">
+                    ${stateBadges}
+                    <span>${sanitize(item.user.login)} opened ${formatDate(item.created_at)}</span>
+                </div>
+            </div>
+            
+            <div class="timeline">
+                <!-- Main Body -->
+                <div class="timeline-item">
+                    <img src="${item.user.avatar_url}" class="timeline-avatar" title="${item.user.login}">
+                    <div class="timeline-box">
+                        <div class="timeline-header">
+                            <span class="timeline-author">${sanitize(item.user.login)}</span>
+                            <span>commented ${formatDate(item.created_at)}</span>
+                        </div>
+                        <div class="markdown-body">${renderMarkdown(item.body)}</div>
+                    </div>
+                </div>
+                <!-- Comments -->
+                ${commentsHtml}
+            </div>
+        `;
+
+        UI.main.innerHTML = '';
+        UI.main.appendChild(container);
+    }
+
+    function render() {
+        renderBreadcrumbs();
+        const current = state.viewStack[state.viewStack.length - 1];
+        if (!current) return;
+
+        if (current.type === 'home') renderHome(current.data);
+        else if (current.type === 'list') renderList(current.data);
+        else if (current.type === 'detail') renderDetail(current.data);
+    }
+
+    // Initialization
+    function init() {
+        const inputs = window.GLYPH_INPUTS || {};
+        state.token = inputs.githubToken;
+        state.repo = inputs.repository || 'facebook/react';
+        
+        // Apply theme color
+        if (inputs.themeColor) {
+            document.documentElement.style.setProperty('--accent', inputs.themeColor);
+        }
+
+        if (!state.token) {
+            UI.main.innerHTML = `
+                <div class="center-msg">
+                    <div class="config-needed">
+                        <h3>Configuration Required</h3>
+                        <p>Please add your GitHub Personal Access Token in the glyph settings to access repository data.</p>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+
+        // Expose for onclick handlers
+        window.app = {
+            loadList
+        };
+
+        UI.refresh.onclick = () => {
+            if (state.viewStack.length === 0) loadRepo();
+            else {
+                // Reload current view
+                const current = state.viewStack[state.viewStack.length - 1];
+                if (current.type === 'home') loadRepo();
+                else if (current.type === 'list') loadList(current.data.type);
+                else if (current.type === 'detail') loadDetail(current.data.item, current.data.type);
+            }
+        };
+
+        loadRepo();
+    }
+
+    // Start
+    init();
+
+</script>
+</body>
+</html>

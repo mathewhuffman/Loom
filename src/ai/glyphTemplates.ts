@@ -11,7 +11,7 @@ RULES FOR index.html:
 3. Use inline CSS and <script type="module">; no React, no bundlers.
 4. You may import modules from HTTPS CDNs (e.g., https://esm.sh/three@0.168.0).
 5. Fill the viewport for "background" glyphs; keep objects/hud responsive (600–900px areas).
-7. If interactivity is requested, add real event listeners with cleanup and animate elements accordingly.
+6. If interactivity is requested, add real event listeners with cleanup and animate elements accordingly.
 
 📂 FILE SYSTEM ACCESS (window.loom APIs):
 Glyphs can read local files using these APIs:
@@ -24,6 +24,12 @@ Example:
   if (result.success) console.log(result.content);
 
 DO NOT use fetch() for local files - use window.loom.readLocalFile() instead.
+
+🚫 SANDBOX CONSTRAINTS:
+- NEVER use window.open() or open new browser windows/tabs
+- NEVER use target="_blank" links or any navigation outside the iframe
+- All functionality MUST render inside the iframe boundaries
+- Display external URLs as copyable text, not clickable links
 
 EXAMPLE SNIPPET:
 <!DOCTYPE html>
@@ -47,7 +53,6 @@ Create a standalone HTML/CSS/JS glyph for: "${userRequest}"
 Requirements:
 - Output a JSON manifest with entry "index.html".
 - The HTML must be complete (doctype, head, styles, body) and self-contained.
-- Use neon cyberpunk aesthetics with animated motion/particles.
 - Import Three.js or other libs via HTTPS CDNs if needed.
 - Keep the experience responsive to iframe resizing.
 
@@ -100,9 +105,9 @@ export const QUICK_GLYPH_TEMPLATES: Record<string, string> = {
       .cube span {
         position: absolute;
         inset: 0;
-        border: 2px solid rgba(0,255,255,0.6);
+        border: 2px solid rgba(100, 149, 237, 0.6);
         border-radius: 18px;
-        box-shadow: 0 0 25px rgba(255, 0, 255, 0.45);
+        box-shadow: 0 0 25px rgba(65, 105, 225, 0.45);
       }
       .cube span:nth-child(2) { transform: rotateY(90deg); }
       .cube span:nth-child(3) { transform: rotateX(90deg); }
@@ -125,7 +130,7 @@ export const QUICK_GLYPH_TEMPLATES: Record<string, string> = {
   <head>
     <meta charset="UTF-8" />
     <style>
-      html, body { margin:0; height:100%; background:#03010b; }
+      html, body { margin:0; height:100%; background:#0a0a12; }
       canvas { width:100%; height:100%; display:block; }
     </style>
   </head>
@@ -134,11 +139,12 @@ export const QUICK_GLYPH_TEMPLATES: Record<string, string> = {
     <script>
       const canvas = document.getElementById('storm');
       const ctx = canvas.getContext('2d');
+      const colors = ['#f4a261', '#e76f51', '#2a9d8f', '#264653', '#e9c46a'];
       const particles = Array.from({ length: 350 }, () => ({
         x: Math.random(),
         y: Math.random(),
         z: Math.random(),
-        color: Math.random() > 0.5 ? '#ff00ff' : '#00ffff'
+        color: colors[Math.floor(Math.random() * colors.length)]
       }));
 
       function resize() {
@@ -149,7 +155,7 @@ export const QUICK_GLYPH_TEMPLATES: Record<string, string> = {
       resize();
 
       function render(time) {
-        ctx.fillStyle = 'rgba(3, 1, 11, 0.3)';
+        ctx.fillStyle = 'rgba(10, 10, 18, 0.3)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         particles.forEach(p => {

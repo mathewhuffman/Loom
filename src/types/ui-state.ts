@@ -1,4 +1,52 @@
 export type WidgetLayer = 'foreground' | 'background';
+export type ChatMode = 'chat' | 'summon';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 💬 CHAT HISTORY — Persistent conversation storage
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface GlyphEmbedData {
+  code: string;
+  glyphId: string;
+  glyphName: string;
+}
+
+export interface ChatGlyphAttachment {
+  attachmentId: string;
+  glyphId: string;
+  name: string;
+  icon?: string;
+  llmPayload: string;
+  previewHtml?: string;
+  attachedAt: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+  isSummoning?: boolean;
+  glyphId?: string;
+  glyphEmbed?: GlyphEmbedData; // Inline glyph preview embed data
+  glyphAttachments?: ChatGlyphAttachment[];
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: number;
+  updatedAt: number;
+  model?: string;
+  mode?: 'chat' | 'summon';
+}
+
+export interface ChatHistoryState {
+  conversations: ChatConversation[];
+  activeConversationId?: string;
+  sidebarCollapsed?: boolean;
+}
 
 export interface PersistedWidgetState {
   id: string;
@@ -22,6 +70,9 @@ export interface LoomPanelState {
   position?: { top: number; left: number };
   navCollapsed?: boolean;
   activeSection?: NavSection;
+  chatLLM?: string;        // LLM for chat conversations
+  generationLLM?: string;  // LLM for glyph generation
+  chatMode?: ChatMode;
 }
 
 export interface CodeEditorState {
@@ -62,6 +113,7 @@ export interface BackgroundUiState {
 export interface LoomUIState {
   overlay?: OverlayUiState;
   background?: BackgroundUiState;
+  chatHistory?: ChatHistoryState;
 }
 
 export type LoomUiStatePatch = Partial<LoomUIState>;

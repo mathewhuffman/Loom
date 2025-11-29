@@ -1,0 +1,219 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parallax Boxes</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+        canvas { display: block; width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('glcanvas');
+        const gl = canvas.getContext('webgl2');
+
+        if (!gl) {
+            document.body.innerHTML = '<div style="color:white; padding:20px;">WebGL 2 is not supported in this browser.</div>';
+            throw new Error('WebGL 2 not supported');
+        }
+
+        // --- Shader Sources ---
+
+        const vsSource = `#version 300 es
+        in vec4 aVertexPosition;
+        void main() {
+            gl_Position = aVertexPosition;
+        }`;
+
+        const fsSource = `#version 300 es
+        precision highp float;
+
+        uniform vec3 iResolution;
+        uniform float iTime;
+        uniform vec2 iMouse;
+        uniform float uFov;
+
+        out vec4 fragColor;
+
+        // --- SDF Functions ---
+
+        float sdBox( vec3 p, vec3 b ) {
+            vec3 q = abs(p) - b;
+            return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0);
+        }
+
+        vec3 opRep( in vec3 p, in vec3 c, in vec3 l) {
+            return p - c * clamp(round(p/c), -l, l);
+        }
+
+        float map(vec3 p) {
+            p.z += 5.0;
+            p = opRep(p, vec3(4.0), vec3(1.0));
+            return sdBox(p, vec3(1.0));
+        }
+
+        vec3 calcNormal( in vec3 p ) {
+            const float h = 1e-5;
+            const vec2 k = vec2(1,-1);
+            return normalize( k.xyy*map( p + k.xyy*h ) + 
+                              k.yyx*map( p + k.yyx*h ) + 
+                              k.yxy*map( p + k.yxy*h ) + 
+                              k.xxx*map( p + k.xxx*h ) );
+        }
+
+        void main() {
+            vec2 uv = gl_FragCoord.xy / iResolution.xy;
+            float ratio = iResolution.x / iResolution.y;
+            
+            // Mouse interaction for parallax
+            vec2 mouseOffset = (iMouse.xy / iResolution.xy - 0.5) * 2.0;
+            // Dampen mouse effect slightly
+            mouseOffset *= 2.0;
+
+            // Orthographic ray origin based on UV
+            // uFov controls the scale (default 6.0 in original)
+            vec3 rayOri = vec3((uv - 0.5) * vec2(ratio, 1.0) * uFov, 3.0);
+            
+            // Apply mouse parallax shift to origin
+            rayOri.xy += mouseOffset;
+
+            vec3 rayDir = vec3(0.0, 0.0, -1.0);
+            float maxDepth = 20.0; // Increased slightly from 6.0 to prevent premature clipping
+            
+            float depth = 0.0;
+            vec3 p;
+            
+            // Raymarching loop
+            for(int i = 0; i < 64; i++) {
+                p = rayOri + rayDir * depth;
+                float dist = map(p);
+                depth += dist;
+                if (dist < 1e-6) {
+                    break;
+                }
+                if (depth > maxDepth) break;
+            }
+            
+            depth = min(maxDepth, depth);
+            vec3 n = calcNormal(p);
+            float b = max(0.0, dot(n, vec3(0.577)));
+            
+            // Coloring
+            // Note: iTime is multiplied by speed in JS, so here we just use it
+            vec3 col = (0.5 + 0.5 * cos((b + iTime * 3.0) + uv.xyx * 2.0 + vec3(0,2,4))) * (0.85 + b * 0.35);
+            
+            // Fog / Depth falloff
+            col *= exp( -depth / 6.0 ); // Keeping original falloff logic (6.0)
+            
+            // Alpha/Thickness logic from original
+            float alpha = 1.0 - (depth - 0.5) / 2.0;
+            
+            fragColor = vec4(col, 1.0);
+        }`;
+
+        // --- WebGL Boilerplate ---
+
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+        const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Program link error:', gl.getProgramInfoLog(program));
+        }
+
+        // Attributes & Uniforms
+        const positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        const positions = [
+            -1.0,  1.0,
+             1.0,  1.0,
+            -1.0, -1.0,
+             1.0, -1.0,
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+        const aVertexPosition = gl.getAttribLocation(program, 'aVertexPosition');
+        gl.enableVertexAttribArray(aVertexPosition);
+        gl.vertexAttribPointer(aVertexPosition, 2, gl.FLOAT, false, 0, 0);
+
+        gl.useProgram(program);
+
+        const uResolution = gl.getUniformLocation(program, 'iResolution');
+        const uTime = gl.getUniformLocation(program, 'iTime');
+        const uMouse = gl.getUniformLocation(program, 'iMouse');
+        const uFov = gl.getUniformLocation(program, 'uFov');
+
+        // State
+        let mouseX = 0;
+        let mouseY = 0;
+        let time = 0;
+        let lastTime = performance.now();
+
+        // Inputs
+        const inputs = window.GLYPH_INPUTS || {};
+        let speed = inputs.speed !== undefined ? inputs.speed : 1.0;
+        let fov = inputs.fov !== undefined ? inputs.fov : 6.0;
+
+        // Resize handler
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.uniform3f(uResolution, canvas.width, canvas.height, 1.0);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Mouse handler
+        window.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = canvas.height - e.clientY; // Flip Y for GLSL
+        });
+
+        // Animation Loop
+        function render(now) {
+            const dt = (now - lastTime) / 1000;
+            lastTime = now;
+
+            // Update inputs dynamically if they change (in a real environment inputs might update)
+            // For this standalone glyph, we just read initial values, but let's check window.GLYPH_INPUTS if it updates
+            if (window.GLYPH_INPUTS) {
+                if (window.GLYPH_INPUTS.speed !== undefined) speed = window.GLYPH_INPUTS.speed;
+                if (window.GLYPH_INPUTS.fov !== undefined) fov = window.GLYPH_INPUTS.fov;
+            }
+
+            time += dt * speed;
+
+            gl.uniform1f(uTime, time);
+            gl.uniform2f(uMouse, mouseX, mouseY);
+            gl.uniform1f(uFov, fov);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            requestAnimationFrame(render);
+        }
+
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>

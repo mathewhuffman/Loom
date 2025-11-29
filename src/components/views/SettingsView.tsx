@@ -20,6 +20,17 @@ interface StoredKey {
   updatedAt: number;
 }
 
+interface LlmApiKeyStatus {
+  configured: boolean;
+  masked: string | null;
+}
+
+interface LlmApiKeysStatus {
+  grok: LlmApiKeyStatus;
+  gemini: LlmApiKeyStatus;
+  openai: LlmApiKeyStatus;
+}
+
 interface SettingsViewProps {
   onClose?: () => void;
 }
@@ -41,7 +52,19 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   
+  // LLM API Keys state
+  const [llmApiKeys, setLlmApiKeys] = useState<LlmApiKeysStatus>({
+    grok: { configured: false, masked: null },
+    gemini: { configured: false, masked: null },
+    openai: { configured: false, masked: null },
+  });
+  const [editingLlmKey, setEditingLlmKey] = useState<'grok' | 'gemini' | 'openai' | null>(null);
+  const [newLlmKeyValue, setNewLlmKeyValue] = useState('');
+  const [llmSaveStatus, setLlmSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [showLlmDeleteConfirm, setShowLlmDeleteConfirm] = useState<'grok' | 'gemini' | 'openai' | null>(null);
+  
   const inputRef = useRef<HTMLInputElement>(null);
+  const llmInputRef = useRef<HTMLInputElement>(null);
 
   // Entrance animation
   useEffect(() => {
@@ -49,9 +72,10 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     return () => clearTimeout(timer);
   }, []);
 
-  // Load stored keys on mount
+  // Load stored keys and LLM API keys on mount
   useEffect(() => {
     loadStoredKeys();
+    loadLlmApiKeys();
   }, []);
 
   const loadStoredKeys = useCallback(async () => {
@@ -62,6 +86,17 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
       }
     } catch (err) {
       console.error('[Settings] Failed to load keys:', err);
+    }
+  }, []);
+
+  const loadLlmApiKeys = useCallback(async () => {
+    try {
+      const result = await (window as any).loom?.getLlmApiKeysStatus?.();
+      if (result?.success && result.keys) {
+        setLlmApiKeys(result.keys);
+      }
+    } catch (err) {
+      console.error('[Settings] Failed to load LLM API keys:', err);
     }
   }, []);
 
@@ -141,6 +176,63 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     setNewKeyCategory('api');
   }, []);
 
+  // LLM API Key handlers
+  const handleSaveLlmKey = useCallback(async () => {
+    if (!editingLlmKey || !newLlmKeyValue.trim()) return;
+
+    setLlmSaveStatus('saving');
+    try {
+      const result = await (window as any).loom?.saveLlmApiKey?.(editingLlmKey, newLlmKeyValue.trim());
+      
+      if (result?.success) {
+        // Reload to get new masked value
+        await loadLlmApiKeys();
+        setEditingLlmKey(null);
+        setNewLlmKeyValue('');
+        setLlmSaveStatus('saved');
+        setTimeout(() => setLlmSaveStatus('idle'), 2000);
+      } else {
+        console.error('[Settings] Failed to save LLM API key:', result?.error);
+        setLlmSaveStatus('error');
+        setTimeout(() => setLlmSaveStatus('idle'), 3000);
+      }
+    } catch (err) {
+      console.error('[Settings] Failed to save LLM API key:', err);
+      setLlmSaveStatus('error');
+      setTimeout(() => setLlmSaveStatus('idle'), 3000);
+    }
+  }, [editingLlmKey, newLlmKeyValue, loadLlmApiKeys]);
+
+  const handleDeleteLlmKey = useCallback(async (provider: 'grok' | 'gemini' | 'openai') => {
+    try {
+      const result = await (window as any).loom?.deleteLlmApiKey?.(provider);
+      
+      if (result?.success) {
+        // Update local state
+        setLlmApiKeys(prev => ({
+          ...prev,
+          [provider]: { configured: false, masked: null },
+        }));
+        setShowLlmDeleteConfirm(null);
+      } else {
+        console.error('[Settings] Failed to delete LLM API key:', result?.error);
+      }
+    } catch (err) {
+      console.error('[Settings] Failed to delete LLM API key:', err);
+    }
+  }, []);
+
+  const handleEditLlmKey = useCallback((provider: 'grok' | 'gemini' | 'openai') => {
+    setEditingLlmKey(provider);
+    setNewLlmKeyValue('');
+    setTimeout(() => llmInputRef.current?.focus(), 100);
+  }, []);
+
+  const handleCancelLlmEdit = useCallback(() => {
+    setEditingLlmKey(null);
+    setNewLlmKeyValue('');
+  }, []);
+
   const tabs: Array<{ id: SettingsTab; icon: string; label: string }> = [
     { id: 'general', icon: '⚡', label: 'General' },
     { id: 'keys', icon: '🔐', label: 'Keys' },
@@ -197,11 +289,272 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
         {/* ═══════════════════════════════════════════════════════════════════ */}
         {activeTab === 'keys' && (
           <div style={styles.keysContainer}>
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* LLM API KEYS SECTION */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            <div style={styles.llmSection}>
+              <div style={styles.keysHeader}>
+                <div>
+                  <h3 style={styles.sectionTitle}>🤖 AI Provider API Keys</h3>
+                  <p style={styles.sectionDescription}>
+                    Configure your API keys for AI providers. These power glyph generation and chat.
+                    Keys are encrypted with Windows DPAPI and never leave your machine.
+                  </p>
+                </div>
+              </div>
+
+              <div style={styles.llmKeysList}>
+                {/* Grok/xAI */}
+                <div style={styles.llmKeyCard}>
+                  <div style={styles.llmKeyLeft}>
+                    <span style={styles.llmKeyIcon}>⚡</span>
+                    <div style={styles.llmKeyInfo}>
+                      <span style={styles.llmKeyName}>Grok (xAI)</span>
+                      <span style={styles.llmKeyDescription}>Fast and capable, great for glyph generation</span>
+                    </div>
+                  </div>
+                  <div style={styles.llmKeyRight}>
+                    {editingLlmKey === 'grok' ? (
+                      <div style={styles.llmKeyEditForm}>
+                        <input
+                          ref={llmInputRef}
+                          type="password"
+                          value={newLlmKeyValue}
+                          onChange={(e) => setNewLlmKeyValue(e.target.value)}
+                          placeholder="Enter Grok API key..."
+                          style={styles.llmKeyInput}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveLlmKey();
+                            if (e.key === 'Escape') handleCancelLlmEdit();
+                          }}
+                        />
+                        <button
+                          style={styles.llmKeySaveBtn}
+                          onClick={handleSaveLlmKey}
+                          disabled={!newLlmKeyValue.trim() || llmSaveStatus === 'saving'}
+                        >
+                          {llmSaveStatus === 'saving' ? '⏳' : '✓'}
+                        </button>
+                        <button style={styles.llmKeyCancelBtn} onClick={handleCancelLlmEdit}>✕</button>
+                      </div>
+                    ) : (
+                      <>
+                        <span style={{
+                          ...styles.llmKeyStatus,
+                          color: llmApiKeys.grok.configured ? '#00ff88' : 'rgba(255, 255, 255, 0.3)',
+                        }}>
+                          {llmApiKeys.grok.configured ? (
+                            <>{llmApiKeys.grok.masked}</>
+                          ) : (
+                            'Not configured'
+                          )}
+                        </span>
+                        <div style={styles.llmKeyActions}>
+                          <button
+                            style={styles.keyActionBtn}
+                            onClick={() => handleEditLlmKey('grok')}
+                            title={llmApiKeys.grok.configured ? 'Update key' : 'Add key'}
+                          >
+                            {llmApiKeys.grok.configured ? '✏️' : '➕'}
+                          </button>
+                          {llmApiKeys.grok.configured && (
+                            <button
+                              style={{ ...styles.keyActionBtn, ...styles.deleteBtn }}
+                              onClick={() => setShowLlmDeleteConfirm('grok')}
+                              title="Delete key"
+                            >
+                              🗑️
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {showLlmDeleteConfirm === 'grok' && (
+                    <div style={styles.deleteConfirm}>
+                      <span>Delete Grok API key?</span>
+                      <div style={styles.deleteConfirmActions}>
+                        <button style={styles.deleteConfirmNo} onClick={() => setShowLlmDeleteConfirm(null)}>Cancel</button>
+                        <button style={styles.deleteConfirmYes} onClick={() => handleDeleteLlmKey('grok')}>Delete</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Gemini/Google */}
+                <div style={styles.llmKeyCard}>
+                  <div style={styles.llmKeyLeft}>
+                    <span style={styles.llmKeyIcon}>✨</span>
+                    <div style={styles.llmKeyInfo}>
+                      <span style={styles.llmKeyName}>Gemini (Google)</span>
+                      <span style={styles.llmKeyDescription}>Google's multimodal AI, excellent reasoning</span>
+                    </div>
+                  </div>
+                  <div style={styles.llmKeyRight}>
+                    {editingLlmKey === 'gemini' ? (
+                      <div style={styles.llmKeyEditForm}>
+                        <input
+                          ref={editingLlmKey === 'gemini' ? llmInputRef : undefined}
+                          type="password"
+                          value={newLlmKeyValue}
+                          onChange={(e) => setNewLlmKeyValue(e.target.value)}
+                          placeholder="Enter Gemini API key..."
+                          style={styles.llmKeyInput}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveLlmKey();
+                            if (e.key === 'Escape') handleCancelLlmEdit();
+                          }}
+                        />
+                        <button
+                          style={styles.llmKeySaveBtn}
+                          onClick={handleSaveLlmKey}
+                          disabled={!newLlmKeyValue.trim() || llmSaveStatus === 'saving'}
+                        >
+                          {llmSaveStatus === 'saving' ? '⏳' : '✓'}
+                        </button>
+                        <button style={styles.llmKeyCancelBtn} onClick={handleCancelLlmEdit}>✕</button>
+                      </div>
+                    ) : (
+                      <>
+                        <span style={{
+                          ...styles.llmKeyStatus,
+                          color: llmApiKeys.gemini.configured ? '#00ff88' : 'rgba(255, 255, 255, 0.3)',
+                        }}>
+                          {llmApiKeys.gemini.configured ? (
+                            <>{llmApiKeys.gemini.masked}</>
+                          ) : (
+                            'Not configured'
+                          )}
+                        </span>
+                        <div style={styles.llmKeyActions}>
+                          <button
+                            style={styles.keyActionBtn}
+                            onClick={() => handleEditLlmKey('gemini')}
+                            title={llmApiKeys.gemini.configured ? 'Update key' : 'Add key'}
+                          >
+                            {llmApiKeys.gemini.configured ? '✏️' : '➕'}
+                          </button>
+                          {llmApiKeys.gemini.configured && (
+                            <button
+                              style={{ ...styles.keyActionBtn, ...styles.deleteBtn }}
+                              onClick={() => setShowLlmDeleteConfirm('gemini')}
+                              title="Delete key"
+                            >
+                              🗑️
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {showLlmDeleteConfirm === 'gemini' && (
+                    <div style={styles.deleteConfirm}>
+                      <span>Delete Gemini API key?</span>
+                      <div style={styles.deleteConfirmActions}>
+                        <button style={styles.deleteConfirmNo} onClick={() => setShowLlmDeleteConfirm(null)}>Cancel</button>
+                        <button style={styles.deleteConfirmYes} onClick={() => handleDeleteLlmKey('gemini')}>Delete</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* OpenAI */}
+                <div style={styles.llmKeyCard}>
+                  <div style={styles.llmKeyLeft}>
+                    <span style={styles.llmKeyIcon}>🧠</span>
+                    <div style={styles.llmKeyInfo}>
+                      <span style={styles.llmKeyName}>OpenAI</span>
+                      <span style={styles.llmKeyDescription}>GPT models, reliable and versatile</span>
+                    </div>
+                  </div>
+                  <div style={styles.llmKeyRight}>
+                    {editingLlmKey === 'openai' ? (
+                      <div style={styles.llmKeyEditForm}>
+                        <input
+                          ref={editingLlmKey === 'openai' ? llmInputRef : undefined}
+                          type="password"
+                          value={newLlmKeyValue}
+                          onChange={(e) => setNewLlmKeyValue(e.target.value)}
+                          placeholder="Enter OpenAI API key..."
+                          style={styles.llmKeyInput}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveLlmKey();
+                            if (e.key === 'Escape') handleCancelLlmEdit();
+                          }}
+                        />
+                        <button
+                          style={styles.llmKeySaveBtn}
+                          onClick={handleSaveLlmKey}
+                          disabled={!newLlmKeyValue.trim() || llmSaveStatus === 'saving'}
+                        >
+                          {llmSaveStatus === 'saving' ? '⏳' : '✓'}
+                        </button>
+                        <button style={styles.llmKeyCancelBtn} onClick={handleCancelLlmEdit}>✕</button>
+                      </div>
+                    ) : (
+                      <>
+                        <span style={{
+                          ...styles.llmKeyStatus,
+                          color: llmApiKeys.openai.configured ? '#00ff88' : 'rgba(255, 255, 255, 0.3)',
+                        }}>
+                          {llmApiKeys.openai.configured ? (
+                            <>{llmApiKeys.openai.masked}</>
+                          ) : (
+                            'Not configured'
+                          )}
+                        </span>
+                        <div style={styles.llmKeyActions}>
+                          <button
+                            style={styles.keyActionBtn}
+                            onClick={() => handleEditLlmKey('openai')}
+                            title={llmApiKeys.openai.configured ? 'Update key' : 'Add key'}
+                          >
+                            {llmApiKeys.openai.configured ? '✏️' : '➕'}
+                          </button>
+                          {llmApiKeys.openai.configured && (
+                            <button
+                              style={{ ...styles.keyActionBtn, ...styles.deleteBtn }}
+                              onClick={() => setShowLlmDeleteConfirm('openai')}
+                              title="Delete key"
+                            >
+                              🗑️
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {showLlmDeleteConfirm === 'openai' && (
+                    <div style={styles.deleteConfirm}>
+                      <span>Delete OpenAI API key?</span>
+                      <div style={styles.deleteConfirmActions}>
+                        <button style={styles.deleteConfirmNo} onClick={() => setShowLlmDeleteConfirm(null)}>Cancel</button>
+                        <button style={styles.deleteConfirmYes} onClick={() => handleDeleteLlmKey('openai')}>Delete</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {llmSaveStatus === 'saved' && (
+                <div style={styles.statusMessage}>✅ API key saved securely!</div>
+              )}
+              {llmSaveStatus === 'error' && (
+                <div style={{ ...styles.statusMessage, color: '#ff4444' }}>❌ Failed to save API key</div>
+              )}
+            </div>
+
+            {/* Divider between sections */}
+            <div style={styles.sectionDivider} />
+
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* GLYPH KEYS SECTION (existing) */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
             <div style={styles.keysHeader}>
               <div>
-                <h3 style={styles.sectionTitle}>🔐 Secure Key Storage</h3>
+                <h3 style={styles.sectionTitle}>🔐 Glyph Credentials Vault</h3>
                 <p style={styles.sectionDescription}>
-                  Store API keys, tokens, and credentials securely encrypted on your system.
+                  Store API keys, tokens, and credentials for use in your glyphs.
                   Only key names are shared with AI — never the actual values.
                 </p>
               </div>
@@ -669,6 +1022,123 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: '16px',
+  },
+
+  // LLM API Keys Section
+  llmSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
+  llmKeysList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  llmKeyCard: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '16px 20px',
+    background: 'linear-gradient(135deg, rgba(0, 255, 200, 0.03), rgba(255, 0, 255, 0.02))',
+    border: '1px solid rgba(0, 255, 200, 0.15)',
+    borderRadius: '12px',
+    transition: 'all 0.2s ease',
+    position: 'relative',
+  },
+  llmKeyLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+  },
+  llmKeyIcon: {
+    fontSize: '28px',
+    width: '48px',
+    height: '48px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(0, 255, 200, 0.1)',
+    borderRadius: '12px',
+  },
+  llmKeyInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  llmKeyName: {
+    fontSize: '15px',
+    fontWeight: 600,
+    color: '#ffffff',
+  },
+  llmKeyDescription: {
+    fontSize: '12px',
+    color: 'rgba(255, 255, 255, 0.5)',
+  },
+  llmKeyRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  llmKeyStatus: {
+    fontSize: '13px',
+    fontFamily: 'monospace',
+    letterSpacing: '0.5px',
+  },
+  llmKeyActions: {
+    display: 'flex',
+    gap: '8px',
+  },
+  llmKeyEditForm: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  llmKeyInput: {
+    padding: '10px 14px',
+    background: 'rgba(0, 0, 0, 0.4)',
+    border: '1px solid rgba(0, 255, 200, 0.3)',
+    borderRadius: '8px',
+    color: '#ffffff',
+    fontSize: '13px',
+    fontFamily: 'monospace',
+    width: '240px',
+    outline: 'none',
+    transition: 'border-color 0.2s ease',
+  },
+  llmKeySaveBtn: {
+    width: '36px',
+    height: '36px',
+    border: 'none',
+    background: 'linear-gradient(135deg, #00ffc8, #00cc99)',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontSize: '16px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 0.2s ease',
+    color: '#000',
+    fontWeight: 'bold',
+  },
+  llmKeyCancelBtn: {
+    width: '36px',
+    height: '36px',
+    border: '1px solid rgba(255, 255, 255, 0.2)',
+    background: 'transparent',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 0.2s ease',
+    color: 'rgba(255, 255, 255, 0.6)',
+  },
+  sectionDivider: {
+    height: '1px',
+    background: 'linear-gradient(90deg, transparent, rgba(0, 255, 200, 0.2), transparent)',
+    margin: '12px 0',
   },
   sectionTitle: {
     fontSize: '16px',

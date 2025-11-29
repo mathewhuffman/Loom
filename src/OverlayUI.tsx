@@ -63,17 +63,54 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
   const [resizeDir, setResizeDir] = useState<ResizeDirection>(null);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, w: 0, h: 0, wx: 0, wy: 0 });
+  const [showEditButton, setShowEditButton] = useState(false);
+  const [isHovering, setIsHovering] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Check if widget is in foreground (interactive, above icons)
   const isInForeground = widget.layer === 'foreground';
 
+  // Handle hover timer - show edit button after 3 seconds
+  useEffect(() => {
+    if (isHovering && !editMode) {
+      hoverTimerRef.current = setTimeout(() => {
+        setShowEditButton(true);
+      }, 3000);
+    } else if (!isHovering && !editMode) {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+      setShowEditButton(false);
+    }
+    return () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+      }
+    };
+  }, [isHovering, editMode]);
+
+  // Handle F1 key to toggle edit mode when hovering
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F1' && isHovering) {
+        e.preventDefault();
+        setEditMode(prev => !prev);
+        setShowEditButton(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isHovering]);
+
   // Notify overlay that mouse is over interactive widget (disables click-through)
   const handleWidgetMouseEnter = useCallback(() => {
+    setIsHovering(true);
     window.loom?.mouseEnterUI();
-    onFocus(widget.id);
-  }, [onFocus, widget.id]);
+  }, []);
 
   const handleWidgetMouseLeave = useCallback(() => {
+    setIsHovering(false);
     window.loom?.mouseLeaveUI();
   }, []);
 
@@ -182,6 +219,7 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
         top: widget.y,
         width: widget.width,
         height: widget.height,
+        // Transparent background - let glyph content show through
         background: 'transparent',
         borderRadius: '12px',
         overflow: 'visible',
@@ -257,17 +295,19 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
             onMouseDown={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
-              top: 8,
+              bottom: 8,
               right: 44, // Positioned left of close button
               width: 28,
               height: 28,
-              background: isInForeground ? 'rgba(0, 200, 255, 0.2)' : 'rgba(100, 50, 150, 0.3)',
+              background: isInForeground 
+                ? 'linear-gradient(135deg, rgba(0, 200, 255, 0.15), rgba(0, 150, 200, 0.25))' 
+                : 'linear-gradient(135deg, rgba(180, 100, 255, 0.15), rgba(150, 80, 200, 0.25))',
               border: isInForeground 
-                ? '1px solid rgba(0, 200, 255, 0.6)' 
-                : '1px solid rgba(150, 100, 200, 0.5)',
+                ? '1px solid rgba(0, 200, 255, 0.5)' 
+                : '1px solid rgba(180, 100, 255, 0.5)',
               borderRadius: '6px',
               color: isInForeground ? '#00d4ff' : '#c088ff',
-              fontSize: '12px',
+              fontSize: '13px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -275,15 +315,25 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
               zIndex: 100,
               pointerEvents: 'auto',
               boxShadow: isInForeground 
-                ? '0 0 12px rgba(0, 200, 255, 0.3)' 
-                : '0 0 12px rgba(150, 100, 200, 0.3)',
-              transition: 'all 0.2s',
+                ? '0 0 14px rgba(0, 200, 255, 0.35), inset 0 1px 0 rgba(255,255,255,0.1)' 
+                : '0 0 14px rgba(180, 100, 255, 0.35), inset 0 1px 0 rgba(255,255,255,0.1)',
+              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+              backdropFilter: 'blur(8px)',
             }}
             title={isInForeground 
-              ? 'Send to background (behind desktop icons)' 
-              : 'Bring to foreground (above desktop icons)'}
+              ? '◈ Send to background layer (behind desktop)' 
+              : '◇ Bring to overlay layer (interactive)'}
           >
-            {isInForeground ? '⬇' : '⬆'}
+            {/* Layer indicator icons - filled for foreground, hollow for background */}
+            <span style={{ 
+              fontFamily: 'system-ui', 
+              fontWeight: 600,
+              textShadow: isInForeground 
+                ? '0 0 8px rgba(0, 200, 255, 0.6)' 
+                : '0 0 8px rgba(180, 100, 255, 0.6)',
+            }}>
+              {isInForeground ? '◈' : '◇'}
+            </span>
           </button>
           
           {/* Close button */}
@@ -296,23 +346,24 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
             onMouseDown={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
-              top: 8,
+              bottom: 8,
               right: 8,
               width: 28,
               height: 28,
-              background: 'rgba(20, 0, 30, 0.9)',
-              border: '1px solid rgba(255, 0, 100, 0.5)',
+              background: 'linear-gradient(135deg, rgba(255, 50, 100, 0.15), rgba(200, 30, 80, 0.25))',
+              border: '1px solid rgba(255, 50, 100, 0.5)',
               borderRadius: '6px',
-              color: '#ff0066',
-              fontSize: '14px',
+              color: '#ff3366',
+              fontSize: '13px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               zIndex: 100,
               pointerEvents: 'auto',
-              boxShadow: '0 0 12px rgba(255, 0, 100, 0.3)',
-              transition: 'all 0.2s',
+              boxShadow: '0 0 14px rgba(255, 50, 100, 0.35), inset 0 1px 0 rgba(255,255,255,0.1)',
+              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+              backdropFilter: 'blur(8px)',
             }}
             title="Close widget"
           >
@@ -321,41 +372,45 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
         </>
       )}
 
-      {/* Magic wand toggle button - always visible in top left */}
-      <button
-        className="widget-controls"
-        onClick={(e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          setEditMode(!editMode);
-        }}
-        onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          top: 8,
-          left: 8,
-          width: 28,
-          height: 28,
-          background: editMode ? 'rgba(255, 0, 100, 0.3)' : 'rgba(20, 0, 30, 0.8)',
-          border: editMode ? '1px solid rgba(255, 0, 100, 0.7)' : '1px solid rgba(255, 255, 255, 0.15)',
-          borderRadius: '6px',
-          color: editMode ? '#ff0066' : 'rgba(255, 255, 255, 0.5)',
-          fontSize: '14px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          transition: 'all 0.2s',
-          zIndex: 100,
-          pointerEvents: 'auto',
-          boxShadow: editMode 
-            ? '0 0 12px rgba(255, 0, 100, 0.4)' 
-            : '0 2px 6px rgba(0, 0, 0, 0.4)',
-        }}
-        title={editMode ? 'Exit edit mode' : 'Edit mode - drag & resize'}
-      >
-        ✨
-      </button>
+      {/* Magic wand toggle button - bottom left, shows after 3s hover or F1 */}
+      {(showEditButton || editMode) && (
+        <button
+          className="widget-controls"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            setEditMode(!editMode);
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            bottom: 8,
+            left: 8,
+            width: 28,
+            height: 28,
+            background: editMode ? 'rgba(255, 0, 100, 0.3)' : 'rgba(20, 0, 30, 0.85)',
+            border: editMode ? '1px solid rgba(255, 0, 100, 0.7)' : '1px solid rgba(180, 100, 255, 0.4)',
+            borderRadius: '6px',
+            color: editMode ? '#ff0066' : '#c088ff',
+            fontSize: '14px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            zIndex: 100,
+            pointerEvents: 'auto',
+            boxShadow: editMode 
+              ? '0 0 16px rgba(255, 0, 100, 0.5)' 
+              : '0 4px 12px rgba(0, 0, 0, 0.5), 0 0 8px rgba(180, 100, 255, 0.2)',
+            opacity: editMode ? 1 : 0.9,
+            transform: editMode ? 'scale(1.05)' : 'scale(1)',
+          }}
+          title={editMode ? 'Exit edit mode (F1)' : 'Edit mode - drag & resize (F1)'}
+        >
+          {editMode ? '✕' : '✎'}
+        </button>
+      )}
 
       {/* Resize edges - only active in edit mode */}
       {/* Top edge */}
@@ -431,7 +486,7 @@ export default function OverlayUI() {
   const widgetCountRef = useRef(0);
   const lastWidgetInjectRef = useRef({ glyphId: '', time: 0 }); // Deduplication tracker
   const widgetListenerRegistered = useRef(false); // Prevent duplicate listener registration
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const promptRef = useRef(''); // Ref to capture prompt for async callbacks
   const originalPromptRef = useRef(''); // PRESERVED prompt for entire summon session (survives errors/refinements)
   const modelMenuRef = useRef<HTMLDivElement>(null);
@@ -795,6 +850,21 @@ export default function OverlayUI() {
       setSummonState(s => ({ ...s, phase: 'compiling', attempt: data.attempt || s.attempt }));
       console.log('[Overlay] ⚙️ State → compiling');
       
+      // Always clean up and reset to idle - don't leave in a stuck state
+      const cleanupAndReset = (delay: number = 500) => {
+        setTimeout(() => {
+          setPrompt('');
+          console.log('[Overlay] 🧹 Clearing state and resetting to idle');
+          originalPromptRef.current = '';
+          setLastError(null);
+          setCanCancel(false);
+          attemptRef.current = 0;
+          clearPendingRefinementTimer();
+          pendingRefinementRef.current = null;
+          setSummonState({ phase: 'idle', attempt: 0 });
+        }, delay);
+      };
+      
       if (data.manifest) {
         console.log(`[Overlay] 📦 Bundle: ${data.manifest.name} (${data.manifest.type})`);
       }
@@ -810,88 +880,15 @@ export default function OverlayUI() {
         // Clean up summon state (panel is already open from streaming)
         console.log('[Overlay] ✨ Streaming complete, finalizing editor...');
         setRecentGlyphs(p => [currentPrompt, ...p.slice(0, 4)]);
-        setLastError(null);
-        setCanCancel(false);
-        attemptRef.current = 0;
-        clearPendingRefinementTimer();
-        pendingRefinementRef.current = null;
         
-        setTimeout(() => {
-          setPrompt('');
-          console.log('[Overlay] 🧹 Clearing originalPromptRef (success cleanup)');
-          originalPromptRef.current = '';
-          setSummonState({ phase: 'idle', attempt: 0 });
-        }, 500);
-        
+        cleanupAndReset(500);
         return; // Skip the old injection flow
       }
       
-      // Fallback: If no bundle, use old injection flow
-      setTimeout(() => {
-        setSummonState(s => ({ ...s, phase: 'injecting' }));
-        console.log('[Overlay] 💉 Preparing injection payload', {
-          promptPreview: currentPrompt?.slice(0, 80),
-          codeLength: data.code?.length,
-        });
-        
-        awaitingCompileRef.current = true;
-        console.log('[Overlay] 🕰️ Awaiting background compile...', {
-          attempt: data.attempt || 1,
-        });
-        
-        if (window.loom?.summonInject) {
-          console.log('[Overlay] 💉 summonInject() dispatch', {
-            promptPreview: currentPrompt?.slice(0, 80),
-            codeLength: data.code?.length,
-          });
-          window.loom.summonInject({
-            code: data.code,
-            prompt: currentPrompt,
-          });
-        } else {
-          console.error('[Overlay] ❌ window.loom.summonInject NOT AVAILABLE!');
-        }
-        
-        if (successTimeoutRef.current) {
-          clearTimeout(successTimeoutRef.current);
-        }
-        
-        successTimeoutRef.current = setTimeout(() => {
-          console.log(`[Overlay] ⏰ 1500ms timeout fired - awaitingCompile: ${awaitingCompileRef.current}`);
-          
-          if (!awaitingCompileRef.current) {
-            console.log('[Overlay] ⏰ Background already reported an error - timeout exiting cleanly');
-            return;
-          }
-          
-          setSummonState(prev => {
-            console.log(`[Overlay] ⏰ Current phase: ${prev.phase}`);
-            if (prev.phase === 'injecting') {
-              console.log('[Overlay] ✅ No error reported from background - marking summon complete');
-              awaitingCompileRef.current = false;
-              setRecentGlyphs(p => [currentPrompt, ...p.slice(0, 4)]);
-              setLastError(null);
-              setCanCancel(false);
-              attemptRef.current = 0;
-              clearPendingRefinementTimer();
-              pendingRefinementRef.current = null;
-              isStreamingRef.current = false;
-              
-              setTimeout(() => {
-                setPrompt('');
-                setStreamingCode('');
-                console.log('[Overlay] 🧹 Clearing originalPromptRef (success cleanup)');
-                originalPromptRef.current = '';
-                setSummonState({ phase: 'idle', attempt: 0 });
-              }, 2000);
-              
-              return { phase: 'complete', attempt: 0 };
-            }
-            console.log(`[Overlay] ⏰ Phase changed to ${prev.phase} - NOT marking complete`);
-            return prev;
-          });
-        }, 1500);
-      }, 300);
+      // No bundle - still clean up after a timeout to prevent stuck state
+      console.log('[Overlay] ⚠️ No bundle received, cleaning up');
+      setRecentGlyphs(p => [currentPrompt, ...p.slice(0, 4)]);
+      cleanupAndReset(1000);
     }));
 
     // Error handling - THIS IS WHERE REFINEMENT KICKS IN
@@ -978,37 +975,62 @@ export default function OverlayUI() {
           prompt: data.prompt,
           code: data.code,
           createdAt: Date.now(),
-          layer: 'background', // Default: behind desktop icons
+          layer: 'foreground', // Default: overlay layer (interactive, above desktop)
           zIndex: allocateZIndex(),
           inputs: data.inputs, // Include resolved inputs (API keys, etc.)
         };
         
-        // Immediately sync to background window (since default layer is 'background')
-        const widgetSyncData = {
-          id: newWidget.id,
-          glyphId: newWidget.glyphId,
-          x: newWidget.x,
-          y: newWidget.y,
-          width: newWidget.width,
-          height: newWidget.height,
-          prompt: newWidget.prompt,
-          code: newWidget.code,
-          layer: newWidget.layer,
-          inputs: newWidget.inputs,
-        };
-        console.log('[Overlay] 📤 Sending widget to background:', JSON.stringify({
-          id: widgetSyncData.id,
-          x: widgetSyncData.x,
-          y: widgetSyncData.y,
-          width: widgetSyncData.width,
-          height: widgetSyncData.height,
-          layer: widgetSyncData.layer,
-          codeLength: widgetSyncData.code?.length,
-        }, null, 2));
-        window.loom?.sendWidgetToLayer?.(newWidget.id, widgetSyncData);
+        // No need to sync to background window since default layer is 'foreground'
+        // Widget renders in the overlay layer by default
         
         setWidgets(prev => [...prev, newWidget]);
-        console.log('[Overlay] ✨ Widget created:', newWidget.id, '(background layer)');
+        console.log('[Overlay] ✨ Widget created:', newWidget.id, '(overlay layer)');
+      });
+      
+      // Listen for glyph code updates - auto-refresh widgets when glyph is saved
+      window.loom.onGlyphUpdated?.((data: { 
+        glyphId: string; 
+        code: string; 
+        inputs?: Record<string, unknown>;
+        changedFile: string;
+      }) => {
+        console.log('[Overlay] 🔄 Glyph updated:', data.glyphId, data.changedFile);
+        
+        // Update all widgets that use this glyph
+        setWidgets(prev => {
+          const hasMatchingWidget = prev.some(w => w.glyphId === data.glyphId);
+          if (!hasMatchingWidget) return prev;
+          
+          console.log('[Overlay] 🔄 Refreshing widgets for glyph:', data.glyphId);
+          return prev.map(widget => {
+            if (widget.glyphId === data.glyphId) {
+              const updatedWidget = {
+                ...widget,
+                code: data.code,
+                inputs: data.inputs ?? widget.inputs,
+              };
+              
+              // If widget is in background layer, sync the update to background window
+              if (widget.layer === 'background') {
+                window.loom?.sendWidgetToLayer?.(widget.id, {
+                  id: widget.id,
+                  glyphId: widget.glyphId,
+                  x: widget.x,
+                  y: widget.y,
+                  width: widget.width,
+                  height: widget.height,
+                  prompt: widget.prompt,
+                  code: data.code,
+                  layer: widget.layer,
+                  inputs: data.inputs ?? widget.inputs,
+                });
+              }
+              
+              return updatedWidget;
+            }
+            return widget;
+          });
+        });
       });
     }
 
@@ -1118,7 +1140,7 @@ export default function OverlayUI() {
       if (!latest) return;
       widgetSyncLatestRef.current.delete(widget.id);
 
-      window.loom.sendWidgetToLayer(widget.id, {
+      window.loom?.sendWidgetToLayer?.(widget.id, {
         id: latest.id,
         glyphId: latest.glyphId,
         x: latest.x,
@@ -1251,10 +1273,15 @@ export default function OverlayUI() {
       }, 300); // Faster transition since user is waiting
       
       // Start secure summon via main process with selected model
-      window.loom.summonRequest(finalPrompt, selectedModel);
+      // Pass selectedKeys so they get linked to the glyph when it's created
+      const keysToLink = selectedKeys.length > 0 ? [...selectedKeys] : undefined;
+      window.loom.summonRequest(finalPrompt, selectedModel, keysToLink);
       setSummonState({ phase: 'streaming', attempt: 1 });
       setShowModelMenu(false);
       setShowKeysMenu(false);
+      
+      // Clear selected keys after generation starts so they don't persist to future generations
+      setSelectedKeys([]);
     }
   }, [prompt, summonState.phase, selectedModel, selectedKeys, availableKeys, clearPendingRefinementTimer]);
 
@@ -1341,7 +1368,13 @@ export default function OverlayUI() {
       {showLoomPanel && (
         <LoomPanel 
           onClose={handleCloseLoomPanel}
-          initialSection={loomIsStreaming || loomInitialGlyphId ? 'editor' : 'chat'}
+          // Only force editor when opening panel from summon bar (morphing transition)
+          // If panel is already open (e.g. user summoning from chat), stay in current section
+          initialSection={
+            (loomTransition === 'morphing' || loomTransition === 'complete') && (loomIsStreaming || loomInitialGlyphId) 
+              ? 'editor' 
+              : 'chat'
+          }
           initialGlyphId={loomInitialGlyphId}
           streamingCode={loomStreamingCode}
           isStreaming={loomIsStreaming}
@@ -1419,18 +1452,39 @@ export default function OverlayUI() {
             </span>
             
             {/* Input */}
-            <input
+            <textarea
               ref={inputRef}
-              type="text"
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(e) => {
+                setPrompt(e.target.value);
+                // Auto-resize textarea
+                const textarea = e.target;
+                textarea.style.height = 'auto';
+                const maxHeight = e.target.value.length > 600 ? 180 : 120;
+                textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
+                textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+              }}
+              onKeyDown={(e) => {
+                // Submit on Enter (without Shift), new line on Shift+Enter
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (prompt.trim() && !isActive) {
+                    handleSubmit(e as unknown as React.FormEvent);
+                  }
+                }
+              }}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
               placeholder={isActive ? getPhaseMessage() : 'Summon anything into existence...'}
               disabled={isActive}
-              style={styles.input}
+              style={{
+                ...styles.input,
+                resize: 'none',
+                overflowY: prompt.length > 600 ? 'auto' : 'hidden',
+              }}
               autoComplete="off"
               spellCheck={false}
+              rows={1}
             />
             
             {/* Clear button */}
@@ -1500,7 +1554,12 @@ export default function OverlayUI() {
                     availableKeys.map((key) => (
                       <button
                         key={key.id}
-                        onClick={() => handleKeyToggle(key.id)}
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleKeyToggle(key.id);
+                        }}
                         style={{
                           ...styles.keyMenuItem,
                           background: selectedKeys.includes(key.id)
@@ -1527,7 +1586,12 @@ export default function OverlayUI() {
                 </div>
                 {selectedKeys.length > 0 && (
                   <button 
-                    onClick={() => setSelectedKeys([])}
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSelectedKeys([]);
+                    }}
                     style={styles.clearKeysBtn}
                   >
                     Clear selection
@@ -1757,7 +1821,7 @@ const styles: Record<string, any> = {
     flex: 1,
     position: 'relative',
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: '14px',
     padding: '18px 22px',
     background: 'rgba(8, 8, 18, 0.92)',
@@ -1792,6 +1856,8 @@ const styles: Record<string, any> = {
     fontSize: '22px',
     zIndex: 1,
     filter: 'drop-shadow(0 0 8px currentColor)',
+    paddingTop: '2px',
+    flexShrink: 0,
   },
   input: {
     flex: 1,
@@ -1803,6 +1869,10 @@ const styles: Record<string, any> = {
     fontFamily: 'inherit',
     zIndex: 1,
     letterSpacing: '0.3px',
+    resize: 'none',
+    minHeight: '24px',
+    maxHeight: '180px',
+    lineHeight: '1.4',
   },
   clearBtn: {
     background: 'transparent',

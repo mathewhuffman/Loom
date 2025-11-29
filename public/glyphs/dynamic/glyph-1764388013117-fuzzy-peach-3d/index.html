@@ -1,0 +1,279 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realistic Fuzzy Peach</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #ff9966; font-family: sans-serif; font-size: 14px; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loader">Growing Peach...</div>
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+        import { OrbitControls } from 'https://esm.sh/three@0.168.0/examples/jsm/controls/OrbitControls.js';
+
+        // --- CONFIGURATION ---
+        const inputs = window.GLYPH_INPUTS || {};
+        const CONFIG = {
+            rotationSpeed: parseFloat(inputs.rotationSpeed ?? 0.5),
+            fuzzStrength: parseFloat(inputs.fuzzStrength ?? 1.0),
+            baseColor: new THREE.Color(inputs.baseColor || '#ffcc66'),
+            blushColor: new THREE.Color(inputs.blushColor || '#ff4444')
+        };
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#1a1a1a');
+        // Add a subtle radial gradient feel via fog
+        scene.fog = new THREE.FogExp2('#111', 0.02);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 0, 4);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // --- LIGHTING ---
+        // Soft ambient light
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+
+        // Main directional light (sun)
+        const mainLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        mainLight.position.set(5, 5, 5);
+        scene.add(mainLight);
+
+        // Backlight for rim effect (enhances fuzz)
+        const backLight = new THREE.DirectionalLight(0xffccaa, 1.0);
+        backLight.position.set(-5, 2, -5);
+        scene.add(backLight);
+
+        // --- PEACH GEOMETRY ---
+        // Start with a sphere and deform it
+        const geometry = new THREE.SphereGeometry(1, 128, 128);
+        const pos = geometry.attributes.position;
+        const v = new THREE.Vector3();
+        
+        // Deform geometry to create the peach shape (cleft + indentation)
+        for (let i = 0; i < pos.count; i++) {
+            v.fromBufferAttribute(pos, i);
+            
+            // Convert to spherical coordinates for easier shaping
+            let r = v.length();
+            let theta = Math.acos(v.y / r); // 0 to PI (top to bottom)
+            let phi = Math.atan2(v.z, v.x); // -PI to PI (around)
+
+            // 1. The Cleft (Suture)
+            // A groove running along one side (around phi = PI/2)
+            // We want the groove to be deepest at the surface
+            const angleDist = Math.abs(phi - 1.5); // Near PI/2
+            const cleftDepth = 0.15 * Math.exp(-Math.pow(angleDist * 2.5, 2));
+            r -= cleftDepth * (Math.sin(theta) * 0.8 + 0.2); // Fade out at very top/bottom slightly
+
+            // 2. Top Indentation (Stem area)
+            // Flatten and dip the top
+            const topDip = 0.3 * Math.exp(-10 * theta * theta);
+            r -= topDip;
+
+            // 3. Bottom slight point/flattening
+            const bottomDip = 0.1 * Math.exp(-5 * (Math.PI - theta) * (Math.PI - theta));
+            r -= bottomDip;
+
+            // 4. General asymmetry (slightly wider on cheeks)
+            r *= 1.0 + 0.05 * Math.sin(phi * 2) * Math.sin(theta);
+
+            // Apply back to vector
+            v.normalize().multiplyScalar(r);
+            pos.setXYZ(i, v.x, v.y, v.z);
+        }
+        
+        geometry.computeVertexNormals();
+
+        // --- SHADER MATERIAL (THE FUZZ) ---
+        // We use a custom shader to simulate the velvet-like skin and procedural coloration
+        
+        const peachMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                uBaseColor: { value: CONFIG.baseColor },
+                uBlushColor: { value: CONFIG.blushColor },
+                uLightPos: { value: mainLight.position },
+                uFuzzStrength: { value: CONFIG.fuzzStrength },
+                uTime: { value: 0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                varying vec3 vNormal;
+                varying vec3 vPosition;
+                varying vec3 vViewPosition;
+
+                void main() {
+                    vUv = uv;
+                    vNormal = normalize(normalMatrix * normal);
+                    vPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    vViewPosition = -mvPosition.xyz;
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uBaseColor;
+                uniform vec3 uBlushColor;
+                uniform vec3 uLightPos;
+                uniform float uFuzzStrength;
+                
+                varying vec2 vUv;
+                varying vec3 vNormal;
+                varying vec3 vPosition;
+                varying vec3 vViewPosition;
+
+                // Simple noise function
+                float hash(vec2 p) {
+                    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+                }
+                
+                float noise(vec2 p) {
+                    vec2 i = floor(p);
+                    vec2 f = fract(p);
+                    f = f * f * (3.0 - 2.0 * f);
+                    return mix(mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), f.x),
+                               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+                }
+
+                float fbm(vec2 p) {
+                    float v = 0.0;
+                    float a = 0.5;
+                    for (int i = 0; i < 4; i++) {
+                        v += a * noise(p);
+                        p *= 2.0;
+                        a *= 0.5;
+                    }
+                    return v;
+                }
+
+                void main() {
+                    vec3 normal = normalize(vNormal);
+                    vec3 viewDir = normalize(vViewPosition);
+                    vec3 lightDir = normalize(uLightPos - vPosition);
+
+                    // --- COLOR MAPPING ---
+                    // Procedural blush placement
+                    // Use world position to place blush on one side naturally
+                    float blushMask = smoothstep(-0.2, 0.8, vPosition.x + vPosition.y * 0.5);
+                    
+                    // Add noise to the color transition for realism
+                    float skinNoise = fbm(vUv * 10.0);
+                    blushMask += (skinNoise - 0.5) * 0.2;
+                    blushMask = clamp(blushMask, 0.0, 1.0);
+
+                    vec3 albedo = mix(uBaseColor, uBlushColor, blushMask);
+
+                    // Add tiny speckles
+                    float speckle = step(0.92, hash(vUv * 50.0));
+                    albedo = mix(albedo, vec3(0.6, 0.2, 0.1), speckle * 0.3);
+
+                    // --- LIGHTING ---
+                    // Diffuse (Lambert)
+                    float diff = max(dot(normal, lightDir), 0.0);
+                    
+                    // Fuzz / Rim Light (Fresnel)
+                    // The core of the "peach" look is this soft glowing edge
+                    float rim = 1.0 - max(dot(viewDir, normal), 0.0);
+                    rim = pow(rim, 2.5); // Sharpness of rim
+                    
+                    // Backscatter simulation (light coming through the fuzz)
+                    float backScatter = max(0.0, dot(viewDir, -lightDir));
+                    
+                    vec3 finalColor = albedo * (diff * 0.8 + 0.2); // Ambient + Diffuse
+                    
+                    // Add the fuzz glow
+                    vec3 fuzzColor = vec3(0.95, 0.9, 0.85); // White-ish fuzz
+                    finalColor += fuzzColor * rim * uFuzzStrength * 0.6;
+                    
+                    // Add subtle specular highlights (very broad and dull for velvet skin)
+                    vec3 halfDir = normalize(lightDir + viewDir);
+                    float spec = pow(max(dot(normal, halfDir), 0.0), 4.0); // Low shininess
+                    finalColor += spec * 0.1;
+
+                    gl_FragColor = vec4(finalColor, 1.0);
+                }
+            `
+        });
+
+        const peach = new THREE.Mesh(geometry, peachMaterial);
+        scene.add(peach);
+
+        // --- STEM & LEAF ---
+        // Simple cylinder for stem
+        const stemGeo = new THREE.CylinderGeometry(0.04, 0.03, 0.3, 8);
+        const stemMat = new THREE.MeshStandardMaterial({ color: 0x554433, roughness: 0.9 });
+        const stem = new THREE.Mesh(stemGeo, stemMat);
+        stem.position.set(0, 0.95, 0);
+        stem.rotation.z = 0.2;
+        peach.add(stem);
+
+        // Simple leaf
+        const leafShape = new THREE.Shape();
+        leafShape.moveTo(0, 0);
+        leafShape.quadraticCurveTo(0.2, 0.3, 0, 0.8);
+        leafShape.quadraticCurveTo(-0.2, 0.3, 0, 0);
+        
+        const leafGeo = new THREE.ShapeGeometry(leafShape);
+        const leafMat = new THREE.MeshStandardMaterial({ 
+            color: 0x44aa44, 
+            roughness: 0.6, 
+            side: THREE.DoubleSide 
+        });
+        const leaf = new THREE.Mesh(leafGeo, leafMat);
+        leaf.position.set(0, 0.9, 0);
+        leaf.rotation.set(0.5, 0, -0.5);
+        leaf.scale.set(1.5, 1.5, 1.5);
+        peach.add(leaf);
+
+        document.getElementById('loader').style.display = 'none';
+
+        // --- ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            // Rotate object
+            peach.rotation.y += CONFIG.rotationSpeed * delta;
+            
+            // Subtle breathing/floating
+            peach.position.y = Math.sin(time * 0.5) * 0.05;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- RESIZE HANDLER ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

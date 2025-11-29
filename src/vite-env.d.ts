@@ -38,16 +38,84 @@ interface GlyphFoldersState {
   unassignedGlyphIds: string[];
 }
 
+// Chat history types
+interface GlyphEmbedData {
+  code: string;
+  glyphId: string;
+  glyphName: string;
+}
+
+interface ChatGlyphAttachmentData {
+  attachmentId: string;
+  glyphId: string;
+  name: string;
+  icon?: string;
+  llmPayload: string;
+  previewHtml?: string;
+  attachedAt: number;
+}
+
+interface ChatMessageData {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+  isSummoning?: boolean;
+  glyphId?: string;
+  glyphEmbed?: GlyphEmbedData;
+  glyphAttachments?: ChatGlyphAttachmentData[];
+}
+
+interface ChatConversationData {
+  id: string;
+  title: string;
+  messages: ChatMessageData[];
+  createdAt: number;
+  updatedAt: number;
+  model?: string;
+  mode?: 'chat' | 'summon';
+}
+
+interface ChatHistoryData {
+  conversations: ChatConversationData[];
+  activeConversationId?: string;
+}
+
 interface LoomAPI {
   // ═══════════════════════════════════════════════════════════════════════════
   // 🧙 SUMMONER v1 — Secure LLM streaming (keys in main process)
   // ═══════════════════════════════════════════════════════════════════════════
   
   // Request a summon from main process (secure, keys never exposed)
-  summonRequest: (prompt: string, model?: string) => void;
+  summonRequest: (prompt: string, model?: string, linkedKeys?: string[]) => void;
   
   // Get available AI models
   getAvailableModels: () => Promise<AIModelInfo[]>;
+  
+  // UI State persistence
+  loadUIState: () => Promise<unknown>;
+  saveUIState: (patch: unknown) => Promise<unknown>;
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 💬 CHAT — Conversational mode (no glyph generation)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  chatRequest: (message: string, model?: string, history?: ChatMessageData[]) => void;
+  onChatChunk: (callback: (data: { chunk: string; fullResponse: string }) => void) => () => void;
+  onChatComplete: (callback: (data: { response: string }) => void) => () => void;
+  onChatError: (callback: (data: { error: string }) => void) => () => void;
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 📜 CHAT HISTORY — Persistent conversation storage
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  loadChatHistory: () => Promise<ChatHistoryData>;
+  createConversation: (title?: string) => Promise<ChatConversationData>;
+  updateConversation: (conversationId: string, updates: Partial<ChatConversationData>) => Promise<ChatConversationData | null>;
+  addMessageToConversation: (conversationId: string, message: ChatMessageData) => Promise<ChatConversationData | null>;
+  updateMessage: (conversationId: string, messageId: string, updates: Partial<ChatMessageData>) => Promise<ChatConversationData | null>;
+  deleteConversation: (conversationId: string) => Promise<{ success: boolean }>;
+  setActiveConversation: (conversationId: string) => Promise<{ success: boolean }>;
   
   // Inject compiled glyph into background
   summonInject: (
@@ -88,6 +156,13 @@ interface LoomAPI {
   
   // Report compilation/runtime error from background (for auto-refinement)
   reportGlyphError?: (data: { prompt: string; code: string; error: string }) => void;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🪟 WINDOW CONTROLS — Mac-style minimize, maximize, close
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  windowControl: (action: 'close' | 'minimize' | 'maximize') => Promise<{ success: boolean; isMaximized?: boolean; error?: string }>;
+  windowIsMaximized: () => Promise<boolean>;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 🖱️ MOUSE CAPTURE — Toggle click-through for UI hover
@@ -239,6 +314,22 @@ interface LoomAPI {
   deleteSecureKey: (keyId: string) => Promise<{ success: boolean; error?: string }>;
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🔑 LLM API KEY MANAGEMENT — Grok, Gemini, OpenAI
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  getLlmApiKeysStatus: () => Promise<{
+    success: boolean;
+    keys?: {
+      grok: { configured: boolean; masked: string | null };
+      gemini: { configured: boolean; masked: string | null };
+      openai: { configured: boolean; masked: string | null };
+    };
+    error?: string;
+  }>;
+  saveLlmApiKey: (provider: 'grok' | 'gemini' | 'openai', apiKey: string) => Promise<{ success: boolean; error?: string }>;
+  deleteLlmApiKey: (provider: 'grok' | 'gemini' | 'openai') => Promise<{ success: boolean; error?: string }>;
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 🔗 GLYPH KEY LINKING — Connect vault keys to glyphs
   // ═══════════════════════════════════════════════════════════════════════════
   
@@ -330,14 +421,24 @@ interface LoomAPI {
     prompt: string;
     code: string;
     layer: 'foreground' | 'background';
+    inputs?: Record<string, unknown>;
   } | null) => void;
   
   onWidgetLayerUpdate: (callback: (data: { 
     widgetId: string; 
-    widgetData: { id: string; glyphId: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background' } | null 
+    widgetData: { id: string; glyphId: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background'; inputs?: Record<string, unknown> } | null 
   }) => void) => () => void;
   
   onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string }) => void) => () => void;
+  
+  // Listen for glyph code updates (auto-refresh when glyph is saved)
+  onGlyphUpdated: (callback: (data: { 
+    glyphId: string; 
+    code: string; 
+    inputs?: Record<string, unknown>;
+    changedFile: string;
+    manifest?: { name: string; prompt?: string };
+  }) => void) => () => void;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 🎛️ LOOM PANEL CONTROLS

@@ -76,6 +76,7 @@ const BackgroundWidgetContainer = memo(function BackgroundWidgetContainer({
     borderRadius: 12,
     overflow: 'hidden' as const,
     pointerEvents: 'auto' as const,
+    // Transparent background - let the glyph content show through
     background: 'transparent',
   }), [widget.x, widget.y, widget.width, widget.height]);
 
@@ -172,6 +173,35 @@ export default function BackgroundWidgetLayer() {
           inputs: widgetData.inputs,
         };
         return [...prev, newWidget];
+      });
+    });
+    
+    // Listen for glyph code updates - auto-refresh widgets when glyph is saved
+    console.log('[BackgroundWidgetLayer] 🎧 Registering glyph-updated listener');
+    window.loom.onGlyphUpdated?.((data: { 
+      glyphId: string; 
+      code: string; 
+      inputs?: Record<string, unknown>;
+      changedFile: string;
+    }) => {
+      console.log('[BackgroundWidgetLayer] 🔄 Glyph updated:', data.glyphId, data.changedFile);
+      
+      // Update all widgets that use this glyph
+      setWidgets((prev) => {
+        const hasMatchingWidget = prev.some(w => w.glyphId === data.glyphId);
+        if (!hasMatchingWidget) return prev;
+        
+        console.log('[BackgroundWidgetLayer] 🔄 Refreshing background widgets for glyph:', data.glyphId);
+        return prev.map(widget => {
+          if (widget.glyphId === data.glyphId) {
+            return {
+              ...widget,
+              code: data.code,
+              inputs: data.inputs ?? widget.inputs,
+            };
+          }
+          return widget;
+        });
       });
     });
   }, []);

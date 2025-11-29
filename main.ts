@@ -493,29 +493,42 @@ function loadApiKeys(): ApiKeys {
     openai: process.env.OPENAI_API_KEY,
   };
 
-  // Try loading from a local config file (gitignored)
+  // Priority 1: Load from secure storage (Windows DPAPI encrypted) - HIGHEST PRIORITY
+  // This is the recommended way to store API keys via Settings UI
+  try {
+    const secureKeys = loadLlmApiKeysFromSecureStorage();
+    if (secureKeys.grok) keys.grok = secureKeys.grok;
+    if (secureKeys.gemini) keys.gemini = secureKeys.gemini;
+    if (secureKeys.openai) keys.openai = secureKeys.openai;
+  } catch (err) {
+    log('⚠️ Failed to load from secure storage:', err);
+  }
+
+  // Priority 2: Try loading from a local config file (gitignored) - fallback
   const configPath = path.join(app.getPath('userData'), 'api-keys.json');
   if (fs.existsSync(configPath)) {
     try {
       const fileKeys = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      if (fileKeys.grok) keys.grok = fileKeys.grok;
-      if (fileKeys.gemini) keys.gemini = fileKeys.gemini;
-      if (fileKeys.openai) keys.openai = fileKeys.openai;
-      log('🔑 Loaded API keys from config file');
+      // Only use file keys if secure storage didn't have them
+      if (!keys.grok && fileKeys.grok) keys.grok = fileKeys.grok;
+      if (!keys.gemini && fileKeys.gemini) keys.gemini = fileKeys.gemini;
+      if (!keys.openai && fileKeys.openai) keys.openai = fileKeys.openai;
+      log('🔑 Loaded API keys from config file (fallback)');
     } catch (err) {
       log('⚠️ Failed to load API keys config:', err);
     }
   }
 
-  // Also try loading from project root .env or api-keys.json
+  // Priority 3: Also try loading from project root .env or api-keys.json - development fallback
   const projectConfigPath = path.join(__dirname, '..', 'api-keys.json');
   if (fs.existsSync(projectConfigPath)) {
     try {
       const fileKeys = JSON.parse(fs.readFileSync(projectConfigPath, 'utf-8'));
-      if (fileKeys.grok) keys.grok = fileKeys.grok;
-      if (fileKeys.gemini) keys.gemini = fileKeys.gemini;
-      if (fileKeys.openai) keys.openai = fileKeys.openai;
-      log('🔑 Loaded API keys from project config');
+      // Only use file keys if not already set
+      if (!keys.grok && fileKeys.grok) keys.grok = fileKeys.grok;
+      if (!keys.gemini && fileKeys.gemini) keys.gemini = fileKeys.gemini;
+      if (!keys.openai && fileKeys.openai) keys.openai = fileKeys.openai;
+      log('🔑 Loaded API keys from project config (fallback)');
     } catch (err) {
       log('⚠️ Failed to load project API keys config:', err);
     }
@@ -524,7 +537,55 @@ function loadApiKeys(): ApiKeys {
   return keys;
 }
 
-const apiKeys = loadApiKeys();
+// API keys will be loaded after app is ready (needs safeStorage)
+let apiKeys: ApiKeys = {};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔑 LLM API KEY SECURE STORAGE — Windows DPAPI encrypted
+// ════════════════════════════════════════════════════════════════════════════
+
+const llmApiKeysPath = path.join(app.getPath('userData'), 'llm-api-keys.enc');
+
+function loadLlmApiKeysFromSecureStorage(): ApiKeys {
+  try {
+    if (fs.existsSync(llmApiKeysPath) && safeStorage.isEncryptionAvailable()) {
+      const encryptedBuffer = fs.readFileSync(llmApiKeysPath);
+      const decrypted = safeStorage.decryptString(encryptedBuffer);
+      const keys = JSON.parse(decrypted);
+      log('🔐 Loaded LLM API keys from secure storage');
+      return keys;
+    }
+  } catch (err) {
+    log('⚠️ Failed to load LLM API keys from secure storage:', err);
+  }
+  return {};
+}
+
+function saveLlmApiKeysToSecureStorage(keys: ApiKeys): boolean {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      log('⚠️ safeStorage encryption not available for LLM API keys');
+      return false;
+    }
+    const encrypted = safeStorage.encryptString(JSON.stringify(keys));
+    fs.writeFileSync(llmApiKeysPath, encrypted);
+    log('🔐 LLM API keys encrypted and saved to secure storage');
+    return true;
+  } catch (err) {
+    log('❌ Failed to save LLM API keys to secure storage:', err);
+    return false;
+  }
+}
+
+// Reload API keys (called when keys are updated from UI)
+function reloadApiKeys(): void {
+  apiKeys = loadApiKeys();
+  log('🔑 API keys reloaded', {
+    grok: apiKeys.grok ? '✓' : '✗',
+    gemini: apiKeys.gemini ? '✓' : '✗',
+    openai: apiKeys.openai ? '✓' : '✗',
+  });
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // 🧙 SUMMONER ENGINE — LLM streaming in main process
@@ -569,34 +630,72 @@ interface GlyphManifest {
   linkedKeys?: string[]; // IDs of user keys linked to this glyph (from secure key vault)
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// 💬 CHAT SYSTEM PROMPT — For conversational mode (no glyph generation)
+// ════════════════════════════════════════════════════════════════════════════
+
+const CHAT_SYSTEM_PROMPT = `You are LOOM — a helpful AI assistant for creative coding and desktop customization.
+
+You are embedded in the LOOM application, which allows users to:
+- Create visual "glyphs" (interactive HTML/CSS/JS widgets) for their desktop
+- Customize their desktop wallpaper with animated backgrounds
+- Manage API keys securely for their glyphs to use
+
+In this chat mode, you are having a CONVERSATION. Do NOT generate code or glyphs.
+Instead, be helpful, friendly, and informative. Answer questions about:
+- How LOOM works and what features it has
+- Creative coding concepts (HTML, CSS, JavaScript, WebGL, Canvas, Three.js)
+- Ideas for glyphs and visualizations
+- Troubleshooting and debugging help
+- General programming questions
+
+If the user attaches glyphs, you'll receive metadata blocks in the format:
+<<<ATTACHMENT_META>>>
+{ "glyphId": "...", "name": "..." }
+<<<END_ATTACHMENT_META>>>
+followed by manifest/file sections. Use these attachments as shared context when reasoning about existing glyphs.
+
+Keep responses conversational and concise. Use markdown formatting when helpful.
+If the user wants to CREATE something, suggest they switch to "Summon" mode.`;
+
 const GLYPH_SYSTEM_PROMPT = `You are LOOM — a code generator for standalone HTML/CSS/JS glyphs that run inside sandboxed iframes.
 
-OUTPUT FORMAT: Return a JSON manifest (no markdown, no prose):
+═══════════════════════════════════════════════════════════════════════════════
+📋 OUTPUT FORMAT — Use these exact markers to structure your output:
+═══════════════════════════════════════════════════════════════════════════════
+
+You MUST output in this EXACT format with these markers. NO JSON wrapper, NO markdown.
+
+1. Start with <<<MANIFEST>>> containing the glyph metadata as JSON
+2. Then output each file with <<<FILE:filename>>> markers
+3. End with <<<END>>>
+
+EXAMPLE OUTPUT:
+<<<MANIFEST>>>
 {
-  "name": "",
-  "icon": "",
+  "name": "Cyber Particles",
+  "icon": "✨",
   "entry": "index.html",
   "inputs": [
-    {
-      "id": "particleCount",
-      "type": "range",
-      "label": "Particle Count",
-      "description": "Number of particles to render",
-      "min": 100,
-      "max": 5000,
-      "defaultValue": 1000
-    },
-    {
-      "id": "primaryColor",
-      "type": "color",
-      "label": "Primary Color",
-      "defaultValue": "#00ffff"
-    }
-  ],
-  "files": {
-    "index.html": "<!DOCTYPE html>..."
-  }
+    {"id": "particleCount", "type": "range", "label": "Particles", "min": 100, "max": 5000, "defaultValue": 1000}
+  ]
 }
+<<<END_MANIFEST>>>
+<<<FILE:index.html>>>
+<!DOCTYPE html>
+<html>
+<head>...</head>
+<body>...</body>
+</html>
+<<<END_FILE>>>
+<<<END>>>
+
+CRITICAL RULES:
+- Start IMMEDIATELY with <<<MANIFEST>>> - no preamble text
+- Put ALL metadata (name, icon, inputs, entry) in the MANIFEST section as valid JSON
+- Each file gets its own <<<FILE:filename>>> section
+- End EVERY output with <<<END>>>
+- NO markdown code fences, NO explanatory text outside the markers
 
 DESIGN CONSIDERATIONS:
 - Glyphs should be designed to work as BOTH full-screen backgrounds AND resizable widgets.
@@ -673,7 +772,6 @@ RULES FOR index.html:
 6. Keep all assets self-contained (SVG gradients, noise shaders, etc.) or load from public HTTPS URLs only.
 7. If interactivity is requested, add real event listeners (mousemove, keydown, etc.) with cleanup.
 8. Ensure the experience scales with window.innerWidth/Height so the iframe can be resized.
-9. Use neon/cyberpunk colors (#00ffff, #ff00ff, #ffff00, #00ff00, #ff0066).
 
 ═══════════════════════════════════════════════════════════════════════════════
 📂 FILE SYSTEM ACCESS — Read local files and directories
@@ -760,6 +858,29 @@ Example with multiple keys:
     { "id": "slackWebhook", "type": "apiKey", "label": "Slack Webhook", "service": "slack", "description": "Webhook URL for notifications" }
   ]
 }
+
+═══════════════════════════════════════════════════════════════════════════════
+🚫 SANDBOXED ENVIRONMENT — All functionality MUST stay inside the iframe
+═══════════════════════════════════════════════════════════════════════════════
+
+Glyphs run in sandboxed iframes. You MUST NOT attempt to break out of the iframe context:
+
+❌ FORBIDDEN — Never use any of these:
+- window.open() or any method that opens new browser windows/tabs
+- Links with target="_blank" or any target that opens external windows
+- window.location.href = ... or any navigation that leaves the iframe
+- window.parent navigation or attempts to control the parent window
+- Popups, alerts that block the UI, or confirm dialogs
+- Any external redirects or navigation away from the glyph
+
+✅ REQUIRED — All functionality must:
+- Render entirely within the iframe's boundaries
+- Handle all interactions (clicks, forms, etc.) without leaving the iframe
+- Display results, errors, and feedback inline within the glyph itself
+- Use fetch() for API calls and display results in the glyph UI
+
+If you need to show a link or reference an external URL, display it as text the user can copy,
+or style it as a non-functional visual element. NEVER make it clickable to open a new window.
 
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1090,7 +1211,664 @@ const PROVIDER_STREAMS: Record<string, (prompt: string, modelName: string) => As
   openai: streamOpenAI,
 };
 
-// Parse and validate glyph manifest from LLM response
+interface GlyphEmbedData {
+  code: string;
+  glyphId: string;
+  glyphName: string;
+}
+
+interface ChatGlyphAttachmentPayload {
+  attachmentId?: string;
+  glyphId: string;
+  name?: string;
+  icon?: string;
+  llmPayload?: string;
+  previewHtml?: string;
+  attachedAt?: number;
+}
+
+interface RendererChatMessagePayload {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+  isSummoning?: boolean;
+  glyphId?: string;
+  glyphEmbed?: GlyphEmbedData;
+  glyphAttachments?: ChatGlyphAttachmentPayload[];
+}
+
+type ProviderChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+};
+
+const MAX_CHAT_CONTEXT_MESSAGES = 24;
+const MAX_CHAT_CONTEXT_CHARS = 12000;
+
+function trimChatHistory(history: RendererChatMessagePayload[]): RendererChatMessagePayload[] {
+  if (!history || history.length === 0) return [];
+  const sorted = [...history].sort((a, b) => a.timestamp - b.timestamp);
+  const trimmed: RendererChatMessagePayload[] = [];
+  let totalChars = 0;
+
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const entry = sorted[i];
+    const basis = entry?.glyphEmbed?.code || entry?.content || '';
+    trimmed.push(entry);
+    totalChars += basis.length;
+    const attachmentChars = entry?.glyphAttachments?.reduce((sum, attachment) => {
+      return sum + (attachment.llmPayload?.length || 0);
+    }, 0) ?? 0;
+    totalChars += attachmentChars;
+
+    if (trimmed.length >= MAX_CHAT_CONTEXT_MESSAGES) break;
+    if (trimmed.length > 0 && totalChars >= MAX_CHAT_CONTEXT_CHARS) break;
+  }
+
+  return trimmed.reverse();
+}
+
+function formatHistoryEntryForProvider(entry: RendererChatMessagePayload): ProviderChatMessage | null {
+  if (!entry) return null;
+
+  if (entry.isSummoning && entry.role === 'assistant') {
+    const payload = {
+      type: 'generation',
+      glyphId: entry.glyphId || entry.glyphEmbed?.glyphId,
+      glyphName: entry.glyphEmbed?.glyphName,
+      timestamp: entry.timestamp,
+      code: entry.glyphEmbed?.code || entry.content,
+    };
+    return { role: 'assistant', content: JSON.stringify(payload) };
+  }
+
+  if (entry.isSummoning && entry.role === 'user') {
+    const payload = {
+      type: 'summon_request',
+      prompt: entry.content,
+      timestamp: entry.timestamp,
+    };
+    return { role: 'user', content: JSON.stringify(payload) };
+  }
+
+  if (entry.content && entry.content.trim().length > 0) {
+    return { role: entry.role, content: entry.content };
+  }
+
+  if (entry.glyphEmbed?.code) {
+    return { role: entry.role === 'assistant' ? 'assistant' : 'user', content: entry.glyphEmbed.code };
+  }
+
+  return null;
+}
+
+function buildChatMessages(history: RendererChatMessagePayload[] | undefined, fallbackMessage: string): ProviderChatMessage[] {
+  const trimmedHistory = trimChatHistory(history || []);
+  const formattedHistory: ProviderChatMessage[] = [];
+
+  trimmedHistory.forEach((entry) => {
+    const baseMessage = formatHistoryEntryForProvider(entry);
+    if (baseMessage) {
+      formattedHistory.push(baseMessage);
+    }
+
+    if (entry.glyphAttachments?.length) {
+      for (const attachment of entry.glyphAttachments) {
+        if (!attachment.llmPayload) continue;
+        const descriptor = JSON.stringify({
+          type: 'glyph_attachment',
+          glyphId: attachment.glyphId,
+          name: attachment.name,
+          icon: attachment.icon,
+        });
+        formattedHistory.push({
+          role: entry.role === 'assistant' ? 'assistant' : 'user',
+          content: [
+            '<<<ATTACHMENT_META>>>',
+            descriptor,
+            '<<<END_ATTACHMENT_META>>>',
+            attachment.llmPayload,
+          ].join('\n'),
+        });
+      }
+    }
+  });
+
+  const lastEntry = formattedHistory[formattedHistory.length - 1];
+  if (!lastEntry || lastEntry.role !== 'user') {
+    formattedHistory.push({ role: 'user', content: fallbackMessage });
+  }
+
+  return [
+    { role: 'system', content: CHAT_SYSTEM_PROMPT },
+    ...formattedHistory,
+  ];
+}
+
+function convertMessagesToGeminiContents(messages: ProviderChatMessage[]) {
+  let systemBuffer = '';
+  let systemInjected = false;
+  const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+
+  for (const message of messages) {
+    if (message.role === 'system') {
+      systemBuffer += (systemBuffer ? '\n\n' : '') + message.content;
+      continue;
+    }
+
+    const role = message.role === 'assistant' ? 'model' : 'user';
+    let text = message.content;
+
+    if (!systemInjected && role === 'user' && systemBuffer) {
+      text = `${systemBuffer}\n\n${text}`;
+      systemInjected = true;
+    }
+
+    contents.push({ role, parts: [{ text }] });
+  }
+
+  if (systemBuffer && !systemInjected && contents[0]) {
+    contents[0].parts[0].text = `${systemBuffer}\n\n${contents[0].parts[0].text}`;
+  }
+
+  return contents;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 💬 CHAT STREAMING — Conversational mode without glyph generation
+// ════════════════════════════════════════════════════════════════════════════
+
+// Streaming chat call to Grok (conversational)
+async function* streamChatGrok(messages: ProviderChatMessage[], modelName: string = 'grok-3-mini'): AsyncGenerator<string> {
+  if (!apiKeys.grok) throw new Error('Grok API key not configured');
+
+  const response = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKeys.grok}`,
+    },
+    body: JSON.stringify({
+      model: modelName,
+      messages,
+      stream: true,
+      temperature: 0.8,
+      max_tokens: 2000,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Grok API error: ${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content || '';
+          if (content) {
+            yield content;
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+}
+
+// Streaming chat call to Gemini (conversational)
+async function* streamChatGemini(messages: ProviderChatMessage[], modelName: string = 'gemini-2.0-flash'): AsyncGenerator<string> {
+  if (!apiKeys.gemini) throw new Error('Gemini API key not configured');
+
+  const contents = convertMessagesToGeminiContents(messages);
+  if (contents.length === 0) {
+    throw new Error('No chat messages available for Gemini request');
+  }
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKeys.gemini}&alt=sse`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents,
+        generationConfig: {
+          temperature: 0.8,
+          maxOutputTokens: 2000,
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (text) {
+            yield text;
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+}
+
+// Streaming chat call to OpenAI (conversational)
+async function* streamChatOpenAI(messages: ProviderChatMessage[], modelName: string = 'gpt-4o-mini'): AsyncGenerator<string> {
+  if (!apiKeys.openai) throw new Error('OpenAI API key not configured');
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKeys.openai}`,
+    },
+    body: JSON.stringify({
+      model: modelName,
+      messages,
+      stream: true,
+      temperature: 0.8,
+      max_tokens: 2000,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content || '';
+          if (content) {
+            yield content;
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+}
+
+// Provider chat streaming functions
+const PROVIDER_CHAT_STREAMS: Record<string, (messages: ProviderChatMessage[], modelName: string) => AsyncGenerator<string>> = {
+  grok: streamChatGrok,
+  gemini: streamChatGemini,
+  openai: streamChatOpenAI,
+};
+
+// Main chat function (no glyph generation)
+async function chatWithAI(
+  message: string,
+  history: RendererChatMessagePayload[] | undefined,
+  webContents: Electron.WebContents,
+  selectedModelId?: string
+): Promise<void> {
+  const modelConfig = selectedModelId ? AI_MODELS[selectedModelId] : null;
+  const provider = modelConfig?.provider || 'gemini';
+  const modelName = modelConfig?.modelName || DEFAULT_MODELS[provider];
+  const modelLabel = modelConfig?.label || 'Auto';
+
+  log(`💬 CHAT request: "${message.slice(0, 50)}..." (${modelLabel}) | history: ${history?.length || 0} msgs`);
+
+  const apiKey = apiKeys[provider];
+  if (!apiKey) {
+    const fallbackProviders = ['gemini', 'grok', 'openai'].filter(p => apiKeys[p as keyof ApiKeys]);
+    if (fallbackProviders.length === 0) {
+      webContents.send('chat-error', { error: 'No API keys configured!' });
+      return;
+    }
+    const fallbackProvider = fallbackProviders[0] as keyof typeof DEFAULT_MODELS;
+    return chatWithAI(message, history, webContents, DEFAULT_MODELS[fallbackProvider]);
+  }
+
+  let fullResponse = '';
+  const chatMessages = buildChatMessages(history, message);
+
+  const safeSend = (channel: string, data: unknown): boolean => {
+    if (webContents.isDestroyed()) return false;
+    webContents.send(channel, data);
+    return true;
+  };
+
+  try {
+    const streamFn = PROVIDER_CHAT_STREAMS[provider];
+    if (!streamFn) {
+      throw new Error(`No chat stream function for provider: ${provider}`);
+    }
+
+    for await (const chunk of streamFn(chatMessages, modelName)) {
+      fullResponse += chunk;
+      safeSend('chat-chunk', { chunk, fullResponse });
+    }
+
+    log(`💬 Chat complete: ${fullResponse.length} chars`);
+    safeSend('chat-complete', { response: fullResponse });
+
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    log(`💬 Chat error: ${errorMsg}`);
+    
+    // Try fallback to different provider
+    const fallbackProviders = ['gemini', 'grok', 'openai']
+      .filter(p => p !== provider && apiKeys[p as keyof ApiKeys]);
+    
+    if (fallbackProviders.length > 0) {
+      const fallbackProvider = fallbackProviders[0] as keyof typeof DEFAULT_MODELS;
+      log(`💬 Falling back to ${fallbackProvider}...`);
+      return chatWithAI(message, history, webContents, DEFAULT_MODELS[fallbackProvider]);
+    }
+    
+    safeSend('chat-error', { error: errorMsg });
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📄 INCREMENTAL STREAMING PARSER — Parse marker-based output as it streams
+// ════════════════════════════════════════════════════════════════════════════
+
+interface StreamingGlyphState {
+  phase: 'waiting' | 'manifest' | 'file' | 'complete';
+  manifestJson: string;
+  currentFileName: string | null;
+  currentFileContent: string;
+  files: Record<string, string>;
+  manifest: {
+    name?: string;
+    icon?: string;
+    entry?: string;
+    inputs?: GlyphInput[];
+  } | null;
+  glyphId: string | null;
+  glyphDir: string | null;
+}
+
+function createStreamingState(): StreamingGlyphState {
+  return {
+    phase: 'waiting',
+    manifestJson: '',
+    currentFileName: null,
+    currentFileContent: '',
+    files: {},
+    manifest: null,
+    glyphId: null,
+    glyphDir: null,
+  };
+}
+
+// Parse streaming content incrementally and write files as they complete
+function processStreamingChunk(
+  state: StreamingGlyphState,
+  fullResponse: string,
+  prompt: string,
+  modelUsed: string | undefined,
+  linkedKeys: string[] | undefined
+): { fileWritten?: string; htmlContent?: string; manifestParsed?: boolean } {
+  const result: { fileWritten?: string; htmlContent?: string; manifestParsed?: boolean } = {};
+  
+  // Check for manifest section
+  if (state.phase === 'waiting' && fullResponse.includes('<<<MANIFEST>>>')) {
+    state.phase = 'manifest';
+    log('📋 [Streaming] Entering MANIFEST phase');
+  }
+  
+  // Parse manifest when complete
+  if (state.phase === 'manifest' && fullResponse.includes('<<<END_MANIFEST>>>')) {
+    const manifestMatch = fullResponse.match(/<<<MANIFEST>>>([\s\S]*?)<<<END_MANIFEST>>>/);
+    if (manifestMatch) {
+      try {
+        const manifestJson = manifestMatch[1].trim();
+        state.manifest = JSON.parse(manifestJson);
+        state.manifestJson = manifestJson;
+        log('📋 [Streaming] Manifest parsed:', state.manifest?.name);
+        
+        // Create glyph directory immediately
+        const glyphName = state.manifest?.name || 'glyph';
+        const safeName = glyphName.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30);
+        state.glyphId = `glyph-${Date.now()}-${safeName}`;
+        
+        if (dynamicGlyphPath) {
+          state.glyphDir = path.join(dynamicGlyphPath, state.glyphId);
+          ensureDirectoryExists(state.glyphDir);
+          log(`📂 [Streaming] Created glyph directory: ${state.glyphDir}`);
+        }
+        
+        result.manifestParsed = true;
+        state.phase = 'file'; // Ready for files
+      } catch (e) {
+        log('❌ [Streaming] Failed to parse manifest:', e);
+      }
+    }
+  }
+  
+  // Check for file sections
+  const fileStartMatch = fullResponse.match(/<<<FILE:([^>]+)>>>(?![\s\S]*<<<FILE:\1>>>)/);
+  if (fileStartMatch && state.phase !== 'waiting') {
+    const fileName = fileStartMatch[1];
+    if (state.currentFileName !== fileName) {
+      state.currentFileName = fileName;
+      state.currentFileContent = '';
+      log(`📄 [Streaming] Starting file: ${fileName}`);
+    }
+  }
+  
+  // Extract current file content as it streams
+  if (state.currentFileName) {
+    const filePattern = new RegExp(`<<<FILE:${state.currentFileName}>>>([\\s\\S]*?)(?:<<<END_FILE>>>|$)`);
+    const fileMatch = fullResponse.match(filePattern);
+    if (fileMatch) {
+      state.currentFileContent = fileMatch[1];
+      
+      // If file is complete (has END_FILE marker), write it
+      if (fullResponse.includes(`<<<FILE:${state.currentFileName}>>>`) && 
+          fullResponse.includes('<<<END_FILE>>>')) {
+        const endFileIndex = fullResponse.indexOf('<<<END_FILE>>>');
+        const fileStartIndex = fullResponse.indexOf(`<<<FILE:${state.currentFileName}>>>`);
+        
+        // Make sure this END_FILE is after our file start
+        if (endFileIndex > fileStartIndex) {
+          const completeFileMatch = fullResponse.match(
+            new RegExp(`<<<FILE:${state.currentFileName}>>>([\\s\\S]*?)<<<END_FILE>>>`)
+          );
+          if (completeFileMatch) {
+            const fileContent = completeFileMatch[1];
+            state.files[state.currentFileName] = fileContent;
+            
+            // Write file to disk immediately
+            if (state.glyphDir) {
+              const filePath = path.join(state.glyphDir, state.currentFileName);
+              fs.writeFileSync(filePath, fileContent, 'utf-8');
+              log(`📝 [Streaming] Wrote ${state.currentFileName} (${fileContent.length} chars)`);
+              result.fileWritten = state.currentFileName;
+            }
+            
+            // If it's an HTML file, send it for preview
+            if (state.currentFileName.endsWith('.html')) {
+              result.htmlContent = fileContent;
+            }
+            
+            state.currentFileName = null;
+            state.currentFileContent = '';
+          }
+        }
+      }
+    }
+  }
+  
+  // Check for completion
+  if (fullResponse.includes('<<<END>>>')) {
+    state.phase = 'complete';
+    log('✅ [Streaming] Generation complete');
+  }
+  
+  return result;
+}
+
+// Finalize the glyph after streaming completes
+function finalizeStreamingGlyph(
+  state: StreamingGlyphState,
+  prompt: string,
+  modelUsed: string | undefined,
+  linkedKeys: string[] | undefined
+): { glyphId: string; locations: string[] } | null {
+  if (!state.glyphId || !state.glyphDir || !state.manifest) {
+    log('❌ [Streaming] Cannot finalize - missing state');
+    return null;
+  }
+  
+  // Determine entry file
+  const fileNames = Object.keys(state.files);
+  const entryFile = state.manifest.entry || 
+    (fileNames.includes('index.html') ? 'index.html' : 
+     fileNames.includes('index.tsx') ? 'index.tsx' : 
+     fileNames[0]);
+  
+  // Build and write manifest.json
+  const metadata: Record<string, unknown> = {
+    id: state.glyphId,
+    name: state.manifest.name || 'Unnamed Glyph',
+    prompt: prompt || '',
+    entry: entryFile,
+    files: ['manifest.json', ...fileNames],
+    model: modelUsed || undefined,
+    savedAt: new Date().toISOString(),
+  };
+  
+  if (state.manifest.inputs && state.manifest.inputs.length > 0) {
+    metadata.inputs = state.manifest.inputs;
+  }
+  if (state.manifest.icon) {
+    metadata.icon = state.manifest.icon;
+  }
+  if (linkedKeys && linkedKeys.length > 0) {
+    metadata.linkedKeys = linkedKeys;
+  }
+  
+  fs.writeFileSync(
+    path.join(state.glyphDir, 'manifest.json'),
+    JSON.stringify(metadata, null, 2)
+  );
+  log(`📋 [Streaming] Wrote manifest.json`);
+  
+  // Write chat history
+  const chatHistory: ChatMessage[] = [
+    {
+      id: `msg-${Date.now()}-user`,
+      role: 'user',
+      content: prompt,
+      timestamp: Date.now(),
+      type: 'generation',
+    },
+    {
+      id: `msg-${Date.now()}-assistant`,
+      role: 'assistant',
+      content: `✨ Created "${state.manifest.name}"\n\nGenerated ${fileNames.length} file(s): ${fileNames.join(', ')}`,
+      timestamp: Date.now() + 1,
+      type: 'generation',
+    },
+  ];
+  if (modelUsed) {
+    chatHistory.push({
+      id: `msg-${Date.now()}-system`,
+      role: 'system',
+      content: `Model: ${modelUsed}`,
+      timestamp: Date.now() + 2,
+      type: 'info',
+    });
+  }
+  fs.writeFileSync(
+    path.join(state.glyphDir, 'chat.json'),
+    JSON.stringify(chatHistory, null, 2)
+  );
+  
+  // Also write to library path if configured
+  const locations = [state.glyphDir];
+  if (glyphLibraryPath && glyphLibraryPath !== dynamicGlyphPath) {
+    const libraryDir = path.join(glyphLibraryPath, state.glyphId);
+    ensureDirectoryExists(libraryDir);
+    
+    // Copy all files
+    for (const [fileName, content] of Object.entries(state.files)) {
+      fs.writeFileSync(path.join(libraryDir, fileName), content, 'utf-8');
+    }
+    fs.writeFileSync(
+      path.join(libraryDir, 'manifest.json'),
+      JSON.stringify(metadata, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(libraryDir, 'chat.json'),
+      JSON.stringify(chatHistory, null, 2)
+    );
+    locations.push(libraryDir);
+  }
+  
+  log(`✅ [Streaming] Glyph finalized: ${state.glyphId}`);
+  return { glyphId: state.glyphId, locations };
+}
+
+// Legacy parser for backwards compatibility with JSON format
 function parseGlyphManifest(response: string): GlyphManifest | null {
   try {
     // Try to extract JSON from the response
@@ -1156,7 +1934,8 @@ async function writeGlyphBundle(
   glyphId: string, 
   manifest: GlyphManifest,
   prompt?: string,
-  modelUsed?: string
+  modelUsed?: string,
+  linkedKeys?: string[]
 ): Promise<{ glyphId: string; locations: string[] }> {
   const targets = [dynamicGlyphPath, glyphLibraryPath];
   const savedLocations: string[] = [];
@@ -1170,7 +1949,10 @@ async function writeGlyphBundle(
         : contentFileNames[0];
   // Include manifest.json in the files list so it shows in the editor
   const allFileNames = ['manifest.json', ...contentFileNames];
-  const metadata = {
+  
+  // 🔐 CRITICAL: Preserve inputs from LLM-generated manifest!
+  // The LLM defines inputs for API keys, settings, etc. that the glyph needs
+  const metadata: Record<string, unknown> = {
     id: glyphId,
     name: manifest.name,
     type: manifest.type,
@@ -1180,6 +1962,23 @@ async function writeGlyphBundle(
     model: modelUsed || undefined, // Store which model was used for generation
     savedAt: new Date().toISOString(),
   };
+  
+  // Preserve inputs from LLM manifest (for API keys, settings, etc.)
+  if (manifest.inputs && Array.isArray(manifest.inputs) && manifest.inputs.length > 0) {
+    metadata.inputs = manifest.inputs;
+    log(`📥 Preserving ${manifest.inputs.length} input(s) from LLM manifest`);
+  }
+  
+  // Preserve icon from LLM manifest
+  if (manifest.icon) {
+    metadata.icon = manifest.icon;
+  }
+  
+  // Save linked keys (user's vault keys associated with this glyph)
+  if (linkedKeys && linkedKeys.length > 0) {
+    metadata.linkedKeys = linkedKeys;
+    log(`🔗 Linking ${linkedKeys.length} key(s) to glyph`);
+  }
   
   for (const basePath of targets) {
     if (!basePath) continue;
@@ -1248,7 +2047,8 @@ async function summonGlyph(
   refinementAttempt: number = 0,
   previousError?: string,
   previousCode?: string,
-  summonId: string = `summon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  summonId: string = `summon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  linkedKeys?: string[]
 ): Promise<void> {
   const maxRefinements = 5; // Max refinement attempts
   
@@ -1276,7 +2076,7 @@ async function summonGlyph(
       return;
     }
     const fallbackProvider = fallbackProviders[0] as keyof typeof DEFAULT_MODELS;
-    return summonGlyph(prompt, webContents, DEFAULT_MODELS[fallbackProvider], refinementAttempt, previousError, previousCode, summonId);
+    return summonGlyph(prompt, webContents, DEFAULT_MODELS[fallbackProvider], refinementAttempt, previousError, previousCode, summonId, linkedKeys);
   }
 
   let fullResponse = '';
@@ -1313,53 +2113,89 @@ async function summonGlyph(
       ? buildRefinementPrompt(prompt, previousCode, previousError)
       : buildUserPrompt(prompt);
     
-    // Stream the response
+    // Create streaming state for incremental parsing
+    const streamState = createStreamingState();
+    let lastHtmlContent = '';
+    
+    // Stream the response with incremental file writing
     for await (const chunk of streamFn(actualPrompt, modelName)) {
       fullResponse += chunk;
+      
+      // Process chunk incrementally - write files as they complete
+      const result = processStreamingChunk(streamState, fullResponse, prompt, modelLabel, linkedKeys);
+      
+      // If HTML content was extracted/updated, include it in the chunk event
+      if (result.htmlContent && result.htmlContent !== lastHtmlContent) {
+        lastHtmlContent = result.htmlContent;
+      }
+      
+      // Send chunk with both raw response and extracted HTML
       safeSend('summon-chunk', { 
         chunk, 
         fullCode: fullResponse,
-        attempt: refinementAttempt + 1
+        htmlContent: lastHtmlContent || undefined,
+        attempt: refinementAttempt + 1,
+        fileWritten: result.fileWritten,
+        glyphId: streamState.glyphId,
       });
     }
 
     log(`[${summonId}] ✨ ${modelLabel} responded: ${fullResponse.length} chars`);
     
-    // Try to parse as manifest first
-    const manifest = parseGlyphManifest(fullResponse);
-    
     let codeToSend: string;
     let bundleInfo: { id: string; name: string; type?: string; locations: string[] } | null = null;
     
-    if (manifest) {
-      // New bundle format - write files and send
-      const glyphId = createGlyphId(manifest);
-      const saveResult = await writeGlyphBundle(glyphId, manifest, prompt, modelLabel);
-      const entryName = manifest.entry || Object.keys(manifest.files)[0];
-      const entryCode = manifest.files[entryName];
-      if (!entryCode) {
-        log('❌ Manifest entry code missing, aborting summon');
-        return;
+    // Check if we used the new marker-based format
+    if (streamState.phase === 'complete' && streamState.glyphId) {
+      // New marker-based format - files already written during streaming
+      const finalResult = finalizeStreamingGlyph(streamState, prompt, modelLabel, linkedKeys);
+      if (finalResult) {
+        codeToSend = lastHtmlContent || streamState.files['index.html'] || '';
+        bundleInfo = {
+          id: finalResult.glyphId,
+          name: streamState.manifest?.name || 'Unnamed',
+          type: undefined,
+          locations: finalResult.locations,
+        };
+        log(`[${summonId}] 📦 Streaming bundle finalized: ${bundleInfo.name}`);
+      } else {
+        codeToSend = cleanGeneratedCode(fullResponse);
+        log(`[${summonId}] ⚠️ Streaming finalization failed, using fallback`);
       }
-      codeToSend = entryCode;
-      bundleInfo = {
-        id: saveResult.glyphId,
-        name: manifest.name,
-        type: manifest.type, // Optional - may be undefined
-        locations: saveResult.locations,
-      };
-      log(`[${summonId}] 📦 Bundle written: ${manifest.name} → ${saveResult.locations.join(', ')}`);
     } else {
-      // Fallback: treat as raw code (legacy format)
-      codeToSend = cleanGeneratedCode(fullResponse);
-      log(`[${summonId}] 📄 Legacy format: ${codeToSend.length} chars`);
+      // Try legacy JSON format as fallback
+      const manifest = parseGlyphManifest(fullResponse);
+      
+      if (manifest) {
+        // Legacy JSON format - write files now
+        const glyphId = createGlyphId(manifest);
+        const saveResult = await writeGlyphBundle(glyphId, manifest, prompt, modelLabel, linkedKeys);
+        const entryName = manifest.entry || Object.keys(manifest.files)[0];
+        const entryCode = manifest.files[entryName];
+        if (!entryCode) {
+          log('❌ Manifest entry code missing, aborting summon');
+          return;
+        }
+        codeToSend = entryCode;
+        bundleInfo = {
+          id: saveResult.glyphId,
+          name: manifest.name,
+          type: manifest.type,
+          locations: saveResult.locations,
+        };
+        log(`[${summonId}] 📦 Legacy bundle written: ${manifest.name}`);
+      } else {
+        // Fallback: treat as raw code
+        codeToSend = cleanGeneratedCode(fullResponse);
+        log(`[${summonId}] 📄 Raw code format: ${codeToSend.length} chars`);
+      }
     }
     
     // Send completion with metadata
     const sent = safeSend('summon-complete', { 
       code: codeToSend,
       attempt: refinementAttempt + 1,
-      manifest: manifest ? { name: manifest.name, type: manifest.type } : null,
+      manifest: streamState.manifest ? { name: streamState.manifest.name, type: undefined } : null,
       bundle: bundleInfo
     });
     log(`[${summonId}] ${sent ? '✅' : '⚠️'} summon-complete dispatched (attempt ${refinementAttempt + 1}, code ${codeToSend.length} chars)`);
@@ -1375,7 +2211,7 @@ async function summonGlyph(
     if (fallbackProviders.length > 0) {
       const fallbackProvider = fallbackProviders[0] as keyof typeof DEFAULT_MODELS;
       log(`[${summonId}] 🔄 Falling back to ${fallbackProvider}...`);
-      return summonGlyph(prompt, webContents, DEFAULT_MODELS[fallbackProvider], refinementAttempt, previousError, previousCode, summonId);
+      return summonGlyph(prompt, webContents, DEFAULT_MODELS[fallbackProvider], refinementAttempt, previousError, previousCode, summonId, linkedKeys);
     }
     
     // No fallback available
@@ -1528,7 +2364,8 @@ RULES:
 3. Preserve proper indentation in newContent
 4. Prefer FORMAT A (surgical) when possible - it's cleaner
 5. Use FORMAT B only when changes are extensive
-6. Respond with ONLY the JSON object - no markdown, no explanation outside JSON`;
+6. Respond with ONLY the JSON object - no markdown, no explanation outside JSON
+7. SANDBOX CONSTRAINT: Never add window.open(), target="_blank" links, external navigation, or any code that opens new windows/tabs. All functionality must stay inside the iframe`;
 }
 
 // Apply surgical edits to code
@@ -2369,6 +3206,175 @@ ipcMain.handle('ui-state:save', async (_event, patch: LoomUiStatePatch) => {
   return mergeUiState(patch);
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// 💬 CHAT HISTORY IPC HANDLERS
+// ════════════════════════════════════════════════════════════════════════════
+
+const chatHistoryPath = path.join(app.getPath('userData'), 'chat-history.json');
+
+interface ChatMessage extends RendererChatMessagePayload {}
+
+interface ChatConversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: number;
+  updatedAt: number;
+  model?: string;
+  mode?: 'chat' | 'summon';
+}
+
+interface ChatHistoryData {
+  conversations: ChatConversation[];
+  activeConversationId?: string;
+}
+
+let chatHistoryCache: ChatHistoryData | null = null;
+
+function loadChatHistory(): ChatHistoryData {
+  if (chatHistoryCache) return chatHistoryCache;
+  
+  try {
+    if (fs.existsSync(chatHistoryPath)) {
+      const raw = fs.readFileSync(chatHistoryPath, 'utf-8');
+      chatHistoryCache = JSON.parse(raw);
+      return chatHistoryCache!;
+    }
+  } catch (err) {
+    log('⚠️ Failed to load chat history:', err);
+  }
+  
+  chatHistoryCache = { conversations: [] };
+  return chatHistoryCache;
+}
+
+function saveChatHistory(data: ChatHistoryData) {
+  try {
+    fs.writeFileSync(chatHistoryPath, JSON.stringify(data, null, 2));
+    chatHistoryCache = data;
+    log('💾 Saved chat history');
+  } catch (err) {
+    log('❌ Failed to save chat history:', err);
+  }
+}
+
+// Load all chat conversations
+ipcMain.handle('chat-history:load', async () => {
+  log('📜 chat-history:load called');
+  const history = loadChatHistory();
+  log(`📜 Loaded ${history.conversations.length} chat conversations`);
+  return history;
+});
+
+// Create a new conversation
+ipcMain.handle('chat-history:create', async (_event, title?: string) => {
+  log('📜 chat-history:create called with title:', title);
+  const history = loadChatHistory();
+  const newConversation: ChatConversation = {
+    id: `chat-${Date.now()}`,
+    title: title || 'New Chat',
+    messages: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  
+  history.conversations.unshift(newConversation);
+  history.activeConversationId = newConversation.id;
+  saveChatHistory(history);
+  
+  log(`📜 Created new conversation: ${newConversation.id}`);
+  return newConversation;
+});
+
+// Update a conversation (add messages, update title, etc.)
+ipcMain.handle('chat-history:update', async (_event, conversationId: string, updates: Partial<ChatConversation>) => {
+  const history = loadChatHistory();
+  const index = history.conversations.findIndex(c => c.id === conversationId);
+  
+  if (index === -1) {
+    log('⚠️ Conversation not found:', conversationId);
+    return null;
+  }
+  
+  // Merge updates
+  history.conversations[index] = {
+    ...history.conversations[index],
+    ...updates,
+    updatedAt: Date.now(),
+  };
+  
+  saveChatHistory(history);
+  return history.conversations[index];
+});
+
+// Add a message to a conversation
+ipcMain.handle('chat-history:add-message', async (_event, conversationId: string, message: ChatMessage) => {
+  log('📜 chat-history:add-message called:', { conversationId, role: message.role });
+  const history = loadChatHistory();
+  const index = history.conversations.findIndex(c => c.id === conversationId);
+  
+  if (index === -1) {
+    log('⚠️ Conversation not found for message:', conversationId);
+    return null;
+  }
+  
+  history.conversations[index].messages.push(message);
+  history.conversations[index].updatedAt = Date.now();
+  
+  // Auto-generate title from first user message if title is still default
+  if (history.conversations[index].title === 'New Chat' && message.role === 'user') {
+    const titleText = message.content.slice(0, 40);
+    history.conversations[index].title = titleText + (message.content.length > 40 ? '...' : '');
+    log('📜 Auto-titled conversation:', history.conversations[index].title);
+  }
+  
+  saveChatHistory(history);
+  log('📜 Message added, conversation now has', history.conversations[index].messages.length, 'messages');
+  return history.conversations[index];
+});
+
+// Update a specific message in a conversation
+ipcMain.handle('chat-history:update-message', async (_event, conversationId: string, messageId: string, updates: Partial<ChatMessage>) => {
+  const history = loadChatHistory();
+  const convIndex = history.conversations.findIndex(c => c.id === conversationId);
+  
+  if (convIndex === -1) return null;
+  
+  const msgIndex = history.conversations[convIndex].messages.findIndex(m => m.id === messageId);
+  if (msgIndex === -1) return null;
+  
+  history.conversations[convIndex].messages[msgIndex] = {
+    ...history.conversations[convIndex].messages[msgIndex],
+    ...updates,
+  };
+  history.conversations[convIndex].updatedAt = Date.now();
+  
+  saveChatHistory(history);
+  return history.conversations[convIndex];
+});
+
+// Delete a conversation
+ipcMain.handle('chat-history:delete', async (_event, conversationId: string) => {
+  const history = loadChatHistory();
+  history.conversations = history.conversations.filter(c => c.id !== conversationId);
+  
+  if (history.activeConversationId === conversationId) {
+    history.activeConversationId = history.conversations[0]?.id;
+  }
+  
+  saveChatHistory(history);
+  log(`🗑️ Deleted conversation: ${conversationId}`);
+  return { success: true };
+});
+
+// Set active conversation
+ipcMain.handle('chat-history:set-active', async (_event, conversationId: string) => {
+  const history = loadChatHistory();
+  history.activeConversationId = conversationId;
+  saveChatHistory(history);
+  return { success: true };
+});
+
 // Load all glyphs from both dynamic and library paths
 ipcMain.handle('load-glyphs', async () => {
   const glyphs: any[] = [];
@@ -2488,12 +3494,117 @@ ipcMain.handle('save-glyph-file', async (event, glyphId: string, fileName: strin
       const filePath = path.join(glyphDir, fileName);
       fs.writeFileSync(filePath, content, 'utf-8');
       log(`💾 Saved ${fileName} to ${glyphId}`);
+      
+      // Broadcast glyph update to all windows so widgets can refresh
+      broadcastGlyphUpdate(glyphId, fileName);
+      
       return { success: true };
     }
   }
   
   throw new Error(`Glyph not found: ${glyphId}`);
 });
+
+// Helper to broadcast glyph updates to all windows
+async function broadcastGlyphUpdate(glyphId: string, changedFile: string) {
+  log(`📢 Broadcasting glyph update: ${glyphId} (${changedFile})`);
+  
+  // Find and load the updated glyph data
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const glyphDir = path.join(basePath, glyphId);
+    const manifestPath = path.join(glyphDir, 'manifest.json');
+    
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      const entryFile = manifest.entry
+        || (fs.existsSync(path.join(glyphDir, 'index.html')) ? 'index.html' : 'index.tsx');
+      const entryPath = path.join(glyphDir, entryFile);
+      
+      if (!fs.existsSync(entryPath)) {
+        log(`❌ Entry file missing for glyph ${glyphId}: ${entryFile}`);
+        return;
+      }
+      
+      const code = fs.readFileSync(entryPath, 'utf-8');
+      
+      // Resolve inputs for the update
+      const inputs: Record<string, unknown> = {};
+      
+      if (manifest.inputs && Array.isArray(manifest.inputs)) {
+        for (const input of manifest.inputs) {
+          if (input.value !== undefined) {
+            inputs[input.id] = input.value;
+          } else if (input.defaultValue !== undefined) {
+            inputs[input.id] = input.defaultValue;
+          }
+        }
+      }
+      
+      // Resolve linked keys
+      if (manifest.linkedKeys && Array.isArray(manifest.linkedKeys)) {
+        const apiKeyInputs = (manifest.inputs || []).filter((i: any) => i.type === 'apiKey');
+        
+        for (const keyId of manifest.linkedKeys) {
+          try {
+            const keyData = getSecureKeyValue(keyId);
+            if (keyData) {
+              const keyNameLower = keyData.name.toLowerCase().replace(/\s+/g, '');
+              
+              let matchedInputId: string | null = null;
+              for (const apiInput of apiKeyInputs) {
+                const inputIdLower = apiInput.id.toLowerCase();
+                const inputLabelLower = (apiInput.label || '').toLowerCase().replace(/\s+/g, '');
+                const inputService = (apiInput.service || '').toLowerCase();
+                
+                if (inputIdLower.includes(keyNameLower) || 
+                    keyNameLower.includes(inputIdLower) ||
+                    keyNameLower.includes(inputService) ||
+                    (inputService && keyNameLower.includes(inputService)) ||
+                    inputLabelLower.includes(keyNameLower) ||
+                    keyNameLower.includes(inputLabelLower)) {
+                  matchedInputId = apiInput.id;
+                  break;
+                }
+              }
+              
+              const inputKey = matchedInputId || keyNameLower;
+              inputs[inputKey] = keyData.value;
+            }
+          } catch (err) {
+            log(`⚠️ Failed to resolve key ${keyId} for update:`, err);
+          }
+        }
+      }
+      
+      const updateData = {
+        glyphId,
+        code,
+        inputs,
+        changedFile,
+        manifest: {
+          name: manifest.name,
+          prompt: manifest.prompt,
+        },
+      };
+      
+      // Send to overlay (widgets in foreground)
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send('glyph-updated', updateData);
+        log(`📤 Sent glyph-updated to overlay`);
+      }
+      
+      // Send to background (widgets in background layer)
+      if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+        backgroundWindow.webContents.send('glyph-updated', updateData);
+        log(`📤 Sent glyph-updated to background`);
+      }
+      
+      return;
+    }
+  }
+}
 
 // Invoke a glyph to the screen (supports 'background' or 'widget' mode)
 ipcMain.on('invoke-glyph', async (event, data: { glyphId: string; mode: 'background' | 'widget' }) => {
@@ -2639,6 +3750,7 @@ ipcMain.on('widget-layer-change', (event, data: {
     prompt: string;
     code: string;
     layer: 'foreground' | 'background';
+    inputs?: Record<string, unknown>;
   } | null 
 }) => {
   log(`📥 widget-layer-change received:`, JSON.stringify({
@@ -2705,8 +3817,8 @@ ipcMain.handle('delete-glyph', async (event, glyphId: string) => {
 // ════════════════════════════════════════════════════════════════════════════
 
 // Secure summon request from overlay
-ipcMain.on('summon-request', async (event, data: { prompt: string; model?: string }) => {
-  log('📨 summon-request received:', data.prompt, data.model ? `(model: ${data.model})` : '(auto)');
+ipcMain.on('summon-request', async (event, data: { prompt: string; model?: string; linkedKeys?: string[] }) => {
+  log('📨 summon-request received:', data.prompt, data.model ? `(model: ${data.model})` : '(auto)', data.linkedKeys?.length ? `(${data.linkedKeys.length} linked keys)` : '');
   
   // Forward to background for glyph injection
   if (backgroundWindow && !backgroundWindow.isDestroyed()) {
@@ -2720,7 +3832,24 @@ ipcMain.on('summon-request', async (event, data: { prompt: string; model?: strin
     : event.sender;
   
   // Start LLM streaming from main process (secure)
-  await summonGlyph(data.prompt, targetWebContents, data.model);
+  // Pass linkedKeys so they get saved to the manifest when the glyph is created
+  await summonGlyph(data.prompt, targetWebContents, data.model, 0, undefined, undefined, undefined, data.linkedKeys);
+});
+
+// Chat request from overlay (conversational mode - no glyph generation)
+ipcMain.on('chat-request', async (event, data: { message: string; model?: string; history?: RendererChatMessagePayload[] }) => {
+  log(
+    '💬 chat-request received:',
+    data.message.slice(0, 50),
+    data.model ? `(model: ${data.model})` : '(auto)',
+    data.history?.length ? `(${data.history.length} history msgs)` : ''
+  );
+  
+  const targetWebContents = overlayWindow && !overlayWindow.isDestroyed() 
+    ? overlayWindow.webContents 
+    : event.sender;
+  
+  await chatWithAI(data.message, data.history, targetWebContents, data.model);
 });
 
 // Get available models grouped by provider
@@ -2810,6 +3939,57 @@ ipcMain.on('background-interaction:debug', (_event, payload) => {
   } catch (_) {
     // renderer logging only
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🪟 WINDOW CONTROLS — Mac-style minimize, maximize, close
+// ═══════════════════════════════════════════════════════════════════════════
+
+ipcMain.handle('window-control', async (event, action: 'close' | 'minimize' | 'maximize') => {
+  // Find the BrowserWindow that sent this request
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) {
+    log('[WindowControl] No valid window found for action:', action);
+    return { success: false, error: 'Window not found' };
+  }
+
+  try {
+    switch (action) {
+      case 'close':
+        // For the overlay window, just hide it (don't destroy)
+        if (win === overlayWindow) {
+          // Notify the renderer that we're closing
+          win.webContents.send('loom-panel-closed');
+        }
+        log('[WindowControl] Close action - hiding window');
+        break;
+      case 'minimize':
+        win.minimize();
+        log('[WindowControl] Minimized window');
+        break;
+      case 'maximize':
+        if (win.isMaximized()) {
+          win.unmaximize();
+          log('[WindowControl] Unmaximized window');
+        } else {
+          win.maximize();
+          log('[WindowControl] Maximized window');
+        }
+        break;
+      default:
+        return { success: false, error: 'Unknown action' };
+    }
+    return { success: true, isMaximized: win.isMaximized() };
+  } catch (error) {
+    log('[WindowControl] Error:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+// Check if window is maximized
+ipcMain.handle('window-is-maximized', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return win && !win.isDestroyed() ? win.isMaximized() : false;
 });
 
 // Mouse capture for overlay UI hover
@@ -3017,6 +4197,24 @@ function saveSecureKeysData(data: Record<string, string>): void {
   }
 }
 
+// Get a single secure key with its value and metadata
+function getSecureKeyValue(keyId: string): { name: string; value: string } | null {
+  try {
+    const metadata = loadSecureKeysMetadata();
+    const values = loadSecureKeysData();
+    
+    const keyMeta = metadata.find(k => k.id === keyId);
+    const value = values[keyId];
+    
+    if (keyMeta && value) {
+      return { name: keyMeta.name, value };
+    }
+  } catch (err) {
+    log(`⚠️ Failed to get secure key value for ${keyId}:`, err);
+  }
+  return null;
+}
+
 // Get all stored keys (metadata only, no values)
 ipcMain.handle('get-stored-keys', async () => {
   const metadata = loadSecureKeysMetadata();
@@ -3129,6 +4327,89 @@ ipcMain.handle('delete-secure-key', async (event, keyId: string) => {
     return { success: true };
   } catch (err) {
     log('❌ Failed to delete secure key:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔑 LLM API KEY MANAGEMENT — For Grok, Gemini, OpenAI
+// ════════════════════════════════════════════════════════════════════════════
+
+// Get current LLM API key status (configured or not, masked values)
+ipcMain.handle('get-llm-api-keys-status', async () => {
+  try {
+    const keys = loadLlmApiKeysFromSecureStorage();
+    return {
+      success: true,
+      keys: {
+        grok: {
+          configured: !!keys.grok,
+          masked: keys.grok ? `${keys.grok.slice(0, 8)}...${keys.grok.slice(-4)}` : null,
+        },
+        gemini: {
+          configured: !!keys.gemini,
+          masked: keys.gemini ? `${keys.gemini.slice(0, 8)}...${keys.gemini.slice(-4)}` : null,
+        },
+        openai: {
+          configured: !!keys.openai,
+          masked: keys.openai ? `${keys.openai.slice(0, 8)}...${keys.openai.slice(-4)}` : null,
+        },
+      },
+    };
+  } catch (err) {
+    log('❌ Failed to get LLM API keys status:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Save an LLM API key (encrypts with Windows DPAPI)
+ipcMain.handle('save-llm-api-key', async (event, provider: 'grok' | 'gemini' | 'openai', apiKey: string) => {
+  try {
+    // Load existing keys
+    const keys = loadLlmApiKeysFromSecureStorage();
+    
+    // Update the specific key
+    keys[provider] = apiKey;
+    
+    // Save back to secure storage
+    const success = saveLlmApiKeysToSecureStorage(keys);
+    
+    if (success) {
+      // Reload API keys so they take effect immediately
+      reloadApiKeys();
+      log(`🔐 Saved LLM API key for ${provider}`);
+      return { success: true };
+    } else {
+      return { success: false, error: 'Failed to encrypt and save API key' };
+    }
+  } catch (err) {
+    log('❌ Failed to save LLM API key:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+// Delete an LLM API key
+ipcMain.handle('delete-llm-api-key', async (event, provider: 'grok' | 'gemini' | 'openai') => {
+  try {
+    // Load existing keys
+    const keys = loadLlmApiKeysFromSecureStorage();
+    
+    // Remove the specific key
+    delete keys[provider];
+    
+    // Save back to secure storage
+    const success = saveLlmApiKeysToSecureStorage(keys);
+    
+    if (success) {
+      // Reload API keys so the change takes effect immediately
+      reloadApiKeys();
+      log(`🔐 Deleted LLM API key for ${provider}`);
+      return { success: true };
+    } else {
+      return { success: false, error: 'Failed to save after deletion' };
+    }
+  } catch (err) {
+    log('❌ Failed to delete LLM API key:', err);
     return { success: false, error: String(err) };
   }
 });
@@ -3491,12 +4772,8 @@ ipcMain.on('summon-stream', (event, data) => {
 app.whenReady().then(() => {
   log('app-ready');
   
-  // Log API key status
-  log('🔐 API Keys:', {
-    grok: apiKeys.grok ? '✓' : '✗',
-    gemini: apiKeys.gemini ? '✓' : '✗',
-    openai: apiKeys.openai ? '✓' : '✗',
-  });
+  // Load API keys now that safeStorage is available
+  reloadApiKeys();
   
   // THE SACRED SHORTCUT — Ctrl+Alt+S to toggle interaction
   const registered = globalShortcut.register('Control+Alt+S', () => {

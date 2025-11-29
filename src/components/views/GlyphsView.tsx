@@ -132,6 +132,9 @@ export default function GlyphsView() {
   const [isKeyPickerOpen, setIsKeyPickerOpen] = useState(false);
   const [isLoadingKeys, setIsLoadingKeys] = useState(false);
   
+  // Resolved inputs for preview (includes API keys and input values)
+  const [resolvedPreviewInputs, setResolvedPreviewInputs] = useState<Record<string, unknown>>({});
+  
   // Drag and drop state
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<'glyph' | 'folder' | null>(null);
@@ -196,6 +199,7 @@ export default function GlyphsView() {
     setIsIconPickerOpen(false);
     setIsKeyPickerOpen(false);
     setLinkedKeys([]);
+    setResolvedPreviewInputs({});
 
     if (!selectedGlyph) {
       setIsPreviewLoading(false);
@@ -215,6 +219,8 @@ export default function GlyphsView() {
       }
     }
     setInputValues(initialValues);
+    // Also initialize resolved preview inputs with the same values
+    setResolvedPreviewInputs(prev => ({ ...prev, ...initialValues }));
     setEditedName(selectedGlyph.name);
 
     const entryFile = resolveGlyphEntryFile(selectedGlyph);
@@ -253,7 +259,7 @@ export default function GlyphsView() {
       }
     };
 
-    // Load linked keys for this glyph
+    // Load linked keys for this glyph and resolve their values for preview
     const loadLinkedKeys = async () => {
       setIsLoadingKeys(true);
       try {
@@ -261,6 +267,45 @@ export default function GlyphsView() {
         if (isCancelled) return;
         if (result?.success && result.linkedKeys) {
           setLinkedKeys(result.linkedKeys);
+        }
+        
+        // Also resolve the actual key values for preview
+        const resolvedResult = await window.loom?.getGlyphResolvedKeys?.(selectedGlyph.id);
+        if (isCancelled) return;
+        
+        if (resolvedResult?.success && resolvedResult.keys) {
+          const apiKeyInputs = (selectedGlyph.inputs || []).filter(i => i.type === 'apiKey');
+          const resolvedInputs: Record<string, unknown> = {};
+          
+          for (const [, keyData] of Object.entries(resolvedResult.keys) as [string, { name: string; value: string }][]) {
+            const keyName = keyData.name;
+            const keyNameLower = keyName.toLowerCase().replace(/\s+/g, '');
+            
+            // Try to find a matching apiKey input in the manifest
+            let matchedInputId: string | null = null;
+            
+            for (const apiInput of apiKeyInputs) {
+              const inputIdLower = apiInput.id.toLowerCase();
+              const inputLabelLower = (apiInput.label || '').toLowerCase().replace(/\s+/g, '');
+              const inputService = ((apiInput as any).service || '').toLowerCase();
+              
+              if (inputIdLower.includes(keyNameLower) || 
+                  keyNameLower.includes(inputIdLower) ||
+                  keyNameLower.includes(inputService) ||
+                  (inputService && keyNameLower.includes(inputService)) ||
+                  inputLabelLower.includes(keyNameLower) ||
+                  keyNameLower.includes(inputLabelLower)) {
+                matchedInputId = apiInput.id;
+                break;
+              }
+            }
+            
+            const inputKey = matchedInputId || keyNameLower;
+            resolvedInputs[inputKey] = keyData.value;
+            console.log(`🔐 [GlyphsView] Resolved key: ${keyName} → ${inputKey}`);
+          }
+          
+          setResolvedPreviewInputs(prev => ({ ...prev, ...resolvedInputs }));
         }
       } catch (error) {
         console.error('Failed to load linked keys:', error);
@@ -465,6 +510,8 @@ export default function GlyphsView() {
   // Handle input value change
   const handleInputChange = useCallback((inputId: string, value: unknown) => {
     setInputValues(prev => ({ ...prev, [inputId]: value }));
+    // Also update resolved preview inputs for immediate preview refresh
+    setResolvedPreviewInputs(prev => ({ ...prev, [inputId]: value }));
   }, []);
 
   // Save input values to manifest
@@ -1288,6 +1335,7 @@ export default function GlyphsView() {
                       glyphType={selectedGlyph.type}
                       allowPointerEvents={false}
                       style={styles.previewIframe}
+                      inputs={{ ...inputValues, ...resolvedPreviewInputs }}
                     />
                   </div>
                 )}
