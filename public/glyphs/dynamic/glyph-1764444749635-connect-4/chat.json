@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764444807864-user",
+    "role": "user",
+    "content": "generate a game of connect 4",
+    "timestamp": 1764444807864,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764444807864-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Connect 4\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764444807865,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764444807864-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764444807866,
+    "type": "info"
+  }
+]

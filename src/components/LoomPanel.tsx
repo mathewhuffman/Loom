@@ -70,6 +70,7 @@ export default function LoomPanel({
   const derivedInitialSection: NavSection =
     initialSection !== 'chat' ? initialSection : initialState?.activeSection ?? initialSection;
   const [activeSection, setActiveSection] = useState<NavSection>(derivedInitialSection);
+  const [mountedSections, setMountedSections] = useState<NavSection[]>(() => [derivedInitialSection]);
   const [isVisible, setIsVisible] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -135,6 +136,12 @@ export default function LoomPanel({
     }
     initialStateAppliedRef.current = true;
   }, [initialState, initialSection]);
+
+  useEffect(() => {
+    setMountedSections(prev =>
+      prev.includes(activeSection) ? prev : [...prev, activeSection]
+    );
+  }, [activeSection]);
 
   // Load available AI models
   useEffect(() => {
@@ -216,6 +223,37 @@ export default function LoomPanel({
     setActiveSection('editor'); // Only switch because user explicitly clicked
     hasAutoSwitchedToEditor.current = true;
   }, []);
+
+  const renderSectionContent = (section: NavSection) => {
+    switch (section) {
+      case 'chat':
+        return (
+          <ChatView
+            onGlyphCreated={handleChatGlyphCreated}
+            chatLLM={chatLLM}
+            generationLLM={generationLLM}
+            chatMode={chatModeState}
+            onChatModeChange={setChatModeState}
+          />
+        );
+      case 'glyphs':
+        return <GlyphsView />;
+      case 'editor':
+        return (
+          <CodeEditorView
+            initialGlyphId={chatGlyphCreation?.glyphId || initialGlyphId}
+            streamingCode={chatGlyphCreation?.streamingCode || streamingCode}
+            isStreaming={isStreaming}
+            persistedState={editorState}
+            onStateChange={onEditorStateChange}
+          />
+        );
+      case 'settings':
+        return <SettingsView />;
+      default:
+        return null;
+    }
+  };
 
   // Dragging functionality
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -761,26 +799,18 @@ export default function LoomPanel({
 
           {/* Main view area */}
           <div style={styles.viewContainer}>
-            {activeSection === 'chat' && (
-              <ChatView 
-                onGlyphCreated={handleChatGlyphCreated}
-                chatLLM={chatLLM}
-                generationLLM={generationLLM}
-                chatMode={chatModeState}
-                onChatModeChange={setChatModeState}
-              />
-            )}
-            {activeSection === 'glyphs' && <GlyphsView />}
-            {activeSection === 'editor' && (
-              <CodeEditorView 
-                initialGlyphId={chatGlyphCreation?.glyphId || initialGlyphId}
-                streamingCode={chatGlyphCreation?.streamingCode || streamingCode}
-                isStreaming={isStreaming}
-                persistedState={editorState}
-                onStateChange={onEditorStateChange}
-              />
-            )}
-            {activeSection === 'settings' && <SettingsView />}
+            {mountedSections.map(section => (
+              <div
+                key={section}
+                style={{
+                  ...styles.sectionWrapper,
+                  display: section === activeSection ? 'flex' : 'none',
+                }}
+                aria-hidden={section === activeSection ? undefined : true}
+              >
+                {renderSectionContent(section)}
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -1293,6 +1323,11 @@ const styles: Record<string, LoomStyle> = {
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+  },
+  sectionWrapper: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
   },
 };
 

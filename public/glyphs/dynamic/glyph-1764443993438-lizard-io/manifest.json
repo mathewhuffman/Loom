@@ -1,0 +1,67 @@
+{
+  "id": "glyph-1764443993438-lizard-io",
+  "name": "Lizard.io",
+  "prompt": "Make me slither.io app but instead of snakes it's lizards. Include inputs to change aspects of the game that is useful. Have ambient music and sound effects.",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-29T19:21:01.483Z",
+  "inputs": [
+    {
+      "id": "lizardColor",
+      "type": "color",
+      "label": "Lizard Color",
+      "defaultValue": "#32cd32",
+      "value": "#cd32a4"
+    },
+    {
+      "id": "enemyCount",
+      "type": "range",
+      "label": "Enemy Count",
+      "min": 5,
+      "max": 50,
+      "defaultValue": 20,
+      "value": 20
+    },
+    {
+      "id": "mapSize",
+      "type": "range",
+      "label": "Map Size",
+      "min": 2000,
+      "max": 10000,
+      "defaultValue": 4000,
+      "value": 4000
+    },
+    {
+      "id": "baseSpeed",
+      "type": "range",
+      "label": "Speed",
+      "min": 2,
+      "max": 10,
+      "defaultValue": 5,
+      "value": 3
+    },
+    {
+      "id": "musicVol",
+      "type": "range",
+      "label": "Music Volume",
+      "min": 0,
+      "max": 100,
+      "defaultValue": 30,
+      "value": 30
+    },
+    {
+      "id": "sfxVol",
+      "type": "range",
+      "label": "SFX Volume",
+      "min": 0,
+      "max": 100,
+      "defaultValue": 50,
+      "value": 50
+    }
+  ],
+  "icon": "🦎"
+}

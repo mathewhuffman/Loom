@@ -618,11 +618,35 @@ export default function ChatView({ onGlyphCreated, chatLLM, generationLLM, chatM
   const lastBundleIdRef = useRef<string | null>(null);
   const activeConversationIdRef = useRef<string | null>(null); // Sync ref for IPC callbacks
   const glyphsLoadedRef = useRef(false);
+  const streamingConversationIdRef = useRef<string | null>(null);
   
   // Keep ref in sync with state
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  const updateMessagesForConversation = useCallback((
+    conversationId: string | null,
+    updater: (messages: ChatMessage[]) => ChatMessage[]
+  ) => {
+    if (!conversationId) return;
+
+    if (activeConversationIdRef.current === conversationId) {
+      setMessages(prev => updater([...prev]));
+    }
+
+    setConversations(prev => prev.map(conv => {
+      if (conv.id !== conversationId) {
+        return conv;
+      }
+      const baseMessages = conv.messages ? [...conv.messages] : [];
+      return {
+        ...conv,
+        messages: updater(baseMessages),
+        updatedAt: Date.now(),
+      };
+    }));
+  }, [setConversations, setMessages]);
 
   // Load chat history on mount
   useEffect(() => {
@@ -937,6 +961,11 @@ useEffect(() => {
       }
     }
 
+    if (!convId) {
+      console.error('[ChatView] ❌ Unable to determine conversation ID for submission');
+      return;
+    }
+
     const attachmentsForMessage = pendingAttachments.map(att => ({ ...att }));
 
     const userMessage: ChatMessage = {
@@ -976,7 +1005,7 @@ useEffect(() => {
     })();
 
     // Add to local state
-    setMessages(prev => [...prev, userMessage]);
+    updateMessagesForConversation(convId, msgs => [...msgs, userMessage]);
     setInput('');
     setPendingAttachments([]);
     if (openAttachmentContext?.type === 'pending') {
@@ -991,10 +1020,10 @@ useEffect(() => {
         const updatedConv = await window.loom.addMessageToConversation(convId, userMessage);
         console.log('[ChatView] ✅ Message persisted, conversation now has', updatedConv?.messages?.length, 'messages');
         
-        // Update local conversations list
+        // Update metadata (like auto-titled conversation) without disrupting streaming state
         setConversations(prev => prev.map(c => 
           c.id === convId 
-            ? { ...c, messages: [...(c.messages || []), userMessage], updatedAt: Date.now(), title: updatedConv?.title || c.title }
+            ? { ...c, title: updatedConv?.title || c.title, updatedAt: Date.now() }
             : c
         ));
       } catch (err) {
@@ -1016,7 +1045,8 @@ useEffect(() => {
       isSummoning: chatMode === 'summon',
     };
     
-    setMessages(prev => [...prev, assistantPlaceholder]);
+    updateMessagesForConversation(convId, msgs => [...msgs, assistantPlaceholder]);
+    streamingConversationIdRef.current = convId;
 
     if (chatMode === 'summon') {
       console.log('[ChatView] 🔮 Starting summon request:', userMessage.content, '(model:', selectedGenerationModel, ')');
@@ -1026,6 +1056,18 @@ useEffect(() => {
           selectedGenerationModel, 
           selectedKeys.length > 0 ? selectedKeys : undefined
         );
+      } else {
+        console.error('[ChatView] summonRequest not available!');
+        updateMessagesForConversation(convId, msgs => 
+          msgs.map(msg => 
+            msg.id === assistantId && msg.isSummoning
+              ? { ...msg, content: '❌ Summon API not available' }
+              : msg
+          )
+        );
+        setIsGenerating(false);
+        streamingConversationIdRef.current = null;
+        currentStreamingIdRef.current = null;
       }
     } else {
       console.log('[ChatView] 💬 Starting chat request:', userMessage.content, '(model:', selectedChatModel, ')');
@@ -1033,12 +1075,16 @@ useEffect(() => {
         window.loom.chatRequest(userMessage.content, selectedChatModel, historyForRequest);
       } else {
         console.error('[ChatView] chatRequest not available!');
-        setMessages(prev => prev.map(msg => 
-          msg.id === assistantId 
-            ? { ...msg, content: '❌ Chat API not available' }
-            : msg
-        ));
+        updateMessagesForConversation(convId, msgs => 
+          msgs.map(msg => 
+            msg.id === assistantId && !msg.isSummoning
+              ? { ...msg, content: '❌ Chat API not available' }
+              : msg
+          )
+        );
         setIsGenerating(false);
+        streamingConversationIdRef.current = null;
+        currentStreamingIdRef.current = null;
       }
     }
   }, [input, pendingAttachments, isGenerating, selectedChatModel, selectedGenerationModel, chatMode, selectedKeys, activeConversationId, messages, openAttachmentContext]);
@@ -1062,11 +1108,17 @@ useEffect(() => {
     if (!window.loom) return;
 
     const handleSummonChunk = (data: { fullCode: string }) => {
-      setMessages(prev => prev.map(msg => 
-        msg.id === currentStreamingIdRef.current && msg.isSummoning
-          ? { ...msg, content: data.fullCode }
-          : msg
-      ));
+      const convId = streamingConversationIdRef.current;
+      const assistantId = currentStreamingIdRef.current;
+      if (!convId || !assistantId) return;
+
+      updateMessagesForConversation(convId, msgs => 
+        msgs.map(msg => 
+          msg.id === assistantId && msg.isSummoning
+            ? { ...msg, content: data.fullCode }
+            : msg
+        )
+      );
     };
 
     const handleSummonComplete = async (data: { 
@@ -1081,42 +1133,46 @@ useEffect(() => {
       });
       
       const assistantId = currentStreamingIdRef.current;
-      if (!assistantId) return;
+      const convId = streamingConversationIdRef.current;
+      if (!assistantId || !convId) return;
       
       // Update the assistant message with the glyph embed data
       // The SummonMessage component will handle the goopy transition
       if (data.bundle?.id && data.bundle.id !== lastBundleIdRef.current) {
         lastBundleIdRef.current = data.bundle.id;
         
-        setMessages(prev => prev.map(msg => 
-          msg.id === assistantId && msg.isSummoning
-            ? { 
-                ...msg, 
-                content: data.code, 
-                glyphId: data.bundle?.id,
-                glyphEmbed: {
-                  code: data.code,
-                  glyphId: data.bundle!.id,
-                  glyphName: data.bundle!.name || 'Unnamed Glyph',
-                },
-              }
-            : msg
-        ));
+        updateMessagesForConversation(convId, msgs => 
+          msgs.map(msg => 
+            msg.id === assistantId && msg.isSummoning
+              ? { 
+                  ...msg, 
+                  content: data.code, 
+                  glyphId: data.bundle?.id,
+                  glyphEmbed: {
+                    code: data.code,
+                    glyphId: data.bundle!.id,
+                    glyphName: data.bundle!.name || 'Unnamed Glyph',
+                  },
+                }
+              : msg
+          )
+        );
       } else {
         // No bundle, just update content
-        setMessages(prev => prev.map(msg => 
-          msg.id === assistantId && msg.isSummoning
-            ? { ...msg, content: data.code, glyphId: data.bundle?.id }
-            : msg
-        ));
+        updateMessagesForConversation(convId, msgs => 
+          msgs.map(msg => 
+            msg.id === assistantId && msg.isSummoning
+              ? { ...msg, content: data.code, glyphId: data.bundle?.id }
+              : msg
+          )
+        );
       }
       
       setIsGenerating(false);
       
-      // Persist assistant message - use ref for reliable conversation ID
-      const convId = activeConversationIdRef.current;
+      // Persist assistant message to the conversation that initiated the stream
       console.log('[ChatView] 💾 Persisting assistant message to:', convId);
-      if (convId && window.loom?.addMessageToConversation) {
+      if (window.loom?.addMessageToConversation) {
         try {
           await window.loom.addMessageToConversation(convId, {
             id: assistantId,
@@ -1139,43 +1195,61 @@ useEffect(() => {
         console.warn('[ChatView] ⚠️ Cannot persist assistant message:', { convId, hasMethod: !!window.loom?.addMessageToConversation });
       }
       
+      streamingConversationIdRef.current = null;
+      currentStreamingIdRef.current = null;
+
       // User stays in chat - no auto-navigation to editor
     };
 
     const handleSummonError = (data: { error: string }) => {
-      setMessages(prev => prev.map(msg => 
-        msg.id === currentStreamingIdRef.current && msg.isSummoning
-          ? { ...msg, content: `❌ Error: ${data.error}` }
-          : msg
-      ));
+      const convId = streamingConversationIdRef.current;
+      const assistantId = currentStreamingIdRef.current;
+      if (!convId || !assistantId) return;
+
+      updateMessagesForConversation(convId, msgs => 
+        msgs.map(msg => 
+          msg.id === assistantId && msg.isSummoning
+            ? { ...msg, content: `❌ Error: ${data.error}` }
+            : msg
+        )
+      );
       setIsGenerating(false);
+      streamingConversationIdRef.current = null;
+      currentStreamingIdRef.current = null;
     };
 
     const handleChatChunk = (data: { fullResponse: string }) => {
-      setMessages(prev => prev.map(msg => 
-        msg.id === currentStreamingIdRef.current && !msg.isSummoning
-          ? { ...msg, content: data.fullResponse }
-          : msg
-      ));
+      const convId = streamingConversationIdRef.current;
+      const assistantId = currentStreamingIdRef.current;
+      if (!convId || !assistantId) return;
+
+      updateMessagesForConversation(convId, msgs => 
+        msgs.map(msg => 
+          msg.id === assistantId && !msg.isSummoning
+            ? { ...msg, content: data.fullResponse }
+            : msg
+        )
+      );
     };
 
     const handleChatComplete = async (data: { response: string }) => {
       console.log('[ChatView] ✅ chat-complete', { responseLength: data.response?.length });
       
       const assistantId = currentStreamingIdRef.current;
-      if (!assistantId) return;
+      const convId = streamingConversationIdRef.current;
+      if (!assistantId || !convId) return;
       
-      setMessages(prev => prev.map(msg => 
-        msg.id === assistantId && !msg.isSummoning
-          ? { ...msg, content: data.response }
-          : msg
-      ));
+      updateMessagesForConversation(convId, msgs => 
+        msgs.map(msg => 
+          msg.id === assistantId && !msg.isSummoning
+            ? { ...msg, content: data.response }
+            : msg
+        )
+      );
       setIsGenerating(false);
       
-      // Persist assistant message - use ref for reliable conversation ID
-      const convId = activeConversationIdRef.current;
       console.log('[ChatView] 💾 Persisting chat response to:', convId);
-      if (convId && window.loom?.addMessageToConversation) {
+      if (window.loom?.addMessageToConversation) {
         try {
           await window.loom.addMessageToConversation(convId, {
             id: assistantId,
@@ -1191,15 +1265,26 @@ useEffect(() => {
       } else {
         console.warn('[ChatView] ⚠️ Cannot persist chat response:', { convId, hasMethod: !!window.loom?.addMessageToConversation });
       }
+
+      streamingConversationIdRef.current = null;
+      currentStreamingIdRef.current = null;
     };
 
     const handleChatError = (data: { error: string }) => {
-      setMessages(prev => prev.map(msg => 
-        msg.id === currentStreamingIdRef.current && !msg.isSummoning
-          ? { ...msg, content: `❌ Error: ${data.error}` }
-          : msg
-      ));
+      const convId = streamingConversationIdRef.current;
+      const assistantId = currentStreamingIdRef.current;
+      if (!convId || !assistantId) return;
+
+      updateMessagesForConversation(convId, msgs => 
+        msgs.map(msg => 
+          msg.id === assistantId && !msg.isSummoning
+            ? { ...msg, content: `❌ Error: ${data.error}` }
+            : msg
+        )
+      );
       setIsGenerating(false);
+      streamingConversationIdRef.current = null;
+      currentStreamingIdRef.current = null;
     };
 
     // Subscribe to events

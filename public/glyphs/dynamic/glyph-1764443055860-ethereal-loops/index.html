@@ -1,0 +1,665 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ethereal Loops</title>
+    <style>
+        :root {
+            --accent: #00ffee;
+            --bg: #0b0b12;
+            --panel-bg: rgba(20, 20, 30, 0.8);
+            --text: #ffffff;
+        }
+        
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg);
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: var(--text);
+            user-select: none;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            cursor: crosshair;
+        }
+
+        /* Overlay for "Click to Start" */
+        #intro {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            backdrop-filter: blur(5px);
+            transition: opacity 0.5s;
+        }
+        
+        #intro h1 {
+            font-weight: 200;
+            letter-spacing: 4px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 20px var(--accent);
+        }
+        
+        .btn-start {
+            padding: 12px 30px;
+            border: 1px solid var(--accent);
+            background: transparent;
+            color: var(--accent);
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 30px;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .btn-start:hover {
+            background: var(--accent);
+            color: #000;
+            box-shadow: 0 0 20px var(--accent);
+        }
+
+        /* Controls Panel */
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--panel-bg);
+            padding: 15px 25px;
+            border-radius: 50px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            z-index: 10;
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.5s;
+        }
+        
+        #controls.visible {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .control-group label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.7;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100px;
+            height: 4px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            border: 2px solid #fff;
+            box-shadow: 0 0 10px var(--accent);
+        }
+
+        button.icon-btn {
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 18px;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        button.icon-btn:hover {
+            opacity: 1;
+            text-shadow: 0 0 10px #fff;
+        }
+
+        /* Top Info */
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 5;
+            pointer-events: none;
+            font-size: 12px;
+            opacity: 0.5;
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: rgba(0,0,0,0.8);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 20;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="intro">
+        <h1>ETHEREAL LOOPS</h1>
+        <button class="btn-start" id="startBtn">Enter Soundscape</button>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <div id="info">Click to place stars • Drag center to spin</div>
+
+    <div id="controls">
+        <button class="icon-btn" id="playPauseBtn" title="Play/Pause">⏸</button>
+        
+        <div class="control-group">
+            <label>Speed</label>
+            <input type="range" id="speedRange" min="5" max="60" value="20">
+        </div>
+
+        <div class="control-group">
+            <label>Delay</label>
+            <input type="range" id="delayRange" min="0" max="0.8" step="0.01" value="0.4">
+        </div>
+        
+        <div class="control-group">
+            <label>Filter</label>
+            <input type="range" id="filterRange" min="200" max="5000" step="10" value="1500">
+        </div>
+
+        <button class="icon-btn" id="clearBtn" title="Clear All">🗑</button>
+        <button class="icon-btn" id="randomBtn" title="Randomize">🎲</button>
+    </div>
+    
+    <div class="tooltip" id="tooltip"></div>
+
+    <script type="module">
+        // ════════════════════════════════════════════════════════════════════════
+        // CONFIG & STATE
+        // ════════════════════════════════════════════════════════════════════════
+        
+        const inputs = window.GLYPH_INPUTS || {};
+        const CONFIG = {
+            rootNote: inputs.rootNote || 'D',
+            scaleType: inputs.scaleType || 'minorPentatonic',
+            baseOctave: parseInt(inputs.baseOctave || 3),
+            reverbWet: (parseInt(inputs.reverbWet || 60)) / 100,
+            accent: inputs.accentColor || '#00ffee'
+        };
+
+        // Update CSS var
+        document.documentElement.style.setProperty('--accent', CONFIG.accent);
+
+        const STATE = {
+            isPlaying: false,
+            nodes: [], // {x, y, dist, angle, active, playing}
+            rotation: 0,
+            speed: 0.005, // Radians per frame
+            bpm: 20,
+            width: 0,
+            height: 0,
+            centerX: 0,
+            centerY: 0,
+            maxDist: 0,
+            mouse: { x: 0, y: 0, isDown: false, dragging: false }
+        };
+
+        // Musical scales (intervals from root)
+        const SCALES = {
+            majorPentatonic: [0, 2, 4, 7, 9],
+            minorPentatonic: [0, 3, 5, 7, 10],
+            dorian: [0, 2, 3, 5, 7, 9, 10],
+            lydian: [0, 2, 4, 6, 7, 9, 11],
+            hirajoshi: [0, 2, 3, 7, 8],
+            chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        };
+
+        const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        const ROOT_INDEX = NOTE_NAMES.indexOf(CONFIG.rootNote);
+
+        // ════════════════════════════════════════════════════════════════════════
+        // AUDIO ENGINE
+        // ════════════════════════════════════════════════════════════════════════
+
+        let audioCtx;
+        let masterGain;
+        let reverbNode;
+        let delayNode;
+        let filterNode;
+        let analyser;
+
+        async function initAudio() {
+            if (audioCtx) return;
+            
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+            
+            // Master Chain
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.8;
+
+            // Analyser for visuals
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 256;
+
+            // Lowpass Filter
+            filterNode = audioCtx.createBiquadFilter();
+            filterNode.type = 'lowpass';
+            filterNode.frequency.value = 1500;
+            filterNode.Q.value = 1;
+
+            // Delay (Tape style)
+            delayNode = audioCtx.createDelay(5.0);
+            delayNode.delayTime.value = 0.4; // Synced roughly to BPM visually
+            const delayFeedback = audioCtx.createGain();
+            delayFeedback.gain.value = 0.4;
+            
+            delayNode.connect(delayFeedback);
+            delayFeedback.connect(delayNode);
+
+            // Reverb (Convolution)
+            reverbNode = audioCtx.createConvolver();
+            reverbNode.buffer = await createImpulseResponse(3.0, 2.0); // Length, Decay
+            
+            const reverbGain = audioCtx.createGain();
+            reverbGain.gain.value = CONFIG.reverbWet;
+
+            // Routing
+            // Oscillators -> Filter -> Master -> Analyser -> Dest
+            //               Filter -> Delay -> Master
+            //               Filter -> Reverb -> Master
+            
+            filterNode.connect(masterGain);
+            filterNode.connect(delayNode);
+            delayNode.connect(masterGain);
+            
+            filterNode.connect(reverbNode);
+            reverbNode.connect(reverbGain);
+            reverbGain.connect(masterGain);
+
+            masterGain.connect(analyser);
+            analyser.connect(audioCtx.destination);
+            
+            STATE.isPlaying = true;
+            document.getElementById('controls').classList.add('visible');
+        }
+
+        // Generate synthetic impulse response for reverb
+        async function createImpulseResponse(duration, decay) {
+            const rate = audioCtx.sampleRate;
+            const length = rate * duration;
+            const impulse = audioCtx.createBuffer(2, length, rate);
+            const left = impulse.getChannelData(0);
+            const right = impulse.getChannelData(1);
+
+            for (let i = 0; i < length; i++) {
+                const n = i / length;
+                // Noise * exponential decay
+                const v = (Math.random() * 2 - 1) * Math.pow(1 - n, decay);
+                left[i] = v;
+                right[i] = v;
+            }
+            return impulse;
+        }
+
+        function getFrequencyFromDistance(distRatio) {
+            // distRatio 0 (center) to 1 (edge)
+            // Map to scale notes across 3-4 octaves
+            // Invert: Center = High pitch, Edge = Low pitch? Or vice versa.
+            // Let's do: Center = High, Edge = Low (Physics of strings)
+            
+            const scale = SCALES[CONFIG.scaleType];
+            const totalNotes = scale.length * 3; // 3 octaves range
+            
+            // 1.0 -> 0 (Low), 0.0 -> Max (High)
+            const noteIndex = Math.floor((1 - distRatio) * totalNotes);
+            const octaveOffset = Math.floor(noteIndex / scale.length);
+            const scaleDegree = noteIndex % scale.length;
+            
+            const semitoneOffset = scale[scaleDegree];
+            const totalSemitones = (CONFIG.baseOctave + octaveOffset) * 12 + ROOT_INDEX + semitoneOffset;
+            
+            // A4 = 440Hz = MIDI 69
+            // Freq = 440 * 2^((midi - 69)/12)
+            // C3 is MIDI 48
+            const midi = totalSemitones + 12; // Shift up a bit
+            return 440 * Math.pow(2, (midi - 69) / 12);
+        }
+
+        function playNote(freq, velocity = 1) {
+            if (!audioCtx) return;
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            // Mix waveforms for ethereal sound
+            // Use custom periodic wave or just simple sine/triangle mix
+            osc.type = 'triangle'; 
+            
+            // Envelope
+            const now = audioCtx.currentTime;
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.3 * velocity, now + 0.05); // Attack
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 2.0); // Release
+
+            osc.frequency.setValueAtTime(freq, now);
+            // Slight detune for chorus effect
+            osc.detune.value = (Math.random() - 0.5) * 10;
+
+            osc.connect(gain);
+            gain.connect(filterNode);
+
+            osc.start(now);
+            osc.stop(now + 2.5);
+            
+            // Second layer (Sine) for body
+            const osc2 = audioCtx.createOscillator();
+            const gain2 = audioCtx.createGain();
+            osc2.type = 'sine';
+            osc2.frequency.value = freq;
+            
+            gain2.gain.setValueAtTime(0, now);
+            gain2.gain.linearRampToValueAtTime(0.2 * velocity, now + 0.1);
+            gain2.gain.exponentialRampToValueAtTime(0.001, now + 3.0);
+            
+            osc2.connect(gain2);
+            gain2.connect(filterNode);
+            osc2.start(now);
+            osc2.stop(now + 3.5);
+        }
+
+        // ════════════════════════════════════════════════════════════════════════
+        // VISUALS & LOGIC
+        // ════════════════════════════════════════════════════════════════════════
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            STATE.width = canvas.width;
+            STATE.height = canvas.height;
+            STATE.centerX = STATE.width / 2;
+            STATE.centerY = STATE.height / 2;
+            STATE.maxDist = Math.min(STATE.width, STATE.height) * 0.45;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function addNode(x, y) {
+            const dx = x - STATE.centerX;
+            const dy = y - STATE.centerY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            if (dist > STATE.maxDist) return; // Out of bounds
+
+            // Angle in radians 0 to 2PI
+            let angle = Math.atan2(dy, dx);
+            if (angle < 0) angle += Math.PI * 2;
+
+            const freq = getFrequencyFromDistance(dist / STATE.maxDist);
+            
+            STATE.nodes.push({
+                x, y, dist, angle, freq,
+                active: true,
+                pulse: 0,
+                hue: Math.random() * 40 - 20 // Variation on accent
+            });
+        }
+
+        function draw() {
+            requestAnimationFrame(draw);
+            
+            // Clear with fade for trails
+            ctx.fillStyle = 'rgba(11, 11, 18, 0.2)';
+            ctx.fillRect(0, 0, STATE.width, STATE.height);
+
+            if (!STATE.isPlaying) return;
+
+            // Audio Analysis for background pulse
+            let bass = 0;
+            if (analyser) {
+                const data = new Uint8Array(analyser.frequencyBinCount);
+                analyser.getByteFrequencyData(data);
+                bass = data[4] / 255; // Low freq bin
+            }
+
+            // Update rotation
+            STATE.rotation += STATE.speed;
+            if (STATE.rotation >= Math.PI * 2) STATE.rotation -= Math.PI * 2;
+
+            // Draw center sun
+            const sunRadius = 5 + bass * 20;
+            ctx.beginPath();
+            ctx.arc(STATE.centerX, STATE.centerY, sunRadius, 0, Math.PI * 2);
+            ctx.fillStyle = CONFIG.accent;
+            ctx.shadowBlur = 20 + bass * 50;
+            ctx.shadowColor = CONFIG.accent;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Draw Scan Line
+            ctx.beginPath();
+            ctx.moveTo(STATE.centerX, STATE.centerY);
+            const lineX = STATE.centerX + Math.cos(STATE.rotation) * STATE.maxDist;
+            const lineY = STATE.centerY + Math.sin(STATE.rotation) * STATE.maxDist;
+            ctx.lineTo(lineX, lineY);
+            
+            // Gradient scan line
+            const grad = ctx.createLinearGradient(STATE.centerX, STATE.centerY, lineX, lineY);
+            grad.addColorStop(0, 'rgba(255,255,255,0)');
+            grad.addColorStop(1, CONFIG.accent);
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw Orbit Rings (guide)
+            ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+            ctx.lineWidth = 1;
+            for(let i=1; i<=4; i++) {
+                ctx.beginPath();
+                ctx.arc(STATE.centerX, STATE.centerY, (STATE.maxDist/4)*i, 0, Math.PI*2);
+                ctx.stroke();
+            }
+
+            // Check collisions and Draw Nodes
+            // We check if the scan line just passed the node
+            // Simple way: check angular difference
+            
+            const beamWidth = STATE.speed * 1.5; // Tolerance
+
+            STATE.nodes.forEach(node => {
+                // Draw Node
+                ctx.beginPath();
+                
+                // Pulse effect
+                let r = 4;
+                if (node.pulse > 0) {
+                    r += node.pulse * 10;
+                    node.pulse *= 0.9;
+                    if (node.pulse < 0.01) node.pulse = 0;
+                }
+
+                ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+                
+                // Color calc
+                // Use HSL to shift hue based on CONFIG.accent
+                ctx.fillStyle = CONFIG.accent; // Simplified for now
+                // Actually let's try to parse the hex accent to HSL to rotate it? 
+                // Too complex for no-deps. We'll just use white + accent glow.
+                
+                if (node.pulse > 0) {
+                    ctx.fillStyle = '#fff';
+                    ctx.shadowColor = CONFIG.accent;
+                    ctx.shadowBlur = 20;
+                } else {
+                    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+                    ctx.shadowBlur = 0;
+                }
+                
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // Check Trigger
+                // Normalize angles to 0-2PI
+                let diff = node.angle - STATE.rotation;
+                // Handle wrap around
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+
+                // If the line is very close and we haven't played this rotation yet
+                // We need a flag to prevent multi-trigger per frame
+                // A simple approach: check if diff is within [0, speed] (meaning line just passed it)
+                
+                // Since rotation increases, line passes node if node.angle is just behind rotation
+                // so rotation > angle.
+                
+                // Actually, let's use a "lastRotation" state? 
+                // Or just check if diff is small negative?
+                // rotation is current. if rotation - speed < angle < rotation
+                
+                // Let's use a simple distance check on the arc
+                if (Math.abs(diff) < STATE.speed / 1.5 && node.pulse === 0) {
+                     triggerNode(node);
+                }
+            });
+        }
+
+        function triggerNode(node) {
+            node.pulse = 1;
+            playNote(node.freq);
+            
+            // Visual ripple
+            const ripple = document.createElement('div');
+            // We can't use DOM for high freq animation easily, stick to canvas.
+            // But we can spawn a particle in a particle system if we wanted.
+            // For now, the "pulse" property handles the visual bloom.
+        }
+
+        // ════════════════════════════════════════════════════════════════════════
+        // INTERACTION
+        // ════════════════════════════════════════════════════════════════════════
+
+        const intro = document.getElementById('intro');
+        const startBtn = document.getElementById('startBtn');
+        
+        startBtn.addEventListener('click', async () => {
+            await initAudio();
+            intro.style.opacity = 0;
+            setTimeout(() => intro.remove(), 500);
+            
+            // Add some random initial nodes
+            for(let i=0; i<8; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const dist = (0.2 + Math.random() * 0.7) * STATE.maxDist;
+                const x = STATE.centerX + Math.cos(angle) * dist;
+                const y = STATE.centerY + Math.sin(angle) * dist;
+                addNode(x, y);
+            }
+            
+            draw();
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (!STATE.isPlaying) return;
+            addNode(e.clientX, e.clientY);
+        });
+
+        // UI Controls
+        const speedRange = document.getElementById('speedRange');
+        const delayRange = document.getElementById('delayRange');
+        const filterRange = document.getElementById('filterRange');
+        const clearBtn = document.getElementById('clearBtn');
+        const randomBtn = document.getElementById('randomBtn');
+        const playPauseBtn = document.getElementById('playPauseBtn');
+
+        speedRange.addEventListener('input', (e) => {
+            // Map 5-60 RPM to radians per frame (at 60fps)
+            // RPM / 60 = RPS. RPS * 2PI = Rad/s. Rad/s / 60 = Rad/frame
+            const rpm = parseInt(e.target.value);
+            STATE.speed = (rpm / 60 * Math.PI * 2) / 60;
+        });
+
+        delayRange.addEventListener('input', (e) => {
+            if(delayNode) delayNode.delayTime.linearRampToValueAtTime(parseFloat(e.target.value), audioCtx.currentTime + 0.1);
+        });
+        
+        filterRange.addEventListener('input', (e) => {
+            if(filterNode) filterNode.frequency.linearRampToValueAtTime(parseFloat(e.target.value), audioCtx.currentTime + 0.1);
+        });
+
+        clearBtn.addEventListener('click', () => {
+            STATE.nodes = [];
+        });
+
+        randomBtn.addEventListener('click', () => {
+            STATE.nodes = [];
+            const count = 5 + Math.floor(Math.random() * 10);
+            for(let i=0; i<count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const dist = (0.2 + Math.random() * 0.7) * STATE.maxDist;
+                const x = STATE.centerX + Math.cos(angle) * dist;
+                const y = STATE.centerY + Math.sin(angle) * dist;
+                addNode(x, y);
+            }
+        });
+        
+        playPauseBtn.addEventListener('click', () => {
+            if (STATE.speed > 0) {
+                STATE.lastSpeed = STATE.speed;
+                STATE.speed = 0;
+                playPauseBtn.textContent = "▶";
+            } else {
+                STATE.speed = STATE.lastSpeed || 0.005;
+                playPauseBtn.textContent = "⏸";
+            }
+        });
+
+    </script>
+</body>
+</html>
