@@ -436,6 +436,15 @@ export default function CodeEditorView({
   // Editor open/close state
   const [isEditorOpen, setIsEditorOpen] = useState(persistedState?.isEditorOpen ?? true);
   
+  // Unsaved changes dialog state
+  const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<{
+    type: 'glyph' | 'close' | 'file';
+    glyph?: GlyphManifest;
+    file?: string;
+  } | null>(null);
+  const [dialogAnimationPhase, setDialogAnimationPhase] = useState<'entering' | 'visible' | 'exiting'>('entering');
+  
   const chatEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const persistedGlyphIdRef = useRef<string | null>(persistedState?.selectedGlyphId ?? null);
@@ -520,16 +529,23 @@ export default function CodeEditorView({
     }
   }, [folders, unassignedOrder]);
 
-  // Handler for selecting a glyph (shared between folder and flat views)
-  const handleGlyphSelect = useCallback(async (glyph: GlyphManifest, preferredFile?: string | null) => {
+  // Check if there are unsaved changes
+  const hasUnsavedChanges = useCallback(() => {
+    return isModified || Object.keys(pendingRefinements).length > 0;
+  }, [isModified, pendingRefinements]);
+
+  // Actually perform the glyph selection (after confirmation if needed)
+  const performGlyphSelect = useCallback(async (glyph: GlyphManifest, preferredFile?: string | null) => {
     setSelectedGlyph(glyph);
-    setIsEditorOpen(true); // Open editor when selecting glyph
+    // DON'T auto-open editor - respect user's preference for keeping it closed
     // Clear any pending refinements from previous glyph
     setPendingRefinements({});
     // Clear devtools state
     setConsoleLogs([]);
     setNetworkRequests([]);
     setResolvedInputs({});
+    // Reset modified state
+    setIsModified(false);
     
     // Default to index.html for editing/preview, fallback to first file
     const defaultFile = preferredFile && glyph.files?.includes(preferredFile)
@@ -622,6 +638,87 @@ export default function CodeEditorView({
         }
       });
     }
+  }, []);
+
+  // Handler for selecting a glyph - checks for unsaved changes first
+  const handleGlyphSelect = useCallback((glyph: GlyphManifest, preferredFile?: string | null) => {
+    // Skip if selecting the same glyph
+    if (selectedGlyph?.id === glyph.id) return;
+    
+    // Check for unsaved changes
+    if (hasUnsavedChanges()) {
+      // Show confirmation dialog
+      setPendingNavigation({ type: 'glyph', glyph, file: preferredFile || undefined });
+      setDialogAnimationPhase('entering');
+      setShowUnsavedDialog(true);
+      setTimeout(() => setDialogAnimationPhase('visible'), 50);
+      return;
+    }
+    
+    // No unsaved changes, proceed directly
+    performGlyphSelect(glyph, preferredFile);
+  }, [selectedGlyph?.id, hasUnsavedChanges, performGlyphSelect]);
+
+  // Handle dialog actions
+  const handleUnsavedDialogSave = useCallback(async () => {
+    // Save changes first
+    if (currentPendingRefinement && selectedGlyph && selectedFile) {
+      try {
+        await window.loom?.saveGlyphFile?.(selectedGlyph.id, selectedFile, currentPendingRefinement.newCode);
+        setFileContent(currentPendingRefinement.newCode);
+        setOriginalContent(currentPendingRefinement.newCode);
+      } catch (error) {
+        console.error('Failed to save pending refinement:', error);
+      }
+    } else if (isModified && selectedGlyph && selectedFile) {
+      try {
+        await window.loom?.saveGlyphFile?.(selectedGlyph.id, selectedFile, fileContent);
+        setOriginalContent(fileContent);
+      } catch (error) {
+        console.error('Failed to save file:', error);
+      }
+    }
+    
+    // Clear pending state
+    setPendingRefinements({});
+    setIsModified(false);
+    
+    // Proceed with navigation
+    setDialogAnimationPhase('exiting');
+    setTimeout(() => {
+      setShowUnsavedDialog(false);
+      if (pendingNavigation?.type === 'glyph' && pendingNavigation.glyph) {
+        performGlyphSelect(pendingNavigation.glyph, pendingNavigation.file);
+      } else if (pendingNavigation?.type === 'close') {
+        setIsEditorOpen(false);
+      }
+      setPendingNavigation(null);
+    }, 300);
+  }, [currentPendingRefinement, selectedGlyph, selectedFile, isModified, fileContent, pendingNavigation, performGlyphSelect]);
+
+  const handleUnsavedDialogDiscard = useCallback(() => {
+    // Discard changes and proceed
+    setPendingRefinements({});
+    setIsModified(false);
+    
+    setDialogAnimationPhase('exiting');
+    setTimeout(() => {
+      setShowUnsavedDialog(false);
+      if (pendingNavigation?.type === 'glyph' && pendingNavigation.glyph) {
+        performGlyphSelect(pendingNavigation.glyph, pendingNavigation.file);
+      } else if (pendingNavigation?.type === 'close') {
+        setIsEditorOpen(false);
+      }
+      setPendingNavigation(null);
+    }, 300);
+  }, [pendingNavigation, performGlyphSelect]);
+
+  const handleUnsavedDialogCancel = useCallback(() => {
+    setDialogAnimationPhase('exiting');
+    setTimeout(() => {
+      setShowUnsavedDialog(false);
+      setPendingNavigation(null);
+    }, 300);
   }, []);
 
   // Load glyphs and folder organization
@@ -1135,9 +1232,17 @@ export default function CodeEditorView({
     // Manifest edits are rarely what users want when asking for visual/behavioral changes
     const targetFileName = (selectedFile === 'manifest.json') ? 'index.html' : (selectedFile || 'index.html');
     
-    // Get the correct file content - if we're switching to index.html, load that content
+    // Get the most up-to-date code for refinement
+    // Priority: 1) Pending refinement (if exists), 2) Current file content, 3) Freshly loaded from disk
     let codeToRefine = fileContent;
-    if (selectedFile === 'manifest.json' && targetFileName === 'index.html') {
+    
+    // CRITICAL: If there's a pending refinement for this file, use that code instead!
+    // This ensures follow-up refinements build on previous changes, not the original code
+    const pendingForTarget = pendingRefinements[targetFileName];
+    if (pendingForTarget) {
+      codeToRefine = pendingForTarget.newCode;
+      console.log(`[Refine] 📝 Using pending refinement code for ${targetFileName} (${codeToRefine.length} chars)`);
+    } else if (selectedFile === 'manifest.json' && targetFileName === 'index.html') {
       // Load index.html content since we're refining that instead
       try {
         const indexContent = await window.loom?.readGlyphFile?.(selectedGlyph.id, 'index.html');
@@ -1151,6 +1256,9 @@ export default function CodeEditorView({
           codeToRefine = previewCode;
         }
       }
+    } else if (targetFileName === selectedFile && fileContent) {
+      // Use current file content for the selected file
+      codeToRefine = fileContent;
     }
     
     logRefinementEvent(debugId, 'Request initialized', {
@@ -1304,7 +1412,7 @@ export default function CodeEditorView({
     
     setIsRefining(false);
     logRefinementEvent(debugId, 'Request finalized');
-  }, [chatInput, selectedGlyph, selectedFile, fileContent, previewCode, isRefining, chatMessages, selectedRefineModel, currentPendingRefinement]);
+  }, [chatInput, selectedGlyph, selectedFile, fileContent, previewCode, isRefining, chatMessages, selectedRefineModel, currentPendingRefinement, pendingRefinements]);
 
   // Accept pending refinement for current file
   const handleAcceptRefinement = useCallback(async () => {
@@ -1997,11 +2105,16 @@ export default function CodeEditorView({
                 key={file}
                 onClick={() => {
                   setSelectedFile(file);
-                  setIsEditorOpen(true); // Open editor when selecting a file
+                  // If the user explicitly clicks a file, treat that as intent to edit it
+                  // and open the editor (but don't auto-open on glyph selection alone)
+                  if (!isEditorOpen) {
+                    setIsEditorOpen(true);
+                  }
                 }}
                 style={{
                   ...styles.fileItem,
-                  ...(selectedFile === file ? styles.fileItemSelected : {}),
+                  // Only show the purple "selected file" box when the editor is actually open
+                  ...(isEditorOpen && selectedFile === file ? styles.fileItemSelected : {}),
                 }}
               >
                 <span style={styles.fileIcon}>
@@ -2088,67 +2201,17 @@ export default function CodeEditorView({
                     💾 Save All ({Object.keys(pendingRefinements).length})
                   </button>
                 )}
-                {/* Save & Close button - only show when there are changes to save/confirm */}
-                {(isModified || Object.keys(pendingRefinements).length > 0 || currentPendingRefinement) && (
-                <button
-                  onClick={async () => {
-                    // Accept any pending refinement first
-                    if (currentPendingRefinement && selectedGlyph && selectedFile) {
-                      setIsSaving(true);
-                      try {
-                        await window.loom?.saveGlyphFile?.(selectedGlyph.id, selectedFile, currentPendingRefinement.newCode);
-                        setFileContent(currentPendingRefinement.newCode);
-                        setOriginalContent(currentPendingRefinement.newCode);
-                        setPendingRefinements(prev => {
-                          const updated = { ...prev };
-                          delete updated[selectedFile];
-                          return updated;
-                        });
-                        setIsModified(false);
-                      } catch (error) {
-                        console.error('Failed to save file:', error);
-                      }
-                      setIsSaving(false);
-                    }
-                    // Save if modified
-                    else if (isModified && selectedGlyph && selectedFile) {
-                      setIsSaving(true);
-                      try {
-                        await window.loom?.saveGlyphFile?.(selectedGlyph.id, selectedFile, fileContent);
-                        setOriginalContent(fileContent);
-                        setIsModified(false);
-                      } catch (error) {
-                        console.error('Failed to save file:', error);
-                      }
-                      setIsSaving(false);
-                    }
-                    // Close editor and return to glyph view
-                    setIsEditorOpen(false);
-                  }}
-                  style={{
-                    padding: '6px 12px',
-                    background: 'rgba(0, 255, 128, 0.1)',
-                    border: '1px solid rgba(0, 255, 128, 0.3)',
-                    borderRadius: '6px',
-                    color: '#00ff80',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    fontFamily: 'inherit',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '4px',
-                  }}
-                  title="Save and close editor"
-                >
-                  ✓ Done
-                </button>
-                )}
-                {/* Close editor button - keeps selectedFile so refinements still work */}
+                {/* Close editor button - checks for unsaved changes first */}
                 <button
                   onClick={() => {
+                    if (hasUnsavedChanges()) {
+                      // Show confirmation dialog
+                      setPendingNavigation({ type: 'close' });
+                      setDialogAnimationPhase('entering');
+                      setShowUnsavedDialog(true);
+                      setTimeout(() => setDialogAnimationPhase('visible'), 50);
+                      return;
+                    }
                     setIsEditorOpen(false);
                     // DON'T set selectedFile to null - keep it so refinements still work
                   }}
@@ -2675,10 +2738,47 @@ export default function CodeEditorView({
               onMouseLeave={(e) => !isResizingChatSidebar && (e.currentTarget.style.background = 'transparent')}
             />
           )}
-          <div style={styles.sidebarHeader}>
+          <div style={{
+            ...styles.sidebarHeader,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}>
             <span style={styles.sidebarTitle}>
               {selectedGlyph ? '💬 Refine with AI' : '✨ Glyph Created'}
             </span>
+            {/* Toggle button to open/close editor */}
+            {!isEditorOpen && selectedGlyph && (
+              <button
+                onClick={() => setIsEditorOpen(true)}
+                style={{
+                  padding: '4px 10px',
+                  background: 'linear-gradient(135deg, rgba(0, 255, 255, 0.15), rgba(255, 0, 255, 0.1))',
+                  border: '1px solid rgba(0, 255, 255, 0.3)',
+                  borderRadius: '6px',
+                  color: '#00ffff',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'scale(1.05)';
+                  e.currentTarget.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.4)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                title="Open code editor"
+              >
+                ⌨️ Editor
+              </button>
+            )}
           </div>
           
           {/* Chat messages */}
@@ -3464,10 +3564,215 @@ export default function CodeEditorView({
         </div>
       </div>
 
+      {/* Unsaved Changes Dialog - Goopy animated modal */}
+      {showUnsavedDialog && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: dialogAnimationPhase === 'exiting' 
+              ? 'rgba(0, 0, 0, 0)'
+              : 'rgba(0, 0, 0, 0.7)',
+            backdropFilter: dialogAnimationPhase === 'exiting' ? 'blur(0px)' : 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            transition: 'all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
+          }}
+          onClick={handleUnsavedDialogCancel}
+        >
+          <div
+            style={{
+              background: 'linear-gradient(145deg, rgba(15, 15, 25, 0.98), rgba(10, 10, 18, 0.98))',
+              border: '1px solid rgba(255, 0, 255, 0.3)',
+              borderRadius: '20px',
+              padding: '32px',
+              minWidth: '380px',
+              maxWidth: '450px',
+              boxShadow: dialogAnimationPhase === 'visible'
+                ? '0 0 60px rgba(255, 0, 255, 0.3), 0 0 120px rgba(0, 255, 255, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                : '0 0 30px rgba(255, 0, 255, 0.2)',
+              transform: dialogAnimationPhase === 'entering'
+                ? 'scale(0.8) translateY(30px)'
+                : dialogAnimationPhase === 'exiting'
+                  ? 'scale(0.9) translateY(-20px)'
+                  : 'scale(1) translateY(0)',
+              opacity: dialogAnimationPhase === 'exiting' ? 0 : 1,
+              transition: 'all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Warning icon with goopy pulse */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'center',
+              marginBottom: '20px',
+            }}>
+              <div style={{
+                width: '70px',
+                height: '70px',
+                borderRadius: '50%',
+                background: 'linear-gradient(145deg, rgba(255, 0, 255, 0.2), rgba(255, 100, 0, 0.15))',
+                border: '2px solid rgba(255, 0, 255, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '32px',
+                boxShadow: '0 0 30px rgba(255, 0, 255, 0.3)',
+                animation: 'dialogPulse 2s ease-in-out infinite',
+              }}>
+                ⚠️
+              </div>
+            </div>
+
+            {/* Title */}
+            <h2 style={{
+              margin: '0 0 12px 0',
+              fontSize: '20px',
+              fontWeight: 700,
+              color: '#fff',
+              textAlign: 'center',
+              letterSpacing: '0.5px',
+            }}>
+              Unsaved Changes
+            </h2>
+
+            {/* Description */}
+            <p style={{
+              margin: '0 0 28px 0',
+              fontSize: '14px',
+              color: 'rgba(255, 255, 255, 0.6)',
+              textAlign: 'center',
+              lineHeight: 1.6,
+            }}>
+              You have unsaved changes that will be lost if you continue.
+              <br />
+              <span style={{ color: 'rgba(255, 0, 255, 0.8)' }}>
+                What would you like to do?
+              </span>
+            </p>
+
+            {/* Buttons with goopy hover effects */}
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}>
+              {/* Save button */}
+              <button
+                onClick={handleUnsavedDialogSave}
+                style={{
+                  padding: '14px 24px',
+                  background: 'linear-gradient(135deg, rgba(0, 255, 128, 0.2), rgba(0, 200, 100, 0.15))',
+                  border: '1px solid rgba(0, 255, 128, 0.5)',
+                  borderRadius: '12px',
+                  color: '#00ff80',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'scale(1.03)';
+                  e.currentTarget.style.boxShadow = '0 0 30px rgba(0, 255, 128, 0.4)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                💾 Save Changes
+              </button>
+
+              {/* Discard button */}
+              <button
+                onClick={handleUnsavedDialogDiscard}
+                style={{
+                  padding: '14px 24px',
+                  background: 'linear-gradient(135deg, rgba(255, 80, 80, 0.15), rgba(200, 50, 50, 0.1))',
+                  border: '1px solid rgba(255, 80, 80, 0.4)',
+                  borderRadius: '12px',
+                  color: '#ff5050',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'scale(1.03)';
+                  e.currentTarget.style.boxShadow = '0 0 30px rgba(255, 80, 80, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                🗑️ Discard Changes
+              </button>
+
+              {/* Cancel button */}
+              <button
+                onClick={handleUnsavedDialogCancel}
+                style={{
+                  padding: '14px 24px',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  borderRadius: '12px',
+                  color: 'rgba(255, 255, 255, 0.6)',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'scale(1.02)';
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'scale(1)';
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                }}
+              >
+                ← Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(10px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes dialogPulse {
+          0%, 100% { 
+            transform: scale(1);
+            box-shadow: 0 0 30px rgba(255, 0, 255, 0.3);
+          }
+          50% { 
+            transform: scale(1.05);
+            box-shadow: 0 0 50px rgba(255, 0, 255, 0.5), 0 0 80px rgba(0, 255, 255, 0.2);
+          }
         }
         textarea::placeholder {
           color: rgba(255, 255, 255, 0.3);
