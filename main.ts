@@ -304,6 +304,13 @@ if (!fs.existsSync(glyphLibraryPath)) {
   console.log('[LOOM] 📁 Created glyph library:', glyphLibraryPath);
 }
 
+// Log all glyph paths at startup for debugging
+console.log('[LOOM] 📁 Glyph paths configured:');
+console.log('[LOOM]    dynamicGlyphPath:', dynamicGlyphPath);
+console.log('[LOOM]    glyphLibraryPath:', glyphLibraryPath);
+console.log('[LOOM]    distGlyphsPath:', distGlyphsPath);
+console.log('[LOOM]    isDev:', isDev);
+
 // Migration: Copy glyphs from dist to userData on first run (production only)
 // This ensures glyphs bundled with the app are available and editable
 function migrateDistGlyphsToUserData() {
@@ -4346,23 +4353,32 @@ ipcMain.handle('read-glyph-file', async (event, glyphId: string, fileName: strin
 
 // Save a file to a glyph
 ipcMain.handle('save-glyph-file', async (event, glyphId: string, fileName: string, content: string) => {
+  log(`📝 save-glyph-file called: glyphId=${glyphId}, fileName=${fileName}, contentLength=${content.length}`);
+  
   const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  log(`📝 Search paths: ${JSON.stringify(searchPaths)}`);
   
   for (const basePath of searchPaths) {
     const glyphDir = path.join(basePath, glyphId);
+    log(`📝 Checking: ${glyphDir} exists=${fs.existsSync(glyphDir)}`);
+    
     if (fs.existsSync(glyphDir)) {
       const filePath = resolveGlyphFilePath(glyphDir, fileName);
+      log(`📝 Writing to: ${filePath}`);
       fs.writeFileSync(filePath, content, 'utf-8');
-      log(`💾 Saved ${fileName} to ${glyphId}`);
+      log(`💾 Saved ${fileName} to ${glyphId} at ${filePath}`);
       
       // Broadcast glyph update to all windows so widgets can refresh
       // IMPORTANT: await the broadcast to ensure it completes before returning
+      log(`📝 Starting broadcast for ${glyphId}...`);
       await broadcastGlyphUpdate(glyphId, fileName);
+      log(`📝 Broadcast complete for ${glyphId}`);
       
       return { success: true };
     }
   }
   
+  log(`❌ Glyph not found in any search path: ${glyphId}`);
   throw new Error(`Glyph not found: ${glyphId}`);
 });
 
