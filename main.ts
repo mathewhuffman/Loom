@@ -271,6 +271,9 @@ ipcMain.handle('updater:dismiss', async () => {
 const isDev = !app.isPackaged;
 const publicPath = path.join(__dirname, '..', isDev ? 'public' : 'dist');
 
+// Path to bundled glyphs in dist (read-only in production, for glyphs shipped with the app)
+const distGlyphsPath = path.join(publicPath, 'glyphs', 'dynamic');
+
 function resolveDynamicGlyphPath() {
   if (isDev) {
     return path.join(publicPath, 'glyphs', 'dynamic');
@@ -300,6 +303,49 @@ if (!fs.existsSync(glyphLibraryPath)) {
   fs.mkdirSync(glyphLibraryPath, { recursive: true });
   console.log('[LOOM] 📁 Created glyph library:', glyphLibraryPath);
 }
+
+// Migration: Copy glyphs from dist to userData on first run (production only)
+// This ensures glyphs bundled with the app are available and editable
+function migrateDistGlyphsToUserData() {
+  if (isDev) return; // Only in production
+  
+  // Check if dist glyphs folder exists and has content
+  if (!fs.existsSync(distGlyphsPath)) {
+    console.log('[LOOM] 📁 No dist glyphs to migrate');
+    return;
+  }
+  
+  try {
+    const distGlyphs = fs.readdirSync(distGlyphsPath, { withFileTypes: true })
+      .filter(d => d.isDirectory());
+    
+    let migratedCount = 0;
+    for (const glyphDir of distGlyphs) {
+      const sourceDir = path.join(distGlyphsPath, glyphDir.name);
+      const targetDir = path.join(dynamicGlyphPath, glyphDir.name);
+      
+      // Only migrate if not already in user's folder
+      if (!fs.existsSync(targetDir)) {
+        try {
+          fs.cpSync(sourceDir, targetDir, { recursive: true });
+          migratedCount++;
+          console.log(`[LOOM] 📦 Migrated glyph: ${glyphDir.name}`);
+        } catch (err) {
+          console.warn(`[LOOM] ⚠️ Failed to migrate glyph ${glyphDir.name}:`, err);
+        }
+      }
+    }
+    
+    if (migratedCount > 0) {
+      console.log(`[LOOM] ✅ Migrated ${migratedCount} glyphs from dist to userData`);
+    }
+  } catch (err) {
+    console.warn('[LOOM] ⚠️ Failed to migrate dist glyphs:', err);
+  }
+}
+
+// Run migration on startup
+migrateDistGlyphsToUserData();
 
 // ════════════════════════════════════════════════════════════════════════════
 // 🚀 AUTO-START ON LOGIN (AUTO-LAUNCH)
