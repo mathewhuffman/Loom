@@ -2862,9 +2862,6 @@ function UnassignedSection({
                   onQuickEditToggle={onQuickEditToggle}
                   hasInputs={Boolean(glyph.inputs?.length)}
                   isQuickEditing={quickEditGlyphId === glyph.id}
-                  onQuickEditToggle={onQuickEditToggle}
-                  hasInputs={Boolean(glyph.inputs?.length)}
-                  isQuickEditing={quickEditGlyphId === glyph.id}
                   delay={index * 30}
                 />
               ))

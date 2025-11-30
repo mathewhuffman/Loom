@@ -15,18 +15,7 @@ env:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            platform: win
-          - os: macos-latest
-            platform: mac
-          - os: ubuntu-latest
-            platform: linux
-
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
 
     steps:
       - name: Checkout code
@@ -42,18 +31,16 @@ jobs:
         run: npm ci
 
       - name: Build application
-        run: npm run build:${{ matrix.platform }}
+        run: npm run build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: loom-${{ matrix.platform }}
+          name: loom-win
           path: |
             release/*.exe
-            release/*.dmg
-            release/*.AppImage
             release/*.yml
             release/*.yaml
             release/*.blockmap
@@ -81,8 +68,6 @@ jobs:
         with:
           files: |
             artifacts/**/*.exe
-            artifacts/**/*.dmg
-            artifacts/**/*.AppImage
             artifacts/**/*.yml
             artifacts/**/*.yaml
             artifacts/**/*.blockmap
@@ -97,8 +82,6 @@ jobs:
             ### Installation
             
             **Windows:** Download and run the `.exe` installer
-            **macOS:** Download the `.dmg` file, open it, and drag LOOM to Applications
-            **Linux:** Download the `.AppImage` file, make it executable (`chmod +x`), and run it
             
             ---
             
