@@ -83,6 +83,13 @@ interface ChatHistoryData {
 
 interface LoomAPI {
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🔧 ENVIRONMENT INFO
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Whether running in development mode (npm run dev)
+  isDev: boolean;
+  
+  // ═══════════════════════════════════════════════════════════════════════════
   // 🧙 SUMMONER v1 — Secure LLM streaming (keys in main process)
   // ═══════════════════════════════════════════════════════════════════════════
   
@@ -147,6 +154,9 @@ interface LoomAPI {
   
   // Listen for glyph injection (background renders iframe)
   onSummonInject?: (callback: (data: { code: string; prompt: string; type?: string; glyphId?: string; mode?: 'background' | 'widget' }) => void) => () => void;
+  
+  // Listen for summon clear (background clears glyph)
+  onSummonClear?: (callback: () => void) => () => void;
   
   // Request LLM refinement to fix errors
   summonRefine?: (data: { prompt: string; code: string; error: string; attempt: number; model?: string }) => void;
@@ -248,6 +258,12 @@ interface LoomAPI {
   invokeGlyph: (glyphId: string, mode?: 'background' | 'widget') => void;
   deleteGlyph: (glyphId: string) => Promise<{ success: boolean }>;
   openGlyphInEditor: (glyphId: string) => void;
+  
+  // Bundled glyphs management
+  isGlyphBundled?: (glyphId: string) => Promise<{ success: boolean; isBundled: boolean; error?: string }>;
+  bundleGlyph?: (glyphId: string) => Promise<{ success: boolean; bundledPath?: string; error?: string }>;
+  unbundleGlyph?: (glyphId: string) => Promise<{ success: boolean; error?: string }>;
+  getBundledGlyphs?: () => Promise<{ success: boolean; glyphIds: string[]; error?: string }>;
   loadGlyphChatHistory: (glyphId: string) => Promise<Array<{
     id: string;
     role: 'user' | 'assistant' | 'system';
@@ -439,6 +455,53 @@ interface LoomAPI {
     changedFile: string;
     manifest?: { name: string; prompt?: string };
   }) => void) => () => void;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🖥️ MULTI-MONITOR MANAGEMENT
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  getAllDisplays?: () => Promise<Array<{
+    id: string;
+    label: string;
+    bounds: { x: number; y: number; width: number; height: number };
+    workArea: { x: number; y: number; width: number; height: number };
+    scaleFactor: number;
+    isPrimary: boolean;
+    rotation: number;
+  }>>;
+  
+  getPrimaryDisplay?: () => Promise<{
+    id: string;
+    bounds: { x: number; y: number; width: number; height: number };
+    scaleFactor: number;
+  }>;
+  
+  setBackgroundDisplay?: (displayId: string) => Promise<{ success: boolean }>;
+  getBackgroundDisplay?: () => Promise<{ displayId: string | null; bounds: { x: number; y: number; width: number; height: number } | null }>;
+  
+  getMonitorBackgrounds?: () => Promise<{
+    backgrounds: Array<{
+      displayId: string;
+      glyphId?: string;
+      code?: string;
+      prompt?: string;
+      type?: string;
+    }>;
+    activeDisplayId?: string;
+  }>;
+  
+  setMonitorBackground?: (config: {
+    displayId: string;
+    glyphId?: string;
+    code?: string;
+    prompt?: string;
+    type?: string;
+  }) => Promise<{ success: boolean }>;
+  
+  clearMonitorBackground?: (displayId: string) => Promise<{ success: boolean }>;
+  clearAllMonitorBackgrounds?: () => Promise<{ success: boolean }>;
+  
+  getAllDisplaysBounds?: () => Promise<{ x: number; y: number; width: number; height: number }>;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 🎛️ LOOM PANEL CONTROLS

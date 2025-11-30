@@ -1,0 +1,49 @@
+{
+  "id": "glyph-1764397282796-desert-sled",
+  "name": "Desert Sled",
+  "prompt": "recreate this: // i like this one :D\n// max(tunnel+noise, plane+noise) -> desert sled\n\n#define T (iTime*2e2)\n#define P(z) (vec3(tanh(cos((z)*.003)*2.)*164.+cos((z) * .005)  *32., cos((z)*.01)*14., (z)))\n#define R(a) mat2(cos(a), -sin(a), sin(a), cos(a))\n#define N normalize\n\nfloat map(vec3 p) {\n    vec3 q = P(p.z);\n    float n,s;\n    for(n = .01,s =47.-p.y; n < 8.; n += n+n)\n        s -= abs(dot(sin(.04*p/n), vec3(n*6.)));    \n    \n    s = max(8e1 - length(p.xy - q.xy )+s, s);\n    return s ;\n    \n}\n\nvoid mainImage(out vec4 o, in vec2 u) {\n    float s=.002,d=0.,i=0.;\n    vec3  r = iResolution;\n    \n    u = (u-r.xy/2.)/r.y;\n    \n    if (abs(u.y) > .35) { o = vec4(0); return; }\n    \n    o = vec4(0);\n    \n    vec3  e = vec3(.001,0,0),\n          p = P(T),ro=p,\n          Z = N( P(T+2.) - p),\n          X = N(vec3(Z.z,0,-Z)),\n          D = vec3(R(sin(T*.005)*.3)*u, 1) \n             * mat3(-X, cross(X, Z), Z);\n    \n    for(; i++ < 1e2 && d < 1e3;)\n        p = ro + D * d,\n        d += s = map(p) * .5,\n        o += 1./max(s, .001);\n\n    if (d < 1e3) {\n        o *= .1*vec4(2,1.5,1.1,0);\n    } else {\n        o = 1e3*vec4(5,3,1,0) / max(length(u-.8), .1);\n    }\n    o = tanh(o*o / 3e8);\n}",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-29T06:21:46.267Z",
+  "inputs": [
+    {
+      "id": "speed",
+      "type": "range",
+      "label": "Speed",
+      "min": 0,
+      "max": 1000,
+      "defaultValue": 200
+    },
+    {
+      "id": "cinemaScope",
+      "type": "range",
+      "label": "Cinema Scope",
+      "min": 0,
+      "max": 0.5,
+      "step": 0.01,
+      "defaultValue": 0.35
+    },
+    {
+      "id": "baseColor",
+      "type": "color",
+      "label": "Atmosphere Color",
+      "defaultValue": "#ffbf8c"
+    },
+    {
+      "id": "intensity",
+      "type": "range",
+      "label": "Glow Intensity",
+      "min": 0.5,
+      "max": 3,
+      "step": 0.1,
+      "defaultValue": 1
+    }
+  ],
+  "icon": "🏜️",
+  "bundled": true,
+  "version": "1.0.0"
+}

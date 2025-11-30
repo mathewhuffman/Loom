@@ -73,10 +73,17 @@ export default function LoomScene() {
       // Clear the summoning prompt when streaming completes (entering review mode)
       setSummoningPrompt(null);
     };
+    
+    const handleSummonClear = () => {
+      console.log('[Background] 🧹 summon-clear received - clearing background glyph');
+      setSummoningPrompt(null);
+      setBackgroundGlyph(null);
+    };
 
     window.loom.onSummonStart?.(handleSummonStart);
     window.loom.onSummonInject?.(handleInject);
     window.loom.onSummonComplete?.(handleSummonComplete);
+    window.loom.onSummonClear?.(handleSummonClear);
 
     return () => {
       // keep global listeners (no removeAll to avoid disrupting overlay)

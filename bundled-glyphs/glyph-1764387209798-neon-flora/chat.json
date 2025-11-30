@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764387245899-user",
+    "role": "user",
+    "content": "a scene with a field of flowers",
+    "timestamp": 1764387245899,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764387245899-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Neon Flora\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764387245900,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764387245899-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764387245901,
+    "type": "info"
+  }
+]

@@ -1,0 +1,243 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Pulse Ripples</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('glCanvas');
+        const gl = canvas.getContext('webgl');
+
+        if (!gl) {
+            document.body.innerHTML = '<div style="color:white; padding:20px;">WebGL not supported</div>';
+            throw new Error('WebGL not supported');
+        }
+
+        // State for mouse interaction
+        const mouseState = {
+            x: 0.5,
+            y: 0.5,
+            active: false
+        };
+
+        // Vertex Shader
+        const vsSource = `
+            attribute vec4 aVertexPosition;
+            void main() {
+                gl_Position = aVertexPosition;
+            }
+        `;
+
+        // Fragment Shader
+        const fsSource = `
+            precision highp float;
+
+            uniform vec2 iResolution;
+            uniform float iTime;
+            uniform vec2 iMouse;
+            
+            // Configurable inputs
+            uniform float uDensity;
+            uniform float uSpeed;
+            uniform float uSharpness;
+            uniform float uPower;
+            uniform float uRadius;
+            uniform float uBaseHue;
+            uniform float uHueRange;
+            uniform bool uInteractive;
+
+            vec3 hsv2rgb(float h, float s, float v) {
+                vec4 t = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+                vec3 p = abs(fract(vec3(h) + t.xyz) * 6.0 - vec3(t.w));
+                return v * mix(vec3(t.x), clamp(p - vec3(t.x), 0.0, 1.0), s);
+            }
+
+            vec3 drawCircle(vec2 pos, float radius, float width, float power, vec4 color) {
+                float dist1 = length(pos);
+                // Create the repeating ripple effect
+                // fract(iTime) creates the movement, uDensity creates the rings
+                dist1 = fract((dist1 * uDensity) - fract(iTime * uSpeed));
+                
+                float dist2 = dist1 - radius;
+                
+                // Calculate glow intensity
+                // Using abs(dist2) ensures glow on both sides of the ring edge
+                float intensity = pow(radius / max(abs(dist2), 0.001), width); 
+                
+                // Fade out edges
+                vec3 col = color.rgb * intensity * power * max((0.8 - abs(dist2)), 0.0);
+                return col;
+            }
+
+            void main() {
+                // Normalize coordinates to -1.0 ~ 1.0, corrected for aspect ratio
+                vec2 pos = (gl_FragCoord.xy * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+                
+                // Apply mouse offset if interactive
+                if (uInteractive) {
+                    vec2 mouseOffset = (iMouse * 2.0 - 1.0);
+                    // Invert Y for typical shader coords
+                    mouseOffset.y *= -1.0; 
+                    pos -= mouseOffset * 0.5; // Scale effect of mouse
+                }
+
+                // Calculate Hue based on distance from center
+                float h = mix(uBaseHue, uBaseHue + uHueRange, length(pos));
+                vec4 color = vec4(hsv2rgb(h, 1.0, 1.0), 1.0);
+                
+                vec3 finalColor = drawCircle(pos, uRadius, uSharpness, uPower, color);
+
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        `;
+
+        // Shader compilation helper
+        function loadShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('An error occurred compiling the shaders: ' + gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        const shaderProgram = (() => {
+            const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+            const program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error('Unable to initialize the shader program: ' + gl.getProgramInfoLog(program));
+                return null;
+            }
+            return program;
+        })();
+
+        // Locations
+        const programInfo = {
+            program: shaderProgram,
+            attribLocations: {
+                vertexPosition: gl.getAttribLocation(shaderProgram, 'aVertexPosition'),
+            },
+            uniformLocations: {
+                iResolution: gl.getUniformLocation(shaderProgram, 'iResolution'),
+                iTime: gl.getUniformLocation(shaderProgram, 'iTime'),
+                iMouse: gl.getUniformLocation(shaderProgram, 'iMouse'),
+                uDensity: gl.getUniformLocation(shaderProgram, 'uDensity'),
+                uSpeed: gl.getUniformLocation(shaderProgram, 'uSpeed'),
+                uSharpness: gl.getUniformLocation(shaderProgram, 'uSharpness'),
+                uPower: gl.getUniformLocation(shaderProgram, 'uPower'),
+                uRadius: gl.getUniformLocation(shaderProgram, 'uRadius'),
+                uBaseHue: gl.getUniformLocation(shaderProgram, 'uBaseHue'),
+                uHueRange: gl.getUniformLocation(shaderProgram, 'uHueRange'),
+                uInteractive: gl.getUniformLocation(shaderProgram, 'uInteractive'),
+            },
+        };
+
+        // Buffer setup
+        const positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        const positions = [
+            -1.0,  1.0,
+             1.0,  1.0,
+            -1.0, -1.0,
+             1.0, -1.0,
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+        // Event Listeners
+        window.addEventListener('mousemove', (e) => {
+            mouseState.x = e.clientX / window.innerWidth;
+            mouseState.y = e.clientY / window.innerHeight;
+            mouseState.active = true;
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        }
+        resizeCanvas();
+
+        // Rendering
+        let startTime = performance.now();
+
+        function render() {
+            // Get Inputs
+            const inputs = window.GLYPH_INPUTS || {};
+            const density = inputs.ringDensity !== undefined ? inputs.ringDensity : 5.0;
+            const speed = inputs.animSpeed !== undefined ? inputs.animSpeed : 1.0;
+            const sharpness = inputs.glowSharpness !== undefined ? inputs.glowSharpness : 0.8;
+            const power = inputs.brightness !== undefined ? inputs.brightness : 0.1;
+            const radius = inputs.radius !== undefined ? inputs.radius : 0.5;
+            const baseHue = inputs.baseHue !== undefined ? inputs.baseHue : 0.5;
+            const hueRange = inputs.hueRange !== undefined ? inputs.hueRange : 0.15;
+            const interactive = inputs.interactive !== undefined ? inputs.interactive : true;
+
+            const currentTime = (performance.now() - startTime) * 0.001;
+
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            gl.useProgram(programInfo.program);
+
+            // Set Attributes
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.vertexAttribPointer(programInfo.attribLocations.vertexPosition, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+
+            // Set Uniforms
+            gl.uniform2f(programInfo.uniformLocations.iResolution, canvas.width, canvas.height);
+            gl.uniform1f(programInfo.uniformLocations.iTime, currentTime);
+            
+            // Mouse is normalized 0..1 here
+            gl.uniform2f(programInfo.uniformLocations.iMouse, mouseState.x, mouseState.y);
+
+            // Config uniforms
+            gl.uniform1f(programInfo.uniformLocations.uDensity, density);
+            gl.uniform1f(programInfo.uniformLocations.uSpeed, speed);
+            gl.uniform1f(programInfo.uniformLocations.uSharpness, sharpness);
+            gl.uniform1f(programInfo.uniformLocations.uPower, power);
+            gl.uniform1f(programInfo.uniformLocations.uRadius, radius);
+            gl.uniform1f(programInfo.uniformLocations.uBaseHue, baseHue);
+            gl.uniform1f(programInfo.uniformLocations.uHueRange, hueRange);
+            gl.uniform1i(programInfo.uniformLocations.uInteractive, interactive ? 1 : 0);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            requestAnimationFrame(render);
+        }
+
+        render();
+    </script>
+</body>
+</html>

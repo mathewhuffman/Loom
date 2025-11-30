@@ -132,6 +132,10 @@ export default function GlyphsView() {
   const [isKeyPickerOpen, setIsKeyPickerOpen] = useState(false);
   const [isLoadingKeys, setIsLoadingKeys] = useState(false);
   
+  // Bundled glyph state
+  const [isBundled, setIsBundled] = useState(false);
+  const [isBundleLoading, setIsBundleLoading] = useState(false);
+  
   // Resolved inputs for preview (includes API keys and input values)
   const [resolvedPreviewInputs, setResolvedPreviewInputs] = useState<Record<string, unknown>>({});
   
@@ -314,8 +318,21 @@ export default function GlyphsView() {
       }
     };
 
+    // Check if glyph is bundled
+    const checkBundledStatus = async () => {
+      try {
+        const result = await window.loom?.isGlyphBundled?.(selectedGlyph.id);
+        if (isCancelled) return;
+        setIsBundled(result?.isBundled ?? false);
+      } catch (error) {
+        console.error('Failed to check bundled status:', error);
+        setIsBundled(false);
+      }
+    };
+
     loadPreview();
     loadLinkedKeys();
+    checkBundledStatus();
 
     return () => {
       isCancelled = true;
@@ -457,6 +474,38 @@ export default function GlyphsView() {
       if (selectedGlyph?.id === glyph.id) setSelectedGlyph(null);
     }
   }, [selectedGlyph]);
+
+  // Toggle bundle status
+  const handleToggleBundled = useCallback(async () => {
+    if (!selectedGlyph || isBundleLoading) return;
+    
+    setIsBundleLoading(true);
+    try {
+      if (isBundled) {
+        // Unbundle
+        const result = await window.loom?.unbundleGlyph?.(selectedGlyph.id);
+        if (result?.success) {
+          setIsBundled(false);
+          console.log('📦 Glyph unbundled:', selectedGlyph.name);
+        } else {
+          console.error('Failed to unbundle:', result?.error);
+        }
+      } else {
+        // Bundle
+        const result = await window.loom?.bundleGlyph?.(selectedGlyph.id);
+        if (result?.success) {
+          setIsBundled(true);
+          console.log('📦 Glyph bundled:', selectedGlyph.name);
+        } else {
+          console.error('Failed to bundle:', result?.error);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to toggle bundle status:', error);
+    } finally {
+      setIsBundleLoading(false);
+    }
+  }, [selectedGlyph, isBundled, isBundleLoading]);
 
   // Save manifest changes (name, icon, inputs)
   const saveManifestChanges = useCallback(async (updates: Partial<GlyphManifest>) => {
@@ -1362,6 +1411,38 @@ export default function GlyphsView() {
             {selectedGlyph.savedAt && (
               <div style={styles.detailMeta}>
                 Created: {new Date(selectedGlyph.savedAt).toLocaleString()}
+              </div>
+            )}
+
+            {/* Bundle Toggle - Only shown in dev mode */}
+            {window.loom?.isDev && (
+              <div style={styles.detailSection}>
+                <div style={styles.bundleToggleRow}>
+                  <div style={styles.bundleInfo}>
+                    <span style={styles.bundleIcon}>📦</span>
+                    <div>
+                      <span style={styles.bundleLabel}>Include in App Bundle</span>
+                      <span style={styles.bundleDescription}>
+                        {isBundled 
+                          ? 'This glyph will be included when you build the app' 
+                          : 'Toggle to include this glyph in all builds'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    style={{
+                      ...styles.bundleToggle,
+                      ...(isBundled ? styles.bundleToggleOn : styles.bundleToggleOff),
+                      opacity: isBundleLoading ? 0.6 : 1,
+                      cursor: isBundleLoading ? 'wait' : 'pointer',
+                    }}
+                    onClick={handleToggleBundled}
+                    disabled={isBundleLoading}
+                    title={isBundled ? 'Remove from app bundle' : 'Add to app bundle'}
+                  >
+                    {isBundleLoading ? '...' : isBundled ? 'BUNDLED' : 'NOT BUNDLED'}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -3098,6 +3179,58 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '11px',
     color: 'rgba(255, 255, 255, 0.35)',
     marginBottom: '20px',
+  },
+  bundleToggleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '12px 14px',
+    background: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: '10px',
+    border: '1px solid rgba(255, 255, 255, 0.06)',
+  },
+  bundleInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  bundleIcon: {
+    fontSize: '20px',
+    filter: 'drop-shadow(0 0 4px rgba(255, 200, 0, 0.3))',
+  },
+  bundleLabel: {
+    display: 'block',
+    fontSize: '13px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginBottom: '2px',
+  },
+  bundleDescription: {
+    display: 'block',
+    fontSize: '10px',
+    color: 'rgba(255, 255, 255, 0.4)',
+  },
+  bundleToggle: {
+    padding: '8px 14px',
+    borderRadius: '6px',
+    border: 'none',
+    fontSize: '10px',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    letterSpacing: '0.5px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+  bundleToggleOn: {
+    background: 'rgba(0, 255, 136, 0.2)',
+    color: '#00ff88',
+    border: '1px solid rgba(0, 255, 136, 0.4)',
+    boxShadow: '0 0 12px rgba(0, 255, 136, 0.2)',
+  },
+  bundleToggleOff: {
+    background: 'rgba(255, 255, 255, 0.05)',
+    color: 'rgba(255, 255, 255, 0.4)',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
   },
   inputsHeader: {
     display: 'flex',

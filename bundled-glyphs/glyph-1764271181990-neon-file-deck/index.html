@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon File Deck</title>
+    <style>
+        :root {
+            --bg-color: #050505;
+            --panel-bg: rgba(20, 20, 25, 0.8);
+            --border-color: #333;
+            --accent-primary: #00ffff;
+            --accent-secondary: #ff00ff;
+            --text-main: #e0e0e0;
+            --text-dim: #888;
+            --font-mono: 'Fira Code', 'Consolas', 'Monaco', monospace;
+            --font-ui: 'Segoe UI', system-ui, sans-serif;
+            
+            /* Theme Overrides */
+            --glow-strength: 0px;
+        }
+
+        /* Themes */
+        body.theme-neon {
+            --accent-primary: #00ffff;
+            --accent-secondary: #ff00ff;
+            --glow-strength: 5px;
+        }
+        body.theme-midnight {
+            --bg-color: #0a0e17;
+            --panel-bg: rgba(15, 20, 35, 0.9);
+            --accent-primary: #4d9fff;
+            --accent-secondary: #7b61ff;
+            --glow-strength: 2px;
+        }
+        body.theme-matrix {
+            --bg-color: #000000;
+            --panel-bg: rgba(0, 20, 0, 0.9);
+            --accent-primary: #00ff00;
+            --accent-secondary: #008f11;
+            --text-main: #00ff00;
+            --glow-strength: 4px;
+        }
+
+        * {
+            box-sizing: border-box;
+            outline: none;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg-color);
+            color: var(--text-main);
+            font-family: var(--font-ui);
+        }
+
+        /* Layout */
+        .app-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            width: 100vw;
+            background: radial-gradient(circle at 50% 50%, rgba(0, 255, 255, 0.05), transparent 70%);
+        }
+
+        /* Top Bar */
+        .toolbar {
+            flex: 0 0 50px;
+            display: flex;
+            align-items: center;
+            padding: 0 15px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            backdrop-filter: blur(10px);
+            gap: 10px;
+            box-shadow: 0 0 var(--glow-strength) var(--accent-primary);
+            z-index: 10;
+        }
+
+        .path-input-group {
+            flex: 1;
+            display: flex;
+            position: relative;
+            align-items: center;
+        }
+
+        .icon-folder {
+            position: absolute;
+            left: 10px;
+            color: var(--accent-primary);
+            font-size: 1.2rem;
+        }
+
+        input#filePath {
+            width: 100%;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 8px 10px 8px 40px;
+            color: var(--accent-primary);
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        input#filePath:focus {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.2);
+        }
+
+        button.btn-action {
+            background: transparent;
+            border: 1px solid var(--accent-primary);
+            color: var(--accent-primary);
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            transition: all 0.2s;
+        }
+
+        button.btn-action:hover {
+            background: var(--accent-primary);
+            color: #000;
+            box-shadow: 0 0 15px var(--accent-primary);
+        }
+
+        /* Main Content Area */
+        .editor-stage {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* Drop Overlay */
+        .drop-zone {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+            border: 2px dashed var(--accent-secondary);
+            margin: 20px;
+            border-radius: 10px;
+        }
+
+        .drop-zone.active {
+            opacity: 1;
+            pointer-events: all;
+            backdrop-filter: blur(5px);
+        }
+
+        .drop-message {
+            font-size: 1.5rem;
+            color: var(--accent-secondary);
+            text-shadow: 0 0 10px var(--accent-secondary);
+            margin-top: 15px;
+        }
+
+        /* Editor / Viewer */
+        .editor-container {
+            display: flex;
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        .line-numbers {
+            width: 50px;
+            background: rgba(0,0,0,0.2);
+            border-right: 1px solid var(--border-color);
+            color: var(--text-dim);
+            font-family: var(--font-mono);
+            font-size: 14px;
+            text-align: right;
+            padding: 10px 5px;
+            user-select: none;
+            overflow: hidden;
+            line-height: 1.5;
+        }
+
+        textarea#editor {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            font-family: var(--font-mono);
+            font-size: 14px;
+            padding: 10px;
+            resize: none;
+            line-height: 1.5;
+            white-space: pre;
+            overflow: auto;
+        }
+
+        textarea#editor::placeholder {
+            color: rgba(255,255,255,0.1);
+        }
+
+        /* Image Viewer */
+        .image-viewer {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: repeating-linear-gradient(
+                45deg,
+                rgba(255,255,255,0.02),
+                rgba(255,255,255,0.02) 10px,
+                rgba(0,0,0,0.02) 10px,
+                rgba(0,0,0,0.02) 20px
+            );
+        }
+
+        .image-viewer img {
+            max-width: 95%;
+            max-height: 95%;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            border: 1px solid var(--border-color);
+        }
+
+        /* Directory Viewer */
+        .dir-viewer {
+            width: 100%;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            cursor: pointer;
+            transition: background 0.2s;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+        }
+
+        .file-item:hover {
+            background: rgba(255,255,255,0.05);
+            color: var(--accent-primary);
+        }
+
+        .file-icon {
+            margin-right: 10px;
+            opacity: 0.7;
+        }
+
+        /* Footer */
+        .statusbar {
+            flex: 0 0 30px;
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 15px;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            justify-content: space-between;
+            user-select: none;
+        }
+
+        .status-item {
+            margin-right: 15px;
+        }
+        
+        .status-item span {
+            color: var(--accent-primary);
+        }
+
+        /* Scrollbars */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-color);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-primary);
+        }
+        
+        /* Loader */
+        .loader {
+            display: none;
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 40px; height: 40px;
+            border: 3px solid transparent;
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            z-index: 50;
+        }
+        @keyframes spin { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <div class="path-input-group">
+                <span class="icon-folder">📂</span>
+                <input type="text" id="filePath" placeholder="Enter absolute path..." spellcheck="false">
+            </div>
+            <button class="btn-action" id="loadBtn">Load</button>
+        </div>
+
+        <!-- Main Stage -->
+        <div class="editor-stage" id="stage">
+            <div class="loader" id="loader"></div>
+            
+            <!-- Drop Overlay -->
+            <div class="drop-zone" id="dropZone">
+                <div style="font-size: 3rem">📥</div>
+                <div class="drop-message">DROP FILE TO OPEN</div>
+            </div>
+
+            <!-- Content Areas (Dynamic) -->
+            <div id="contentContainer" style="width:100%; height:100%; display:flex;">
+                <!-- Default Empty State -->
+                <div style="margin:auto; text-align:center; color: var(--text-dim);">
+                    <h2 style="color: var(--text-main); margin-bottom: 0.5rem;">NO FILE LOADED</h2>
+                    <p>Enter a path above or drag & drop a file.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="statusbar">
+            <div id="statusLeft">
+                <span class="status-item">Ready</span>
+            </div>
+            <div id="statusRight">
+                <span class="status-item">UTF-8</span>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // --- INIT ---
+        const inputs = window.GLYPH_INPUTS || {};
+        const elFilePath = document.getElementById('filePath');
+        const elLoadBtn = document.getElementById('loadBtn');
+        const elStage = document.getElementById('stage');
+        const elDropZone = document.getElementById('dropZone');
+        const elContent = document.getElementById('contentContainer');
+        const elLoader = document.getElementById('loader');
+        const elStatusLeft = document.getElementById('statusLeft');
+        const elStatusRight = document.getElementById('statusRight');
+
+        // Apply Config
+        document.body.classList.add(`theme-${inputs.editorTheme || 'neon'}`);
+        const FONT_SIZE = inputs.fontSize || 14;
+
+        if (inputs.initialPath) {
+            elFilePath.value = inputs.initialPath;
+            // Slight delay to ensure window.loom is ready if needed, though usually it is.
+            setTimeout(() => loadFile(inputs.initialPath), 100);
+        }
+
+        // --- EVENT LISTENERS ---
+        elLoadBtn.addEventListener('click', () => {
+            const path = elFilePath.value.trim();
+            if(path) loadFile(path);
+        });
+
+        elFilePath.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const path = elFilePath.value.trim();
+                if(path) loadFile(path);
+            }
+        });
+
+        // Drag & Drop
+        window.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            elDropZone.classList.add('active');
+        });
+
+        window.addEventListener('dragleave', (e) => {
+            // Only remove if leaving the window, not entering a child
+            if (e.clientX === 0 || e.clientY === 0) {
+                 elDropZone.classList.remove('active');
+            }
+        });
+
+        // Fix flickering on drag leave
+        elDropZone.addEventListener('dragleave', (e) => {
+             elDropZone.classList.remove('active');
+        });
+
+        window.addEventListener('drop', (e) => {
+            e.preventDefault();
+            elDropZone.classList.remove('active');
+            
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                handleDroppedFile(file);
+            }
+        });
+
+        // --- CORE FUNCTIONS ---
+
+        async function loadFile(path) {
+            showLoader(true);
+            setStatus(`Loading: ${path}...`);
+            
+            try {
+                // Use LOOM API
+                if (!window.loom || !window.loom.readLocalFile) {
+                    throw new Error("LOOM File API not available.");
+                }
+
+                const result = await window.loom.readLocalFile(path);
+                
+                if (!result.success) {
+                    throw new Error(result.error || "Unknown error reading file.");
+                }
+
+                if (result.isDirectory) {
+                    renderDirectory(result);
+                } else {
+                    renderFile(result);
+                }
+
+            } catch (err) {
+                console.error(err);
+                showError(err.message);
+            } finally {
+                showLoader(false);
+            }
+        }
+
+        function handleDroppedFile(file) {
+            showLoader(true);
+            setStatus(`Reading dropped file: ${file.name}...`);
+            
+            // Standard Browser FileReader for dropped files
+            const reader = new FileReader();
+            
+            // Check if image
+            if (file.type.startsWith('image/')) {
+                reader.onload = (e) => {
+                    renderImage(e.target.result, file.name, file.size);
+                    showLoader(false);
+                };
+                reader.readAsDataURL(file);
+            } else {
+                // Assume text
+                reader.onload = (e) => {
+                    renderTextEditor(e.target.result, file.name, file.size);
+                    showLoader(false);
+                };
+                reader.readAsText(file);
+            }
+            
+            // Update path input to show name (though it's not a full path)
+            elFilePath.value = `[Dropped] ${file.name}`;
+        }
+
+        // --- RENDERING ---
+
+        function renderDirectory(dirResult) {
+            elContent.innerHTML = '';
+            const list = document.createElement('div');
+            list.className = 'dir-viewer';
+
+            // Parent link
+            if (dirResult.parent) {
+                const parentRow = document.createElement('div');
+                parentRow.className = 'file-item';
+                parentRow.innerHTML = `<span class="file-icon">🔙</span> ..`;
+                parentRow.onclick = () => {
+                    elFilePath.value = dirResult.parent;
+                    loadFile(dirResult.parent);
+                };
+                list.appendChild(parentRow);
+            }
+
+            // Files
+            dirResult.files.sort((a,b) => (b.isDirectory - a.isDirectory)).forEach(f => {
+                const row = document.createElement('div');
+                row.className = 'file-item';
+                const icon = f.isDirectory ? '📁' : '📄';
+                row.innerHTML = `<span class="file-icon">${icon}</span> ${f.name}`;
+                
+                row.onclick = () => {
+                    const newPath = f.path;
+                    elFilePath.value = newPath;
+                    loadFile(newPath);
+                };
+                list.appendChild(row);
+            });
+
+            elContent.appendChild(list);
+            setStatus(`Directory: ${dirResult.files.length} items`);
+        }
+
+        function renderFile(fileResult) {
+            const ext = fileResult.extension.toLowerCase();
+            const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'];
+            
+            if (imageExts.includes(ext)) {
+                // For local files, we might need to handle binary content or base64
+                // If loom returns raw content for binary, it might be tricky without base64 flag
+                // Assuming loom returns base64 for images or we handle it via data URI if content is provided
+                // If content is raw string, it might be corrupted. 
+                // Ideally readLocalFile handles binary intelligently. 
+                // Let's assume content is base64 if binary, or we try to render.
+                
+                // If the API returns a base64 string for images automatically:
+                const src = `data:image/${ext.replace('.', '')};base64,${fileResult.content}`;
+                renderImage(src, fileResult.path, fileResult.size);
+            } else {
+                renderTextEditor(fileResult.content, fileResult.path, fileResult.size);
+            }
+        }
+
+        function renderImage(src, name, size) {
+            elContent.innerHTML = '';
+            const wrapper = document.createElement('div');
+            wrapper.className = 'image-viewer';
+            const img = document.createElement('img');
+            img.src = src;
+            wrapper.appendChild(img);
+            elContent.appendChild(wrapper);
+            updateStats(name, size, 'Image');
+        }
+
+        function renderTextEditor(content, name, size) {
+            elContent.innerHTML = '';
+            
+            const container = document.createElement('div');
+            container.className = 'editor-container';
+            
+            const gutter = document.createElement('div');
+            gutter.className = 'line-numbers';
+            
+            const textarea = document.createElement('textarea');
+            textarea.id = 'editor';
+            textarea.value = content;
+            textarea.spellcheck = false;
+            textarea.style.fontSize = `${FONT_SIZE}px`;
+            
+            // Line Numbers Logic
+            const updateLines = () => {
+                const lines = textarea.value.split('\n').length;
+                gutter.innerHTML = Array(lines).fill(0).map((_, i) => i + 1).join('<br>');
+            };
+            
+            textarea.addEventListener('input', updateLines);
+            textarea.addEventListener('scroll', () => {
+                gutter.scrollTop = textarea.scrollTop;
+            });
+            
+            // Initial render
+            updateLines();
+            
+            container.appendChild(gutter);
+            container.appendChild(textarea);
+            elContent.appendChild(container);
+            
+            updateStats(name, size, 'Text');
+        }
+
+        function showError(msg) {
+            elContent.innerHTML = `
+                <div style="margin:auto; text-align:center; color: #ff4444;">
+                    <h2>ERROR</h2>
+                    <p>${msg}</p>
+                </div>
+            `;
+            setStatus("Error encountered");
+        }
+
+        // --- UTILS ---
+
+        function showLoader(show) {
+            elLoader.style.display = show ? 'block' : 'none';
+        }
+
+        function setStatus(msg) {
+            elStatusLeft.innerHTML = `<span class="status-item">${msg}</span>`;
+        }
+
+        function updateStats(name, size, type) {
+            let sizeStr = size + ' B';
+            if (size > 1024) sizeStr = (size/1024).toFixed(1) + ' KB';
+            if (size > 1024*1024) sizeStr = (size/(1024*1024)).toFixed(1) + ' MB';
+            
+            elStatusLeft.innerHTML = `<span class="status-item">${name}</span>`;
+            elStatusRight.innerHTML = `
+                <span class="status-item">${type}</span>
+                <span class="status-item">${sizeStr}</span>
+            `;
+        }
+
+    </script>
+</body>
+</html>

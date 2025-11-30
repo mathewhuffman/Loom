@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764394932924-user",
+    "role": "user",
+    "content": "make a super intuitive and fun, functional, esoteric coded Synthesizer, cappable of a ton of useful tricks",
+    "timestamp": 1764394932924,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764394932924-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Esoteric Synth\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764394932925,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764394932924-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764394932926,
+    "type": "info"
+  }
+]

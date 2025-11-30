@@ -9,8 +9,9 @@ import ChatView from './views/ChatView';
 import GlyphsView from './views/GlyphsView';
 import CodeEditorView from './views/CodeEditorView';
 import SettingsView from './views/SettingsView';
+import MonitorsView from './views/MonitorsView';
 
-type NavSection = 'chat' | 'glyphs' | 'editor' | 'settings';
+type NavSection = 'chat' | 'glyphs' | 'editor' | 'monitors' | 'settings';
 
 interface AIModel {
   id: string;
@@ -51,6 +52,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'chat', icon: '💬', label: 'Chat' },
   { id: 'glyphs', icon: '✨', label: 'Glyphs' },
   { id: 'editor', icon: '⌨️', label: 'Editor' },
+  { id: 'monitors', icon: '🖥️', label: 'Monitors' },
 ];
 
 export default function LoomPanel({ 
@@ -70,6 +72,7 @@ export default function LoomPanel({
   const derivedInitialSection: NavSection =
     initialSection !== 'chat' ? initialSection : initialState?.activeSection ?? initialSection;
   const [activeSection, setActiveSection] = useState<NavSection>(derivedInitialSection);
+  const [previousSection, setPreviousSection] = useState<NavSection>('chat'); // Track section before settings
   const [mountedSections, setMountedSections] = useState<NavSection[]>(() => [derivedInitialSection]);
   const [isVisible, setIsVisible] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
@@ -224,6 +227,19 @@ export default function LoomPanel({
     hasAutoSwitchedToEditor.current = true;
   }, []);
 
+  // Handle switching to settings - remember the previous section
+  const handleOpenSettings = useCallback(() => {
+    if (activeSection !== 'settings') {
+      setPreviousSection(activeSection);
+    }
+    setActiveSection('settings');
+  }, [activeSection]);
+
+  // Handle closing settings - return to the previous section
+  const handleCloseSettings = useCallback(() => {
+    setActiveSection(previousSection);
+  }, [previousSection]);
+
   const renderSectionContent = (section: NavSection) => {
     switch (section) {
       case 'chat':
@@ -248,8 +264,10 @@ export default function LoomPanel({
             onStateChange={onEditorStateChange}
           />
         );
+      case 'monitors':
+        return <MonitorsView />;
       case 'settings':
-        return <SettingsView />;
+        return <SettingsView onClose={handleCloseSettings} />;
       default:
         return null;
     }
@@ -775,7 +793,7 @@ export default function LoomPanel({
             
             {/* Settings button at bottom */}
             <button
-              onClick={() => setActiveSection('settings')}
+              onClick={handleOpenSettings}
               style={{
                 ...styles.navItem,
                 ...(activeSection === 'settings' ? styles.navItemActive : {}),

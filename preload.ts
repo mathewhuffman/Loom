@@ -9,6 +9,9 @@ import type { LoomUiStatePatch, ChatMessage } from './src/types/ui-state';
 const params = new URLSearchParams(window.location.search);
 const layer = params.get('layer') || 'background';
 
+// Detect if running in dev mode (check URL - dev uses localhost)
+const isDev = window.location.protocol === 'http:' || window.location.hostname === 'localhost';
+
 type BackgroundInteractionConfig = {
   enabled: boolean;
   toggleKey: string;
@@ -49,6 +52,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
 // Expose typed API to renderer
 contextBridge.exposeInMainWorld('loom', {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔧 ENVIRONMENT INFO
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Whether running in development mode (npm run dev)
+  isDev,
+  
   // ═══════════════════════════════════════════════════════════════════════════
   // 🧙 SUMMONER v1 — Secure LLM streaming (keys in main process)
   // ═══════════════════════════════════════════════════════════════════════════
@@ -253,6 +263,17 @@ contextBridge.exposeInMainWorld('loom', {
     };
     ipcRenderer.on('summon-inject', listener);
     return () => ipcRenderer.removeListener('summon-inject', listener);
+  },
+  
+  // Listen for summon clear (background clears glyph)
+  onSummonClear: (callback: () => void) => {
+    console.log(`[${layer}] 🎧 Registering listener: summon-clear`);
+    const listener = () => {
+      console.log(`[${layer}] 📥 CALLBACK: summon-clear`);
+      callback();
+    };
+    ipcRenderer.on('summon-clear', listener);
+    return () => ipcRenderer.removeListener('summon-clear', listener);
   },
 
   // Listen for widget injection (overlay renders draggable widgets)
@@ -659,6 +680,59 @@ contextBridge.exposeInMainWorld('loom', {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🖥️ MULTI-MONITOR MANAGEMENT — Set backgrounds per monitor
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get all connected displays with metadata
+  getAllDisplays: () => ipcRenderer.invoke('get-all-displays'),
+  
+  // Get primary display info
+  getPrimaryDisplay: () => ipcRenderer.invoke('get-primary-display'),
+  
+  // Move background window to specific display
+  setBackgroundDisplay: (displayId: string) => ipcRenderer.invoke('set-background-display', displayId),
+  
+  // Get current background display info
+  getBackgroundDisplay: () => ipcRenderer.invoke('get-background-display'),
+  
+  // Get saved backgrounds for all monitors
+  getMonitorBackgrounds: () => ipcRenderer.invoke('get-monitor-backgrounds'),
+  
+  // Set background glyph for specific monitor
+  setMonitorBackground: (config: {
+    displayId: string;
+    glyphId?: string;
+    code?: string;
+    prompt?: string;
+    type?: string;
+  }) => ipcRenderer.invoke('set-monitor-background', config),
+  
+  // Clear background for specific monitor
+  clearMonitorBackground: (displayId: string) => ipcRenderer.invoke('clear-monitor-background', displayId),
+  
+  // Clear ALL monitor backgrounds
+  clearAllMonitorBackgrounds: () => ipcRenderer.invoke('clear-all-monitor-backgrounds'),
+  
+  // Get total bounds spanning all displays (for overlay coordinate system)
+  getAllDisplaysBounds: () => ipcRenderer.invoke('get-all-displays-bounds'),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 📦 BUNDLED GLYPHS — Mark glyphs to include in app distribution
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Check if a glyph is marked for bundling
+  isGlyphBundled: (glyphId: string) => ipcRenderer.invoke('glyph:is-bundled', glyphId),
+  
+  // Bundle a glyph (copy to bundled-glyphs folder)
+  bundleGlyph: (glyphId: string) => ipcRenderer.invoke('glyph:bundle', glyphId),
+  
+  // Unbundle a glyph (remove from bundled-glyphs folder)
+  unbundleGlyph: (glyphId: string) => ipcRenderer.invoke('glyph:unbundle', glyphId),
+  
+  // Get list of all bundled glyph IDs
+  getBundledGlyphs: () => ipcRenderer.invoke('glyph:get-bundled-list'),
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 🔗 GLYPH KEY LINKING — Connect vault keys to glyphs
   // ═══════════════════════════════════════════════════════════════════════════
   
@@ -723,6 +797,7 @@ declare global {
       onSummonProvider: (callback: (data: { provider: string }) => void) => (() => void) | void;
       onSummonStart: (callback: (data: { prompt: string }) => void) => (() => void) | void;
       onSummonInject: (callback: (data: { code: string; prompt: string; mode?: 'background' | 'widget'; glyphId?: string }) => void) => (() => void) | void;
+      onSummonClear: (callback: () => void) => (() => void) | void;
       onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => void) => (() => void) | void;
       summonRefine: (data: { prompt: string; code: string; error: string; attempt: number; model?: string }) => void;
       onSummonRefining: (callback: (data: { attempt: number; error: string }) => void) => (() => void) | void;
@@ -940,6 +1015,48 @@ declare global {
           }>;
         }>;
       }) => void) => (() => void) | void;
+      
+      // Multi-Monitor Management
+      getAllDisplays: () => Promise<Array<{
+        id: string;
+        label: string;
+        bounds: { x: number; y: number; width: number; height: number };
+        workArea: { x: number; y: number; width: number; height: number };
+        scaleFactor: number;
+        isPrimary: boolean;
+        rotation: number;
+      }>>;
+      getPrimaryDisplay: () => Promise<{
+        id: string;
+        label: string;
+        bounds: { x: number; y: number; width: number; height: number };
+        workArea: { x: number; y: number; width: number; height: number };
+        scaleFactor: number;
+        isPrimary: boolean;
+        rotation: number;
+      }>;
+      setBackgroundDisplay: (displayId: string) => Promise<{ success: boolean; error?: string }>;
+      getBackgroundDisplay: () => Promise<{ displayId: string | null; bounds: { x: number; y: number; width: number; height: number } | null }>;
+      getMonitorBackgrounds: () => Promise<{
+        backgrounds: Array<{
+          displayId: string;
+          glyphId?: string;
+          code?: string;
+          prompt?: string;
+          type?: string;
+        }>;
+        activeDisplayId?: string;
+      }>;
+      setMonitorBackground: (config: {
+        displayId: string;
+        glyphId?: string;
+        code?: string;
+        prompt?: string;
+        type?: string;
+      }) => Promise<{ success: boolean }>;
+      clearMonitorBackground: (displayId: string) => Promise<{ success: boolean }>;
+      clearAllMonitorBackgrounds: () => Promise<{ success: boolean }>;
+      getAllDisplaysBounds: () => Promise<{ x: number; y: number; width: number; height: number }>;
     };
   }
 }

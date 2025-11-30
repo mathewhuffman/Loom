@@ -412,6 +412,120 @@ function installBundledGlyphs() {
   }
 }
 
+// IPC: Check if a glyph is bundled (exists in bundled-glyphs folder)
+ipcMain.handle('glyph:is-bundled', async (_event, glyphId: string) => {
+  try {
+    // Check if glyph exists in bundled-glyphs folder
+    const bundledDir = path.join(bundledGlyphsPath, glyphId);
+    const isBundled = fs.existsSync(bundledDir) && fs.existsSync(path.join(bundledDir, 'manifest.json'));
+    return { success: true, isBundled };
+  } catch (err: any) {
+    log('⚠️ Failed to check bundled status:', err);
+    return { success: false, isBundled: false, error: err.message };
+  }
+});
+
+// IPC: Bundle a glyph (copy from user library to bundled-glyphs)
+ipcMain.handle('glyph:bundle', async (_event, glyphId: string) => {
+  try {
+    // Find the glyph in the user's library
+    const searchPaths = [glyphLibraryPath, dynamicGlyphPath];
+    let sourceDir: string | null = null;
+    
+    for (const basePath of searchPaths) {
+      const glyphDir = path.join(basePath, glyphId);
+      if (fs.existsSync(glyphDir) && fs.existsSync(path.join(glyphDir, 'manifest.json'))) {
+        sourceDir = glyphDir;
+        break;
+      }
+    }
+    
+    if (!sourceDir) {
+      return { success: false, error: 'Glyph not found in user library' };
+    }
+    
+    // Ensure bundled-glyphs folder exists
+    if (!fs.existsSync(bundledGlyphsPath)) {
+      fs.mkdirSync(bundledGlyphsPath, { recursive: true });
+    }
+    
+    // Copy glyph to bundled-glyphs folder
+    const targetDir = path.join(bundledGlyphsPath, glyphId);
+    
+    // Remove existing if present
+    if (fs.existsSync(targetDir)) {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+    
+    // Copy the entire glyph folder
+    fs.cpSync(sourceDir, targetDir, { recursive: true });
+    
+    // Update the manifest to mark as bundled with version
+    const manifestPath = path.join(targetDir, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    manifest.bundled = true;
+    manifest.version = manifest.version || '1.0.0';
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    
+    log(`📦 Bundled glyph: ${manifest.name} (${glyphId})`);
+    return { success: true, bundledPath: targetDir };
+    
+  } catch (err: any) {
+    log('❌ Failed to bundle glyph:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+// IPC: Unbundle a glyph (remove from bundled-glyphs folder)
+ipcMain.handle('glyph:unbundle', async (_event, glyphId: string) => {
+  try {
+    const bundledDir = path.join(bundledGlyphsPath, glyphId);
+    
+    if (!fs.existsSync(bundledDir)) {
+      return { success: true }; // Already not bundled
+    }
+    
+    // Get name before deleting for logging
+    let glyphName = glyphId;
+    try {
+      const manifestPath = path.join(bundledDir, 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        glyphName = manifest.name || glyphId;
+      }
+    } catch {}
+    
+    // Remove from bundled-glyphs
+    fs.rmSync(bundledDir, { recursive: true, force: true });
+    
+    log(`📦 Unbundled glyph: ${glyphName} (${glyphId})`);
+    return { success: true };
+    
+  } catch (err: any) {
+    log('❌ Failed to unbundle glyph:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+// IPC: Get list of all bundled glyphs
+ipcMain.handle('glyph:get-bundled-list', async () => {
+  try {
+    if (!fs.existsSync(bundledGlyphsPath)) {
+      return { success: true, glyphIds: [] };
+    }
+    
+    const folders = fs.readdirSync(bundledGlyphsPath, { withFileTypes: true })
+      .filter(dirent => dirent.isDirectory())
+      .filter(dirent => fs.existsSync(path.join(bundledGlyphsPath, dirent.name, 'manifest.json')))
+      .map(dirent => dirent.name);
+    
+    return { success: true, glyphIds: folders };
+  } catch (err: any) {
+    log('⚠️ Failed to get bundled glyphs list:', err);
+    return { success: false, glyphIds: [], error: err.message };
+  }
+});
+
 function ensureDirectoryExists(dirPath: string) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -439,10 +553,21 @@ ipcMain.handle('save-dynamic-glyph', async (event, fileName: string, code: strin
   return { success: true, path: filePath };
 });
 
-let backgroundWindow: BrowserWindow | null = null;
+// Multi-monitor background windows - one per display
+const backgroundWindows: Map<string, BrowserWindow> = new Map();
+const backgroundWindowsReady: Map<string, boolean> = new Map();
+const backgroundWindowsAttached: Map<string, boolean> = new Map();
+
 let overlayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let interactionEnabled = false;
+
+// Legacy single-window compatibility - points to primary display's background window
+let backgroundWindow: BrowserWindow | null = null;
+let backgroundDisplayId: string | null = null;
+let backgroundDisplayBounds: Electron.Rectangle | null = null;
+let backgroundReadyForAttach = false;
+let wallpaperAttached = false;
 
 interface BackgroundInteractionConfig {
   enabled: boolean;
@@ -464,13 +589,9 @@ let settingsCache: LoomSettings | null = null;
 let backgroundInteractionState: BackgroundInteractionConfig = DEFAULT_BACKGROUND_INTERACTION;
 let lastBackgroundToggleTs = 0;
 let registeredBackgroundAccelerator: string | null = null;
-let backgroundReadyForAttach = false;
-let wallpaperAttached = false;
 let backgroundMouseCaptured = false;
 let backgroundMouseLeaveTimer: ReturnType<typeof setTimeout> | null = null;
 const MOUSE_LEAVE_DEBOUNCE_MS = 150;
-let backgroundDisplayId: string | null = null;
-let backgroundDisplayBounds: Electron.Rectangle | null = null;
 
 const log = (...args: any[]) => console.log('[LOOM]', ...args);
 
@@ -621,6 +742,15 @@ function persistWallpaperState(payload: { code: string; prompt?: string; glyphId
   });
 }
 
+function clearPersistedWallpaper() {
+  log('[UIState] Clearing persisted wallpaper');
+  mergeUiState({
+    background: {
+      wallpaper: null,
+    },
+  });
+}
+
 function normalizeBackgroundInteractionConfig(raw?: Partial<BackgroundInteractionConfig>): BackgroundInteractionConfig {
   return {
     enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : DEFAULT_BACKGROUND_INTERACTION.enabled,
@@ -673,53 +803,23 @@ function refreshBackgroundShortcutBinding() {
   }
 }
 
+// Legacy attach function - now uses multi-window system
 function attachBackgroundToDesktop({ force = false }: { force?: boolean } = {}) {
   if (process.platform !== 'win32') return;
-  if (!backgroundReadyForAttach) return;
-  if (!backgroundWindow || backgroundWindow.isDestroyed()) return;
-  if (wallpaperAttached && !force) return;
-
-  if (wallpaperAttached) {
-    detachBackgroundFromDesktop();
-  }
-
-  try {
-    attach(backgroundWindow, {
-      transparent: true,
-      forwardKeyboardInput: backgroundInteractionState.enabled,
-      forwardMouseInput: backgroundInteractionState.enabled,
-    });
-    wallpaperAttached = true;
-    const targetBounds =
-      backgroundDisplayBounds || screen.getPrimaryDisplay().bounds || { x: 0, y: 0, width: 800, height: 600 };
-    const targetDisplayId =
-      backgroundDisplayId || String(screen.getPrimaryDisplay()?.id ?? 'primary');
-    applyBounds(backgroundWindow, targetDisplayId, targetBounds);
-    setTimeout(() => {
-      if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-        applyBounds(backgroundWindow, targetDisplayId, targetBounds);
-      }
-    }, 50);
-    log('🔮 BACKGROUND ATTACHED AS WALLPAPER', {
-      interactive: backgroundInteractionState.enabled,
-      displayId: targetDisplayId,
-      bounds: targetBounds,
-    });
-  } catch (error) {
-    log('attach-error', error);
+  
+  // Attach all background windows
+  for (const displayId of backgroundWindows.keys()) {
+    attachBackgroundWindowToDesktop(displayId, { force });
   }
 }
 
+// Legacy detach function - now uses multi-window system
 function detachBackgroundFromDesktop() {
   if (process.platform !== 'win32') return;
-  if (!backgroundWindow || backgroundWindow.isDestroyed()) return;
-  if (!wallpaperAttached) return;
-  try {
-    detach(backgroundWindow);
-  } catch (error) {
-    log('detach-error', error);
-  } finally {
-    wallpaperAttached = false;
+  
+  // Detach all background windows
+  for (const displayId of backgroundWindows.keys()) {
+    detachBackgroundWindowFromDesktop(displayId);
   }
 }
 
@@ -727,8 +827,11 @@ function broadcastBackgroundInteractionState() {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('background-interaction-update', backgroundInteractionState);
   }
-  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-    backgroundWindow.webContents.send('background-interaction-update', backgroundInteractionState);
+  // Broadcast to ALL background windows
+  for (const win of backgroundWindows.values()) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('background-interaction-update', backgroundInteractionState);
+    }
   }
 }
 
@@ -736,29 +839,33 @@ function applyBackgroundInteractionState({ reason }: { reason?: string } = {}) {
   const enabled = backgroundInteractionState.enabled;
   log('[BackgroundInteraction] apply', { enabled, reason });
 
-  if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-    try {
-      if (enabled) {
-        backgroundWindow.setIgnoreMouseEvents(false);
-        if (typeof backgroundWindow.setFocusable === 'function') {
-          backgroundWindow.setFocusable(true);
+  // Apply to ALL background windows
+  for (const win of backgroundWindows.values()) {
+    if (win && !win.isDestroyed()) {
+      try {
+        if (enabled) {
+          win.setIgnoreMouseEvents(false);
+          if (typeof win.setFocusable === 'function') {
+            win.setFocusable(true);
+          }
+          win.webContents.focus();
+        } else {
+          win.setIgnoreMouseEvents(true, { forward: true });
+          if (typeof win.setFocusable === 'function') {
+            win.setFocusable(false);
+          }
+          if (win.isFocused()) {
+            win.blur();
+          }
         }
-        backgroundWindow.webContents.focus();
-      } else {
-        backgroundWindow.setIgnoreMouseEvents(true, { forward: true });
-        if (typeof backgroundWindow.setFocusable === 'function') {
-          backgroundWindow.setFocusable(false);
-        }
-        if (backgroundWindow.isFocused()) {
-          backgroundWindow.blur();
-        }
+      } catch (error) {
+        log('⚠️ Failed to apply background interaction state', error);
       }
-    } catch (error) {
-      log('⚠️ Failed to apply background interaction state', error);
     }
-
-    attachBackgroundToDesktop({ force: true });
   }
+  
+  // Re-attach all windows
+  attachBackgroundToDesktop({ force: true });
 
   if (backgroundMouseLeaveTimer) {
     clearTimeout(backgroundMouseLeaveTimer);
@@ -3225,26 +3332,24 @@ function toggleInteraction() {
 }
 
 /**
- * LAYER 1: The Background Window
- * - Full screen Three.js animated canvas
+ * LAYER 1: Background Windows (one per display)
+ * - Full screen Three.js animated canvas per monitor
  * - Attached as wallpaper via electron-as-wallpaper
  * - Always click-through (ignoreMouseEvents: true)
  */
-function createBackgroundWindow() {
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { bounds } = primaryDisplay;
-  const displayId = String(primaryDisplay.id);
-  backgroundReadyForAttach = false;
-  backgroundDisplayId = displayId;
-  backgroundDisplayBounds = { ...bounds };
+function createBackgroundWindowForDisplay(display: Electron.Display) {
+  const displayId = String(display.id);
+  const { bounds } = display;
+  const isPrimary = display.id === screen.getPrimaryDisplay().id;
   
-  log('creating-background-window', {
+  log('creating-background-window-for-display', {
     displayId,
     bounds,
-    scaleFactor: primaryDisplay.scaleFactor,
+    scaleFactor: display.scaleFactor,
+    isPrimary,
   });
 
-  backgroundWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     x: bounds.x,
     y: bounds.y,
     width: bounds.width,
@@ -3269,63 +3374,279 @@ function createBackgroundWindow() {
     },
   });
 
-  log('background-window-created', { id: backgroundWindow.id });
+  backgroundWindows.set(displayId, win);
+  backgroundWindowsReady.set(displayId, false);
+  backgroundWindowsAttached.set(displayId, false);
+  
+  // Set legacy pointer for primary display
+  if (isPrimary) {
+    backgroundWindow = win;
+    backgroundDisplayId = displayId;
+    backgroundDisplayBounds = { ...bounds };
+    backgroundReadyForAttach = false;
+  }
 
-  applyBackgroundInteractionState({ reason: 'background-window-created' });
+  log('background-window-created', { id: win.id, displayId, isPrimary });
 
   const isDev = !app.isPackaged;
   
   if (isDev) {
-    backgroundWindow.loadURL('http://localhost:5173?layer=background');
+    win.loadURL(`http://localhost:5173?layer=background&displayId=${displayId}`);
   } else {
-    backgroundWindow.loadFile(path.join(__dirname, '../dist/index.html'), {
-      query: { layer: 'background' }
+    win.loadFile(path.join(__dirname, '../dist/index.html'), {
+      query: { layer: 'background', displayId }
     });
   }
 
-  backgroundWindow.once('ready-to-show', () => {
-    if (!backgroundWindow) return;
-    backgroundReadyForAttach = true;
+  win.once('ready-to-show', () => {
+    if (win.isDestroyed()) return;
+    backgroundWindowsReady.set(displayId, true);
     
-    log('background-ready-to-show', { bounds: backgroundWindow.getBounds() });
-    log('background webContents id:', backgroundWindow.webContents.id);
-    
-    // Test IPC to background - send a test message after a short delay
-    setTimeout(() => {
-      if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-        log('📤 Sending test ping to background...');
-        backgroundWindow.webContents.send('test-ping', { message: 'hello from main' });
-      }
-    }, 2000);
-    
-    applyBounds(backgroundWindow, displayId, bounds);
-    backgroundWindow.showInactive();
-    restoreBackgroundWallpaper();
-
-    attachBackgroundToDesktop({ force: true });
-    if (process.platform !== 'win32') {
-      log('🪄 BACKGROUND LAYERED (macOS/Linux mode)');
+    if (isPrimary) {
+      backgroundReadyForAttach = true;
     }
-    applyBackgroundInteractionState({ reason: 'background-ready' });
+    
+    log('background-ready-to-show', { displayId, bounds: win.getBounds(), isPrimary });
+    
+    applyBounds(win, displayId, bounds);
+    win.showInactive();
+    
+    // Attach this window as wallpaper
+    attachBackgroundWindowToDesktop(displayId, { force: true });
+    
+    // Restore background for this display if saved
+    restoreBackgroundForDisplay(displayId);
+    
+    if (isPrimary) {
+      applyBackgroundInteractionState({ reason: 'background-ready' });
+    }
   });
 
-  screen.on('display-metrics-changed', () => {
-    if (!backgroundWindow || backgroundWindow.isDestroyed()) return;
-    const primary = screen.getPrimaryDisplay();
-    const newBounds = primary.bounds;
-    backgroundDisplayId = String(primary.id);
-    backgroundDisplayBounds = { ...newBounds };
-    log('display-metrics-changed', { newBounds });
-    applyBounds(backgroundWindow, backgroundDisplayId || displayId, newBounds);
+  win.on('closed', () => {
+    backgroundWindows.delete(displayId);
+    backgroundWindowsReady.delete(displayId);
+    backgroundWindowsAttached.delete(displayId);
+    
+    if (isPrimary) {
+      backgroundReadyForAttach = false;
+      backgroundWindow = null;
+      backgroundDisplayBounds = null;
+      backgroundDisplayId = null;
+      wallpaperAttached = false;
+    }
   });
+  
+  return win;
+}
 
-  backgroundWindow.on('closed', () => {
-    backgroundReadyForAttach = false;
-    detachBackgroundFromDesktop();
-    backgroundWindow = null;
-    backgroundDisplayBounds = null;
-    backgroundDisplayId = null;
+/**
+ * Create background windows for ALL displays
+ */
+function createAllBackgroundWindows() {
+  const allDisplays = screen.getAllDisplays();
+  const primaryDisplay = screen.getPrimaryDisplay();
+  
+  log('creating-all-background-windows', {
+    displayCount: allDisplays.length,
+    primaryId: primaryDisplay.id,
   });
+  
+  // Create primary display window first
+  const primaryWin = createBackgroundWindowForDisplay(primaryDisplay);
+  applyBackgroundInteractionState({ reason: 'background-window-created' });
+  
+  // Create windows for other displays
+  for (const display of allDisplays) {
+    if (display.id !== primaryDisplay.id) {
+      createBackgroundWindowForDisplay(display);
+    }
+  }
+  
+  // Listen for display changes
+  screen.on('display-added', (event, newDisplay) => {
+    log('display-added', { id: newDisplay.id, bounds: newDisplay.bounds });
+    createBackgroundWindowForDisplay(newDisplay);
+  });
+  
+  screen.on('display-removed', (event, oldDisplay) => {
+    const displayId = String(oldDisplay.id);
+    log('display-removed', { displayId });
+    const win = backgroundWindows.get(displayId);
+    if (win && !win.isDestroyed()) {
+      detachBackgroundWindowFromDesktop(displayId);
+      win.close();
+    }
+  });
+  
+  screen.on('display-metrics-changed', (event, display, changedMetrics) => {
+    const displayId = String(display.id);
+    const win = backgroundWindows.get(displayId);
+    if (win && !win.isDestroyed()) {
+      log('display-metrics-changed-for', { displayId, bounds: display.bounds, changedMetrics });
+      applyBounds(win, displayId, display.bounds);
+      
+      // Re-attach if needed
+      if (backgroundWindowsAttached.get(displayId)) {
+        detachBackgroundWindowFromDesktop(displayId);
+        attachBackgroundWindowToDesktop(displayId, { force: true });
+      }
+    }
+  });
+}
+
+/**
+ * Attach a specific background window as wallpaper
+ */
+function attachBackgroundWindowToDesktop(displayId: string, { force = false }: { force?: boolean } = {}) {
+  if (process.platform !== 'win32') return;
+  
+  const win = backgroundWindows.get(displayId);
+  if (!win || win.isDestroyed()) return;
+  if (!backgroundWindowsReady.get(displayId)) return;
+  if (backgroundWindowsAttached.get(displayId) && !force) return;
+  
+  const allDisplays = screen.getAllDisplays();
+  const display = allDisplays.find(d => String(d.id) === displayId);
+  if (!display) return;
+  
+  const { bounds } = display;
+  
+  // Detach first if already attached
+  if (backgroundWindowsAttached.get(displayId)) {
+    detachBackgroundWindowFromDesktop(displayId);
+  }
+  
+  try {
+    // Set bounds before attaching
+    applyBounds(win, displayId, bounds);
+    
+    attach(win, {
+      transparent: true,
+      forwardKeyboardInput: backgroundInteractionState.enabled,
+      forwardMouseInput: backgroundInteractionState.enabled,
+    });
+    
+    backgroundWindowsAttached.set(displayId, true);
+    
+    // Re-apply bounds after attachment
+    applyBounds(win, displayId, bounds);
+    
+    // Multiple retry attempts to correct positioning
+    const retryTimes = [50, 150, 300];
+    retryTimes.forEach((delay) => {
+      setTimeout(() => {
+        if (win && !win.isDestroyed()) {
+          const currentBounds = win.getBounds();
+          const needsCorrection = 
+            Math.abs(currentBounds.x - bounds.x) > 2 || 
+            Math.abs(currentBounds.y - bounds.y) > 2;
+          
+          if (needsCorrection) {
+            log(`🔧 Correcting background bounds for ${displayId} (delay: ${delay}ms)`);
+            applyBounds(win, displayId, bounds);
+          }
+        }
+      }, delay);
+    });
+    
+    log('🔮 BACKGROUND ATTACHED AS WALLPAPER', {
+      displayId,
+      bounds,
+    });
+    
+    // Update legacy state for primary
+    if (displayId === backgroundDisplayId) {
+      wallpaperAttached = true;
+    }
+  } catch (error) {
+    log('attach-error', { displayId, error });
+  }
+}
+
+/**
+ * Detach a specific background window from wallpaper
+ */
+function detachBackgroundWindowFromDesktop(displayId: string) {
+  if (process.platform !== 'win32') return;
+  
+  const win = backgroundWindows.get(displayId);
+  if (!win || win.isDestroyed()) return;
+  if (!backgroundWindowsAttached.get(displayId)) return;
+  
+  try {
+    detach(win);
+  } catch (error) {
+    log('detach-error', { displayId, error });
+  } finally {
+    backgroundWindowsAttached.set(displayId, false);
+    if (displayId === backgroundDisplayId) {
+      wallpaperAttached = false;
+    }
+  }
+}
+
+/**
+ * Restore background glyph for a specific display from saved state
+ */
+function restoreBackgroundForDisplay(displayId: string) {
+  const state = loadMonitorBackgrounds();
+  const config = state.backgrounds.find(b => b.displayId === displayId);
+  
+  if (config && config.code) {
+    const win = backgroundWindows.get(displayId);
+    if (win && !win.isDestroyed()) {
+      log('🖼️ Restoring background for display:', displayId, config.glyphId);
+      win.webContents.send('summon-inject', {
+        code: config.code,
+        prompt: config.prompt || 'Monitor Background',
+        glyphId: config.glyphId,
+        type: config.type,
+        mode: 'background',
+      });
+    }
+  } else if (displayId === backgroundDisplayId) {
+    // Fall back to legacy wallpaper state for primary display
+    restoreBackgroundWallpaper();
+  }
+}
+
+// Legacy function - now wraps the new multi-window system
+function createBackgroundWindow() {
+  createAllBackgroundWindows();
+}
+
+/**
+ * Calculate the bounding rectangle that encompasses ALL displays
+ * This allows the overlay to span all monitors for widgets and UI
+ */
+function getAllDisplaysBounds(): Electron.Rectangle {
+  const allDisplays = screen.getAllDisplays();
+  
+  if (allDisplays.length === 0) {
+    return { x: 0, y: 0, width: 1920, height: 1080 };
+  }
+  
+  if (allDisplays.length === 1) {
+    return allDisplays[0].bounds;
+  }
+  
+  // Calculate the bounding box that contains all displays
+  let minX = Infinity, minY = Infinity;
+  let maxX = -Infinity, maxY = -Infinity;
+  
+  for (const display of allDisplays) {
+    minX = Math.min(minX, display.bounds.x);
+    minY = Math.min(minY, display.bounds.y);
+    maxX = Math.max(maxX, display.bounds.x + display.bounds.width);
+    maxY = Math.max(maxY, display.bounds.y + display.bounds.height);
+  }
+  
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
 }
 
 /**
@@ -3333,18 +3654,24 @@ function createBackgroundWindow() {
  * - Transparent, always-on-top
  * - Contains ONLY the React UI (SummonBar, etc.)
  * - Starts click-through, toggles with Ctrl+Alt+S
+ * - SPANS ALL DISPLAYS for multi-monitor widget/UI support
  */
 function createOverlayWindow() {
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { bounds } = primaryDisplay;
+  // Get bounds that span ALL displays
+  const allBounds = getAllDisplaysBounds();
+  const allDisplays = screen.getAllDisplays();
   
-  log('creating-overlay-window', { bounds });
+  log('creating-overlay-window', { 
+    allBounds,
+    displayCount: allDisplays.length,
+    displays: allDisplays.map(d => ({ id: d.id, bounds: d.bounds, isPrimary: d.id === screen.getPrimaryDisplay().id })),
+  });
 
   overlayWindow = new BrowserWindow({
-    x: bounds.x,
-    y: bounds.y,
-    width: bounds.width,
-    height: bounds.height,
+    x: allBounds.x,
+    y: allBounds.y,
+    width: allBounds.width,
+    height: allBounds.height,
     frame: false,
     transparent: true,
     resizable: false,
@@ -3385,9 +3712,30 @@ function createOverlayWindow() {
     overlayWindow.showInactive();
   });
 
+  // Listen for display changes and resize overlay to span all displays
+  screen.on('display-added', updateOverlayBounds);
+  screen.on('display-removed', updateOverlayBounds);
+  screen.on('display-metrics-changed', updateOverlayBounds);
+
   overlayWindow.on('closed', () => {
+    screen.removeListener('display-added', updateOverlayBounds);
+    screen.removeListener('display-removed', updateOverlayBounds);
+    screen.removeListener('display-metrics-changed', updateOverlayBounds);
     overlayWindow = null;
   });
+}
+
+/**
+ * Update overlay window bounds to span all displays
+ * Called when displays are added/removed/changed
+ */
+function updateOverlayBounds() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  
+  const allBounds = getAllDisplaysBounds();
+  log('updating-overlay-bounds', { allBounds });
+  
+  overlayWindow.setBounds(allBounds, false);
 }
 
 /**
@@ -4246,6 +4594,213 @@ ipcMain.handle('get-available-models', () => {
     if (priorityDiff !== 0) return priorityDiff;
     return a.name.localeCompare(b.name);
   });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🖥️ MULTI-MONITOR SUPPORT
+// ════════════════════════════════════════════════════════════════════════════
+
+interface MonitorInfo {
+  id: string;
+  label: string;
+  bounds: Electron.Rectangle;
+  workArea: Electron.Rectangle;
+  scaleFactor: number;
+  isPrimary: boolean;
+  rotation: number;
+}
+
+// Get all connected displays with metadata
+ipcMain.handle('get-all-displays', () => {
+  const allDisplays = screen.getAllDisplays();
+  const primaryDisplay = screen.getPrimaryDisplay();
+  
+  return allDisplays.map((display, index) => {
+    const isPrimary = display.id === primaryDisplay.id;
+    return {
+      id: String(display.id),
+      label: isPrimary ? `Display ${index + 1} (Primary)` : `Display ${index + 1}`,
+      bounds: display.bounds,
+      workArea: display.workArea,
+      scaleFactor: display.scaleFactor,
+      isPrimary,
+      rotation: display.rotation,
+    } as MonitorInfo;
+  });
+});
+
+// Get the primary display info
+ipcMain.handle('get-primary-display', () => {
+  const primary = screen.getPrimaryDisplay();
+  return {
+    id: String(primary.id),
+    label: 'Primary Display',
+    bounds: primary.bounds,
+    workArea: primary.workArea,
+    scaleFactor: primary.scaleFactor,
+    isPrimary: true,
+    rotation: primary.rotation,
+  } as MonitorInfo;
+});
+
+// Move background window to a specific display
+ipcMain.handle('set-background-display', async (_event, displayId: string) => {
+  const allDisplays = screen.getAllDisplays();
+  const targetDisplay = allDisplays.find(d => String(d.id) === displayId);
+  
+  if (!targetDisplay) {
+    log('❌ Display not found:', displayId);
+    return { success: false, error: 'Display not found' };
+  }
+  
+  if (!backgroundWindow || backgroundWindow.isDestroyed()) {
+    log('❌ Background window not available');
+    return { success: false, error: 'Background window not available' };
+  }
+  
+  const { bounds } = targetDisplay;
+  log('🖥️ Moving background to display:', displayId, bounds);
+  
+  // Detach from current wallpaper position
+  detachBackgroundFromDesktop();
+  
+  // Update stored display info
+  backgroundDisplayId = displayId;
+  backgroundDisplayBounds = { ...bounds };
+  
+  // Apply new bounds
+  applyBounds(backgroundWindow, displayId, bounds);
+  
+  // Re-attach as wallpaper
+  attachBackgroundToDesktop({ force: true });
+  
+  log('✅ Background moved to display:', displayId);
+  return { success: true };
+});
+
+// Get current background display info
+ipcMain.handle('get-background-display', () => {
+  return {
+    displayId: backgroundDisplayId,
+    bounds: backgroundDisplayBounds,
+  };
+});
+
+// Get the total bounds spanning all displays (for overlay coordinate system)
+ipcMain.handle('get-all-displays-bounds', () => {
+  return getAllDisplaysBounds();
+});
+
+// Monitor backgrounds persistence path
+const monitorBackgroundsPath = path.join(app.getPath('userData'), 'monitor-backgrounds.json');
+
+interface MonitorBackgroundConfig {
+  displayId: string;
+  glyphId?: string;
+  code?: string;
+  prompt?: string;
+  type?: string;
+}
+
+interface MonitorBackgroundsState {
+  backgrounds: MonitorBackgroundConfig[];
+  activeDisplayId?: string;
+}
+
+function loadMonitorBackgrounds(): MonitorBackgroundsState {
+  try {
+    if (fs.existsSync(monitorBackgroundsPath)) {
+      const raw = fs.readFileSync(monitorBackgroundsPath, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (error) {
+    log('⚠️ Failed to load monitor backgrounds:', error);
+  }
+  return { backgrounds: [] };
+}
+
+function saveMonitorBackgrounds(state: MonitorBackgroundsState) {
+  try {
+    ensureDirectoryExists(path.dirname(monitorBackgroundsPath));
+    fs.writeFileSync(monitorBackgroundsPath, JSON.stringify(state, null, 2));
+  } catch (error) {
+    log('⚠️ Failed to save monitor backgrounds:', error);
+  }
+}
+
+// Get saved backgrounds for all monitors
+ipcMain.handle('get-monitor-backgrounds', () => {
+  return loadMonitorBackgrounds();
+});
+
+// Set background glyph for a specific monitor
+ipcMain.handle('set-monitor-background', async (_event, config: MonitorBackgroundConfig) => {
+  const state = loadMonitorBackgrounds();
+  
+  // Update or add the config for this display
+  const existingIndex = state.backgrounds.findIndex(b => b.displayId === config.displayId);
+  if (existingIndex >= 0) {
+    state.backgrounds[existingIndex] = config;
+  } else {
+    state.backgrounds.push(config);
+  }
+  
+  state.activeDisplayId = config.displayId;
+  saveMonitorBackgrounds(state);
+  
+  // Apply the change to the specific display's background window
+  if (config.code) {
+    const win = backgroundWindows.get(config.displayId);
+    if (win && !win.isDestroyed()) {
+      log('🖥️ Applying background to display:', config.displayId);
+      win.webContents.send('summon-inject', {
+        code: config.code,
+        prompt: config.prompt || 'Monitor Background',
+        glyphId: config.glyphId,
+        type: config.type,
+        mode: 'background',
+      });
+    } else {
+      log('⚠️ No background window found for display:', config.displayId);
+    }
+  }
+  
+  return { success: true };
+});
+
+// Clear background for a specific monitor
+ipcMain.handle('clear-monitor-background', async (_event, displayId: string) => {
+  const state = loadMonitorBackgrounds();
+  state.backgrounds = state.backgrounds.filter(b => b.displayId !== displayId);
+  saveMonitorBackgrounds(state);
+  
+  // Send clear command to the specific display's background window
+  const win = backgroundWindows.get(displayId);
+  if (win && !win.isDestroyed()) {
+    log('🧹 Clearing background for display:', displayId);
+    win.webContents.send('summon-clear');
+  }
+  
+  return { success: true };
+});
+
+// Clear ALL monitor backgrounds
+ipcMain.handle('clear-all-monitor-backgrounds', async () => {
+  // Clear saved state
+  saveMonitorBackgrounds({ backgrounds: [] });
+  
+  // Send clear command to ALL background windows
+  for (const [displayId, win] of backgroundWindows.entries()) {
+    if (win && !win.isDestroyed()) {
+      log('🧹 Clearing background for display:', displayId);
+      win.webContents.send('summon-clear');
+    }
+  }
+  
+  // Also clear legacy persisted wallpaper
+  clearPersistedWallpaper();
+  
+  return { success: true };
 });
 
 // Forward completed code to background for compilation

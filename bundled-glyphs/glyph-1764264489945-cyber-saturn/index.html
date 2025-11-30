@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber Saturn</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #00050a;
+        }
+        canvas {
+            display: block;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ff41;
+            font-family: monospace;
+            font-size: 14px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">INITIALIZING SYSTEM...</div>
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+        import { OrbitControls } from 'https://esm.sh/three@0.168.0/examples/jsm/controls/OrbitControls.js';
+
+        // --- CONFIGURATION ---
+        const inputs = window.GLYPH_INPUTS || {};
+        const config = {
+            planetColor: inputs.planetColor || '#2e00ff',
+            matrixColor: inputs.matrixColor || '#00ff41',
+            count: parseInt(inputs.particleCount) || 4000,
+            ringSize: parseFloat(inputs.ringSize) || 2.5,
+            speed: (parseInt(inputs.rotationSpeed) || 20) * 0.001
+        };
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        // Add a subtle fog for depth
+        scene.fog = new THREE.FogExp2(0x000000, 0.03);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(4, 2, 5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.autoRotate = false;
+        controls.enablePan = false;
+
+        // --- ASSETS GENERATION ---
+        // Generate a texture containing a single matrix character
+        function createMatrixTexture(char, color) {
+            const canvas = document.createElement('canvas');
+            const size = 64;
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            
+            ctx.fillStyle = 'rgba(0,0,0,0)';
+            ctx.fillRect(0, 0, size, size);
+            
+            // Glow effect
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = color;
+            
+            ctx.font = 'bold 40px monospace';
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // Draw random Katakana or Matrix-like char
+            ctx.fillText(char, size/2, size/2);
+            
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.needsUpdate = true;
+            return tex;
+        }
+
+        // --- PLANET CREATION ---
+        const planetGroup = new THREE.Group();
+        scene.add(planetGroup);
+
+        // 1. Core Sphere (Black/Occlusion)
+        const coreGeo = new THREE.IcosahedronGeometry(1.5, 2);
+        const coreMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+        const core = new THREE.Mesh(coreGeo, coreMat);
+        planetGroup.add(core);
+
+        // 2. Wireframe Grid
+        const wireGeo = new THREE.IcosahedronGeometry(1.51, 2);
+        const wireMat = new THREE.MeshBasicMaterial({ 
+            color: config.planetColor, 
+            wireframe: true, 
+            transparent: true, 
+            opacity: 0.5,
+            blending: THREE.AdditiveBlending
+        });
+        const wireframe = new THREE.Mesh(wireGeo, wireMat);
+        planetGroup.add(wireframe);
+
+        // 3. Inner Glow
+        const glowGeo = new THREE.IcosahedronGeometry(1.4, 2);
+        const glowMat = new THREE.MeshBasicMaterial({ 
+            color: config.planetColor, 
+            transparent: true, 
+            opacity: 0.15, 
+            blending: THREE.AdditiveBlending,
+            side: THREE.BackSide
+        });
+        const glow = new THREE.Mesh(glowGeo, glowMat);
+        planetGroup.add(glow);
+
+        // --- MATRIX RINGS ---
+        // We create multiple particle systems to have different characters
+        const katakana = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン";
+        const systems = [];
+        const numSystems = 5; // Use 5 different characters scattered
+
+        for(let s=0; s<numSystems; s++) {
+            const char = katakana[Math.floor(Math.random() * katakana.length)];
+            const tex = createMatrixTexture(char, config.matrixColor);
+            
+            const ptsGeo = new THREE.BufferGeometry();
+            const positions = [];
+            const sizes = [];
+            const angles = []; // Store initial angle for animation
+            const radii = [];  // Store radius for animation
+            
+            const countPerSystem = Math.floor(config.count / numSystems);
+
+            for(let i=0; i<countPerSystem; i++) {
+                // Distribution: Flat disk with hole
+                const rMin = 2.2;
+                const rMax = 2.2 + config.ringSize;
+                
+                // Bias random towards center for density or uniform?
+                // Let's do uniform area distribution: sqrt(random)
+                const r = Math.sqrt(Math.random() * (rMax*rMax - rMin*rMin) + rMin*rMin);
+                const theta = Math.random() * Math.PI * 2;
+                
+                const x = r * Math.cos(theta);
+                const z = r * Math.sin(theta);
+                const y = (Math.random() - 0.5) * 0.2; // Thin disk
+
+                positions.push(x, y, z);
+                sizes.push(Math.random() * 0.3 + 0.1);
+                angles.push(theta);
+                radii.push(r);
+            }
+
+            ptsGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            ptsGeo.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+            // Custom attributes for animation in JS (simpler than ShaderMaterial for this constrained env)
+            ptsGeo.userData = { angles: angles, radii: radii, speeds: [] };
+            
+            // Vary speed based on radius (Kepler-ish: inner faster)
+            for(let i=0; i<countPerSystem; i++) {
+                const r = radii[i];
+                // Speed factor: closer = faster
+                ptsGeo.userData.speeds.push((1 / r) * 1.5);
+            }
+
+            const ptsMat = new THREE.PointsMaterial({
+                map: tex,
+                size: 0.2,
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                sizeAttenuation: true
+            });
+
+            const points = new THREE.Points(ptsGeo, ptsMat);
+            // Tilt the rings slightly
+            points.rotation.x = Math.PI * 0.1;
+            points.rotation.z = Math.PI * 0.05;
+            
+            scene.add(points);
+            systems.push(points);
+        }
+
+        // --- ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        document.getElementById('loading').style.display = 'none';
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            // Rotate Planet
+            planetGroup.rotation.y += delta * 0.1;
+            wireframe.rotation.x += delta * 0.05;
+
+            // Pulse Planet Color
+            const hue = (time * 0.05) % 1;
+            // We keep the user color but maybe pulse opacity
+            wireMat.opacity = 0.4 + Math.sin(time * 2) * 0.1;
+
+            // Animate Particles
+            const globalSpeed = config.speed;
+            
+            systems.forEach(sys => {
+                const positions = sys.geometry.attributes.position.array;
+                const angles = sys.geometry.userData.angles;
+                const radii = sys.geometry.userData.radii;
+                const speeds = sys.geometry.userData.speeds;
+
+                for(let i = 0; i < angles.length; i++) {
+                    // Update angle
+                    angles[i] += speeds[i] * globalSpeed * delta;
+                    
+                    // Update position
+                    const r = radii[i];
+                    const theta = angles[i];
+                    
+                    // Add some "wave" motion in Y
+                    const yBase = (Math.sin(theta * 3 + time) + Math.cos(r * 5 - time)) * 0.05;
+                    
+                    positions[i * 3] = r * Math.cos(theta);
+                    positions[i * 3 + 1] = yBase;
+                    positions[i * 3 + 2] = r * Math.sin(theta);
+                }
+                sys.geometry.attributes.position.needsUpdate = true;
+            });
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- RESIZE HANDLER ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

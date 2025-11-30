@@ -910,6 +910,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
+    width: '100%',
     height: '100%',
     display: 'flex',
     flexDirection: 'column',

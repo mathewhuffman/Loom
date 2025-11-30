@@ -1,0 +1,13 @@
+{
+  "id": "glyph-1764193608944-occult-nebula",
+  "name": "Occult Nebula",
+  "type": "background",
+  "prompt": "particle galaxy with nebula that is intoractive",
+  "entry": "index.html",
+  "files": [
+    "index.html"
+  ],
+  "savedAt": "2025-11-26T21:46:48.944Z",
+  "bundled": true,
+  "version": "1.0.0"
+}

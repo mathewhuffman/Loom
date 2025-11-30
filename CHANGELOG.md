@@ -1,28 +1,18 @@
 # LOOM Changelog
 
-All notable changes to LOOM will be documented in this file.
+## [0.2.0] - 11/29/2025
 
-## How to Add New Versions
-
-Simply add a new section at the top following this format:
-
-```markdown
-## [VERSION] - YYYY-MM-DD
+## Multi-monitor Support, stability update
 
 ### ✨ New Features
-- Feature description here
+- You can now use other monitors for background glyphs, and display Loom interface elements..
+- general stability pass, inputs for glyphs operation again.
 
 ### 🔧 Improvements  
-- Improvement description here
+- said above
 
 ### 🐛 Bug Fixes
-- Bug fix description here
-
-### 💀 Breaking Changes
-- Breaking change description here (if any)
-```
-
----
+- tons
 
 ## [0.1.0] - 2025-11-29
 

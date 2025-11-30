@@ -63,7 +63,7 @@ export interface PersistedWidgetState {
   inputs?: Record<string, unknown>; // Resolved inputs (including linked keys)
 }
 
-export type NavSection = 'chat' | 'glyphs' | 'editor' | 'settings';
+export type NavSection = 'chat' | 'glyphs' | 'editor' | 'monitors' | 'settings';
 
 export interface LoomPanelState {
   size?: { width: number; height: number };

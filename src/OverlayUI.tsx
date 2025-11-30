@@ -66,35 +66,23 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, w: 0, h: 0, wx: 0, wy: 0 });
   const [showEditButton, setShowEditButton] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Check if widget is in foreground (interactive, above icons)
   const isInForeground = widget.layer === 'foreground';
 
-  // Handle hover timer - show edit button after 3 seconds
+  // Show edit button immediately on hover (no delay)
   useEffect(() => {
     if (isHovering && !editMode) {
-      hoverTimerRef.current = setTimeout(() => {
-        setShowEditButton(true);
-      }, 3000);
+      setShowEditButton(true);
     } else if (!isHovering && !editMode) {
-      if (hoverTimerRef.current) {
-        clearTimeout(hoverTimerRef.current);
-        hoverTimerRef.current = null;
-      }
       setShowEditButton(false);
     }
-    return () => {
-      if (hoverTimerRef.current) {
-        clearTimeout(hoverTimerRef.current);
-      }
-    };
   }, [isHovering, editMode]);
 
-  // Handle F1 key to toggle edit mode when hovering
+  // Handle F4 key to toggle edit mode when hovering
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'F1' && isHovering) {
+      if (e.key === 'F4' && isHovering) {
         e.preventDefault();
         setEditMode(prev => !prev);
         setShowEditButton(true);
@@ -407,7 +395,7 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }:
             opacity: editMode ? 1 : 0.9,
             transform: editMode ? 'scale(1.05)' : 'scale(1)',
           }}
-          title={editMode ? 'Exit edit mode (F1)' : 'Edit mode - drag & resize (F1)'}
+          title={editMode ? 'Exit edit mode (F4)' : 'Edit mode - drag & resize (F4)'}
         >
           {editMode ? '✕' : '✎'}
         </button>

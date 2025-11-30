@@ -1,0 +1,827 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lizard.io</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        #score-board {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            pointer-events: none;
+        }
+        #start-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            pointer-events: auto;
+            z-index: 100;
+            backdrop-filter: blur(5px);
+        }
+        h1 {
+            font-size: 60px;
+            margin: 0 0 20px 0;
+            color: #32cd32;
+            text-shadow: 0 0 20px #32cd32;
+        }
+        p {
+            font-size: 18px;
+            color: #ccc;
+            margin-bottom: 30px;
+        }
+        button {
+            padding: 15px 40px;
+            font-size: 24px;
+            background: linear-gradient(45deg, #32cd32, #228b22);
+            border: none;
+            border-radius: 50px;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(50, 205, 50, 0.4);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(50, 205, 50, 0.6);
+        }
+        #minimap {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 150px;
+            height: 150px;
+            background: rgba(0,0,0,0.5);
+            border: 2px solid rgba(255,255,255,0.2);
+            border-radius: 50%;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui-layer">
+        <div id="score-board">Length: <span id="score-val">10</span></div>
+        <canvas id="minimap"></canvas>
+    </div>
+
+    <div id="start-screen">
+        <h1>LIZARD.IO</h1>
+        <p>Move with mouse • Hold click to sprint • Eat orbs to grow • Don't hit others!</p>
+        <button id="start-btn">PLAY</button>
+    </div>
+
+<script type="module">
+/**
+ * LIZARD.IO GLYPH
+ * A standalone canvas game with procedural animation and synthesized audio.
+ */
+
+const inputs = window.GLYPH_INPUTS || {};
+
+// Configuration
+const CONFIG = {
+    playerColor: inputs.lizardColor || '#32cd32',
+    enemyCount: parseInt(inputs.enemyCount) || 20,
+    mapSize: parseInt(inputs.mapSize) || 4000,
+    baseSpeed: parseInt(inputs.baseSpeed) || 5,
+    musicVol: (inputs.musicVol !== undefined ? inputs.musicVol : 30) / 100,
+    sfxVol: (inputs.sfxVol !== undefined ? inputs.sfxVol : 50) / 100,
+    boostCost: 0.5, // Length lost per tick while boosting
+    turnSpeed: 0.1,
+    startLength: 20,
+    segmentDist: 8, // Distance between body segments
+    foodCount: 400,
+    foodValue: 2
+};
+
+// Global State
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const minimapCanvas = document.getElementById('minimap');
+const minimapCtx = minimapCanvas.getContext('2d');
+const scoreEl = document.getElementById('score-val');
+const startScreen = document.getElementById('start-screen');
+const startBtn = document.getElementById('start-btn');
+
+let width, height;
+let animationId;
+let lastTime = 0;
+let camera = { x: 0, y: 0, zoom: 1 };
+let gameActive = false;
+let mouse = { x: 0, y: 0, down: false };
+
+// Entities
+let player;
+let enemies = [];
+let foods = [];
+let particles = [];
+
+// Audio Context
+let audioCtx;
+let musicNodes = [];
+
+// --- AUDIO ENGINE ---
+
+class AudioEngine {
+    constructor() {
+        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        this.masterGain = this.ctx.createGain();
+        this.masterGain.connect(this.ctx.destination);
+        this.musicGain = this.ctx.createGain();
+        this.musicGain.connect(this.masterGain);
+        this.sfxGain = this.ctx.createGain();
+        this.sfxGain.connect(this.masterGain);
+        
+        this.musicGain.gain.value = CONFIG.musicVol;
+        this.sfxGain.gain.value = CONFIG.sfxVol;
+    }
+
+    startMusic() {
+        if (musicNodes.length > 0) return; // Already playing
+
+        // Create an ambient drone
+        const frequencies = [110, 164.81, 196, 220, 329.63]; // Pentatonic A
+        
+        frequencies.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            const filter = this.ctx.createBiquadFilter();
+            
+            osc.type = i % 2 === 0 ? 'sine' : 'triangle';
+            osc.frequency.value = freq;
+            
+            // Random slow detune
+            const lfo = this.ctx.createOscillator();
+            lfo.frequency.value = 0.1 + Math.random() * 0.2;
+            lfo.connect(osc.frequency);
+            const lfoGain = this.ctx.createGain();
+            lfoGain.gain.value = 2; // Detune amount
+            lfo.connect(lfoGain);
+            lfoGain.connect(osc.frequency);
+            lfo.start();
+
+            filter.type = 'lowpass';
+            filter.frequency.value = 800;
+
+            gain.gain.value = 0.05; // Low volume per voice
+
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(this.musicGain);
+            
+            osc.start();
+            musicNodes.push({osc, gain, lfo, lfoGain});
+        });
+    }
+
+    playEatSound() {
+        if (CONFIG.sfxVol <= 0) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400 + Math.random() * 200, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(1200, this.ctx.currentTime + 0.1);
+        
+        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+        
+        osc.connect(gain);
+        gain.connect(this.sfxGain);
+        
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.15);
+    }
+
+    playDieSound() {
+        if (CONFIG.sfxVol <= 0) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(100, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(10, this.ctx.currentTime + 0.5);
+        
+        gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.5);
+        
+        osc.connect(gain);
+        gain.connect(this.sfxGain);
+        
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.6);
+    }
+    
+    stopMusic() {
+        musicNodes.forEach(n => {
+            try { n.osc.stop(); n.lfo.stop(); } catch(e){}
+            n.osc.disconnect();
+            n.gain.disconnect();
+        });
+        musicNodes = [];
+    }
+}
+
+let audio;
+
+// --- GAME CLASSES ---
+
+class Vector {
+    constructor(x, y) { this.x = x; this.y = y; }
+    add(v) { return new Vector(this.x + v.x, this.y + v.y); }
+    sub(v) { return new Vector(this.x - v.x, this.y - v.y); }
+    mult(n) { return new Vector(this.x * n, this.y * n); }
+    mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+    normalize() {
+        const m = this.mag();
+        return m === 0 ? new Vector(0, 0) : new Vector(this.x / m, this.y / m);
+    }
+}
+
+class Food {
+    constructor() {
+        this.pos = new Vector(
+            Math.random() * CONFIG.mapSize - CONFIG.mapSize/2,
+            Math.random() * CONFIG.mapSize - CONFIG.mapSize/2
+        );
+        this.color = `hsl(${Math.random() * 360}, 70%, 60%)`;
+        this.size = 5 + Math.random() * 5;
+        this.value = Math.ceil(this.size / 2);
+        this.pulse = Math.random() * Math.PI;
+    }
+    
+    draw(ctx, time) {
+        const scale = 1 + Math.sin(time * 5 + this.pulse) * 0.1;
+        ctx.fillStyle = this.color;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = this.color;
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.size * scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+}
+
+class Particle {
+    constructor(x, y, color) {
+        this.pos = new Vector(x, y);
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 2 + 1;
+        this.vel = new Vector(Math.cos(angle) * speed, Math.sin(angle) * speed);
+        this.life = 1.0;
+        this.color = color;
+    }
+    
+    update() {
+        this.pos = this.pos.add(this.vel);
+        this.life -= 0.05;
+    }
+    
+    draw(ctx) {
+        ctx.globalAlpha = this.life;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+class Lizard {
+    constructor(isPlayer, startPos) {
+        this.isPlayer = isPlayer;
+        this.pos = startPos || new Vector(0, 0);
+        this.angle = Math.random() * Math.PI * 2;
+        this.targetAngle = this.angle;
+        this.segments = [];
+        this.length = CONFIG.startLength;
+        this.width = 20;
+        this.speed = CONFIG.baseSpeed;
+        this.color = isPlayer ? CONFIG.playerColor : `hsl(${Math.random() * 360}, 60%, 50%)`;
+        this.dead = false;
+        this.boosting = false;
+        this.score = 0;
+        
+        // AI stuff
+        this.aiChangeDirTimer = 0;
+        
+        // Init segments
+        for (let i = 0; i < this.length; i++) {
+            this.segments.push(this.pos.sub(new Vector(Math.cos(this.angle)*i*CONFIG.segmentDist, Math.sin(this.angle)*i*CONFIG.segmentDist)));
+        }
+    }
+
+    update(dt) {
+        if (this.dead) return;
+
+        // Speed handling
+        let currentSpeed = this.speed;
+        if (this.isPlayer && mouse.down && this.length > 10) {
+            this.boosting = true;
+            currentSpeed *= 1.8;
+            this.length -= CONFIG.boostCost; // Lose length to boost
+            // Drop particles
+            if (Math.random() > 0.7) {
+                foods.push(this.dropFood());
+            }
+        } else if (!this.isPlayer && this.boosting && this.length > 10) {
+            currentSpeed *= 1.8;
+            this.length -= CONFIG.boostCost;
+        } else {
+            this.boosting = false;
+        }
+
+        // Trim segments if length decreased
+        if (this.segments.length > Math.floor(this.length)) {
+            this.segments.splice(Math.floor(this.length));
+        }
+
+        // Steering
+        if (this.isPlayer) {
+            // Mouse relative to center of screen (camera)
+            const dx = mouse.x - width/2;
+            const dy = mouse.y - height/2;
+            this.targetAngle = Math.atan2(dy, dx);
+        } else {
+            this.updateAI();
+        }
+
+        // Smooth turning
+        let diff = this.targetAngle - this.angle;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        this.angle += Math.sign(diff) * Math.min(Math.abs(diff), CONFIG.turnSpeed);
+
+        // Move head
+        const vel = new Vector(Math.cos(this.angle) * currentSpeed, Math.sin(this.angle) * currentSpeed);
+        this.pos = this.pos.add(vel);
+
+        // Boundary check
+        const limit = CONFIG.mapSize / 2;
+        if (this.pos.x < -limit || this.pos.x > limit || this.pos.y < -limit || this.pos.y > limit) {
+            this.die();
+        }
+
+        // Drag segments
+        if (this.segments.length > 0) {
+            // Head is effectively segment -1
+            let prevPos = this.pos;
+            
+            for (let i = 0; i < this.segments.length; i++) {
+                let seg = this.segments[i];
+                let dir = prevPos.sub(seg);
+                let dist = dir.mag();
+                
+                // Only move if stretched too far
+                if (dist > CONFIG.segmentDist) {
+                    let move = dir.normalize().mult(dist - CONFIG.segmentDist);
+                    this.segments[i] = seg.add(move);
+                }
+                prevPos = this.segments[i];
+            }
+        }
+        
+        // Add new segment if grown
+        while (this.segments.length < Math.floor(this.length)) {
+            const last = this.segments[this.segments.length - 1];
+            this.segments.push(last); // Will stretch out next frame
+        }
+
+        this.checkCollisions();
+    }
+
+    dropFood() {
+        const last = this.segments[this.segments.length - 1];
+        const f = new Food();
+        f.pos = last;
+        f.size = 6;
+        f.value = 1;
+        return f;
+    }
+
+    updateAI() {
+        this.aiChangeDirTimer--;
+        if (this.aiChangeDirTimer <= 0) {
+            // Random wander
+            this.targetAngle = Math.random() * Math.PI * 2;
+            this.aiChangeDirTimer = 50 + Math.random() * 100;
+            this.boosting = Math.random() > 0.9;
+        }
+
+        // Avoid boundaries
+        const limit = CONFIG.mapSize / 2 - 200;
+        if (this.pos.x < -limit) this.targetAngle = 0;
+        if (this.pos.x > limit) this.targetAngle = Math.PI;
+        if (this.pos.y < -limit) this.targetAngle = Math.PI/2;
+        if (this.pos.y > limit) this.targetAngle = -Math.PI/2;
+        
+        // Simple food seeking
+        let closestFood = null;
+        let minDist = 300;
+        for (let f of foods) {
+            const d = this.pos.sub(f.pos).mag();
+            if (d < minDist) {
+                minDist = d;
+                closestFood = f;
+            }
+        }
+        if (closestFood) {
+            const dir = closestFood.pos.sub(this.pos);
+            this.targetAngle = Math.atan2(dir.y, dir.x);
+        }
+    }
+
+    checkCollisions() {
+        // Eat food
+        for (let i = foods.length - 1; i >= 0; i--) {
+            const f = foods[i];
+            const dist = this.pos.sub(f.pos).mag();
+            if (dist < this.width + f.size) {
+                this.length += f.value * 0.2;
+                this.score += f.value;
+                foods.splice(i, 1);
+                if (this.isPlayer) {
+                    audio.playEatSound();
+                    scoreEl.innerText = Math.floor(this.length * 10);
+                }
+            }
+        }
+
+        // Hit other lizards
+        // We check if OUR head hits THEIR body
+        const allLizards = [player, ...enemies];
+        for (let other of allLizards) {
+            if (other === this || other.dead) continue;
+
+            // Check against other's segments
+            // Optimization: Only check if close enough bounding box
+            if (this.pos.sub(other.pos).mag() > (other.length * CONFIG.segmentDist + 100)) continue;
+
+            for (let seg of other.segments) {
+                const dist = this.pos.sub(seg).mag();
+                if (dist < this.width) {
+                    this.die();
+                    return;
+                }
+            }
+        }
+    }
+
+    die() {
+        if (this.dead) return;
+        this.dead = true;
+        
+        // Convert body to food
+        for (let i = 0; i < this.segments.length; i+=2) {
+            const f = new Food();
+            f.pos = this.segments[i];
+            f.size = 10;
+            f.value = 5;
+            f.color = this.color;
+            foods.push(f);
+        }
+
+        // Particle explosion
+        for (let i = 0; i < 20; i++) {
+            particles.push(new Particle(this.pos.x, this.pos.y, this.color));
+        }
+
+        if (this.isPlayer) {
+            audio.playDieSound();
+            setTimeout(() => {
+                alert("GAME OVER! Final Score: " + Math.floor(this.length * 10));
+                resetGame();
+            }, 100);
+        } else {
+            // Respawn enemy after delay
+            setTimeout(() => {
+                const newEnemy = new Lizard(false, new Vector(
+                    (Math.random() - 0.5) * CONFIG.mapSize,
+                    (Math.random() - 0.5) * CONFIG.mapSize
+                ));
+                // Replace the dead one in the array
+                const idx = enemies.indexOf(this);
+                if (idx !== -1) enemies[idx] = newEnemy;
+            }, 2000);
+        }
+    }
+
+    draw(ctx) {
+        if (this.dead) return;
+
+        ctx.fillStyle = this.color;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+
+        // Draw Legs
+        // Legs appear every N segments
+        const legInterval = 6;
+        for (let i = 4; i < this.segments.length - 2; i += legInterval) {
+            const seg = this.segments[i];
+            const nextSeg = this.segments[i-1] || this.pos;
+            // Calculate perpendicular angle
+            const dx = nextSeg.x - seg.x;
+            const dy = nextSeg.y - seg.y;
+            const angle = Math.atan2(dy, dx);
+            
+            // Animate legs
+            const walkCycle = Math.sin(Date.now() / 100 + i);
+            const legOffset = Math.PI / 3 + (walkCycle * 0.5);
+            
+            const legLen = this.width * 1.5;
+            
+            // Left Leg
+            const lx = seg.x + Math.cos(angle - legOffset) * legLen;
+            const ly = seg.y + Math.sin(angle - legOffset) * legLen;
+            
+            // Right Leg
+            const rx = seg.x + Math.cos(angle + legOffset) * legLen;
+            const ry = seg.y + Math.sin(angle + legOffset) * legLen;
+
+            ctx.beginPath();
+            ctx.moveTo(seg.x, seg.y);
+            ctx.lineTo(lx, ly);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(seg.x, seg.y);
+            ctx.lineTo(rx, ry);
+            ctx.stroke();
+            
+            // Claws
+            ctx.fillStyle = this.color;
+            ctx.beginPath(); ctx.arc(lx, ly, 4, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(rx, ry, 4, 0, Math.PI*2); ctx.fill();
+        }
+
+        // Draw Body
+        for (let i = this.segments.length - 1; i >= 0; i--) {
+            const seg = this.segments[i];
+            const size = this.width * (1 - (i / (this.segments.length + 10))); // Taper tail
+            
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(seg.x, seg.y, Math.max(size, 4), 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Draw Head
+        ctx.save();
+        ctx.translate(this.pos.x, this.pos.y);
+        ctx.rotate(this.angle);
+        
+        // Head shape
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.ellipse(5, 0, this.width, this.width * 0.8, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Eyes
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.arc(10, -8, 6, 0, Math.PI * 2);
+        ctx.arc(10, 8, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = 'black';
+        ctx.beginPath();
+        ctx.arc(12, -8, 2, 0, Math.PI * 2);
+        ctx.arc(12, 8, 2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.restore();
+        
+        // Name
+        if (!this.isPlayer) {
+            ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Lizard', this.pos.x, this.pos.y - 25);
+        }
+    }
+}
+
+// --- ENGINE FUNCTIONS ---
+
+function init() {
+    resize();
+    window.addEventListener('resize', resize);
+    window.addEventListener('mousemove', e => {
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+    });
+    window.addEventListener('mousedown', () => mouse.down = true);
+    window.addEventListener('mouseup', () => mouse.down = false);
+    
+    startBtn.addEventListener('click', startGame);
+    
+    // Spawn random background food
+    foods = [];
+    for(let i=0; i<CONFIG.foodCount; i++) {
+        foods.push(new Food());
+    }
+}
+
+function resetGame() {
+    gameActive = false;
+    startScreen.style.display = 'flex';
+    audio.stopMusic();
+}
+
+function startGame() {
+    audio = new AudioEngine();
+    audio.ctx.resume().then(() => {
+        audio.startMusic();
+    });
+
+    startScreen.style.display = 'none';
+    
+    player = new Lizard(true, new Vector(0, 0));
+    enemies = [];
+    
+    for(let i=0; i<CONFIG.enemyCount; i++) {
+        enemies.push(new Lizard(false, new Vector(
+            (Math.random() - 0.5) * CONFIG.mapSize,
+            (Math.random() - 0.5) * CONFIG.mapSize
+        )));
+    }
+    
+    gameActive = true;
+    scoreEl.innerText = Math.floor(player.length * 10);
+    
+    cancelAnimationFrame(animationId);
+    loop();
+}
+
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    
+    // UI
+    minimapCanvas.width = 150;
+    minimapCanvas.height = 150;
+}
+
+function drawGrid(ctx) {
+    const gridSize = 100;
+    const limit = CONFIG.mapSize/2;
+    
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    
+    // Vertical
+    const startX = Math.floor((camera.x - width/2) / gridSize) * gridSize;
+    const endX = Math.ceil((camera.x + width/2) / gridSize) * gridSize;
+    
+    for (let x = startX; x <= endX; x += gridSize) {
+        if (x < -limit || x > limit) continue;
+        ctx.moveTo(x, camera.y - height/2);
+        ctx.lineTo(x, camera.y + height/2);
+    }
+    
+    // Horizontal
+    const startY = Math.floor((camera.y - height/2) / gridSize) * gridSize;
+    const endY = Math.ceil((camera.y + height/2) / gridSize) * gridSize;
+    
+    for (let y = startY; y <= endY; y += gridSize) {
+        if (y < -limit || y > limit) continue;
+        ctx.moveTo(camera.x - width/2, y);
+        ctx.lineTo(camera.x + width/2, y);
+    }
+    ctx.stroke();
+
+    // Map Border
+    ctx.strokeStyle = '#f00';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(-limit, -limit, CONFIG.mapSize, CONFIG.mapSize);
+}
+
+function drawMinimap() {
+    const mCtx = minimapCtx;
+    mCtx.clearRect(0, 0, 150, 150);
+    
+    const scale = 150 / CONFIG.mapSize;
+    const offset = 75; // Center
+    
+    // Draw all lizards
+    [player, ...enemies].forEach(l => {
+        if (l.dead) return;
+        mCtx.fillStyle = l.isPlayer ? '#fff' : l.color;
+        const mx = l.pos.x * scale + offset;
+        const my = l.pos.y * scale + offset;
+        
+        if (mx >= 0 && mx <= 150 && my >= 0 && my <= 150) {
+            mCtx.beginPath();
+            mCtx.arc(mx, my, l.isPlayer ? 3 : 2, 0, Math.PI*2);
+            mCtx.fill();
+        }
+    });
+}
+
+function loop(time) {
+    const dt = (time - lastTime) / 1000;
+    lastTime = time;
+
+    if (!gameActive) return;
+
+    // Update
+    player.update(dt);
+    enemies.forEach(e => e.update(dt));
+    particles.forEach((p, i) => {
+        p.update();
+        if (p.life <= 0) particles.splice(i, 1);
+    });
+    
+    // Replenish food
+    if (foods.length < CONFIG.foodCount) {
+        if (Math.random() < 0.1) foods.push(new Food());
+    }
+
+    // Camera follow player
+    // Smooth lerp
+    camera.x += (player.pos.x - camera.x) * 0.1;
+    camera.y += (player.pos.y - camera.y) * 0.1;
+
+    // Draw
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.save();
+    // Center camera
+    ctx.translate(width/2 - camera.x, height/2 - camera.y);
+    
+    drawGrid(ctx);
+    
+    // Draw food
+    foods.forEach(f => {
+        // Optimization: cull offscreen
+        if (Math.abs(f.pos.x - camera.x) < width/2 + 50 && 
+            Math.abs(f.pos.y - camera.y) < height/2 + 50) {
+            f.draw(ctx, time/1000);
+        }
+    });
+
+    // Draw particles
+    particles.forEach(p => p.draw(ctx));
+
+    // Draw Lizards (Enemies first, then player on top)
+    enemies.forEach(e => {
+         if (Math.abs(e.pos.x - camera.x) < width/2 + 200 && 
+             Math.abs(e.pos.y - camera.y) < height/2 + 200) {
+            e.draw(ctx);
+         }
+    });
+    player.draw(ctx);
+
+    ctx.restore();
+    
+    drawMinimap();
+
+    animationId = requestAnimationFrame(loop);
+}
+
+// Start
+init();
+
+</script>
+</body>
+</html>
