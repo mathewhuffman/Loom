@@ -5,11 +5,10 @@ on:
     tags:
       - 'v*' # Trigger on version tags like v0.1.0, v1.0.0, etc.
   workflow_dispatch: # Allow manual trigger
-    inputs:
-      version:
-        description: 'Version to release (e.g., 0.1.0)'
-        required: false
-        type: string
+
+# IMPORTANT: This gives ALL jobs permission to create releases
+permissions:
+  contents: write
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -63,8 +62,6 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout code
