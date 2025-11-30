@@ -60,10 +60,6 @@ autoUpdater.setFeedURL({
   repo: 'Loom',
 });
 
-// Log the current version on startup
-log('[Updater] Current app version:', app.getVersion());
-log('[Updater] Is packaged:', app.isPackaged);
-
 function parseChangelog(): ChangelogEntry[] {
   try {
     // Try to read CHANGELOG.md from the app directory
