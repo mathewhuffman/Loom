@@ -572,6 +572,11 @@ interface LoomAPI {
     currentVersion: string;
   }>;
   dismissUpdate?: () => Promise<{ success: boolean }>;
+
+  // Auto-start on login
+  getAutoLaunchStatus?: () => Promise<{ success: boolean; enabled?: boolean; wasOpenedAtLogin?: boolean; error?: string }>;
+  setAutoLaunchStatus?: (enabled: boolean) => Promise<{ success: boolean; enabled?: boolean; wasOpenedAtLogin?: boolean; error?: string }>;
+
   onUpdaterState?: (callback: (state: {
     checking: boolean;
     available: boolean;

@@ -269,14 +269,20 @@ ipcMain.handle('updater:dismiss', async () => {
 // ════════════════════════════════════════════════════════════════════════════
 
 const isDev = !app.isPackaged;
-const publicPath = isDev 
-  ? path.join(__dirname, '..', 'public')
-  : path.join(__dirname, '..', 'dist');
+const publicPath = path.join(__dirname, '..', isDev ? 'public' : 'dist');
 
-// Ensure dynamic glyph folder exists
-const dynamicGlyphPath = path.join(publicPath, 'glyphs', 'dynamic');
+function resolveDynamicGlyphPath() {
+  if (isDev) {
+    return path.join(publicPath, 'glyphs', 'dynamic');
+  }
+  return path.join(app.getPath('userData'), 'glyphs', 'dynamic');
+}
+
+// Ensure dynamic glyph folder exists (must be writable in production)
+const dynamicGlyphPath = resolveDynamicGlyphPath();
 if (!fs.existsSync(dynamicGlyphPath)) {
   fs.mkdirSync(dynamicGlyphPath, { recursive: true });
+  console.log('[LOOM] 📁 Created dynamic glyph directory:', dynamicGlyphPath);
 }
 
 // Persistent user-facing glyph library (Documents/LOOM/Glyphs)
@@ -294,6 +300,51 @@ if (!fs.existsSync(glyphLibraryPath)) {
   fs.mkdirSync(glyphLibraryPath, { recursive: true });
   console.log('[LOOM] 📁 Created glyph library:', glyphLibraryPath);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🚀 AUTO-START ON LOGIN (AUTO-LAUNCH)
+// ════════════════════════════════════════════════════════════════════════════
+
+function getAutoLaunchState() {
+  const loginSettings = process.platform === 'win32'
+    ? app.getLoginItemSettings({ path: process.execPath })
+    : app.getLoginItemSettings();
+
+  return {
+    enabled: !!loginSettings.openAtLogin,
+    wasOpenedAtLogin: !!loginSettings.wasOpenedAtLogin,
+  };
+}
+
+ipcMain.handle('auto-launch:get-state', async () => {
+  try {
+    return { success: true, ...getAutoLaunchState() };
+  } catch (error) {
+    console.error('[AutoLaunch] Failed to read state:', error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('auto-launch:set-state', async (_event, enabled: boolean) => {
+  try {
+    const loginSettings: Electron.Settings = {
+      openAtLogin: !!enabled,
+      openAsHidden: true,
+    };
+
+    if (process.platform === 'win32') {
+      loginSettings.path = process.execPath;
+    }
+
+    app.setLoginItemSettings(loginSettings);
+    const state = getAutoLaunchState();
+    console.log(`[AutoLaunch] ${state.enabled ? 'Enabled' : 'Disabled'} (path: ${process.execPath})`);
+    return { success: true, ...state };
+  } catch (error) {
+    console.error('[AutoLaunch] Failed to update state:', error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
 
 // ════════════════════════════════════════════════════════════════════════════
 // 📦 BUNDLED GLYPHS — Pre-installed glyphs that ship with the app
@@ -540,6 +591,26 @@ function ensureDirectoryExists(dirPath: string) {
   }
 }
 
+function resolveGlyphFilePath(baseDir: string, relativePath: string): string {
+  if (!relativePath || typeof relativePath !== 'string') {
+    throw new Error('Invalid glyph file path');
+  }
+
+  const normalizedBase = path.resolve(baseDir);
+  const sanitizedRelative = relativePath.replace(/^[\\/]+/, '');
+  const normalizedRelative = path.normalize(sanitizedRelative);
+  const resolvedPath = path.resolve(normalizedBase, normalizedRelative);
+
+  const baseLower = normalizedBase.toLowerCase();
+  const resolvedLower = resolvedPath.toLowerCase();
+  if (!resolvedLower.startsWith(baseLower)) {
+    throw new Error(`Invalid glyph file path (path traversal): ${relativePath}`);
+  }
+
+  ensureDirectoryExists(path.dirname(resolvedPath));
+  return resolvedPath;
+}
+
 function slugifyGlyphName(name: string): string {
   return name
     .toLowerCase()
@@ -555,7 +626,7 @@ function createGlyphId(manifest: GlyphManifest): string {
 
 // IPC: Save dynamic glyph to file system
 ipcMain.handle('save-dynamic-glyph', async (event, fileName: string, code: string) => {
-  const filePath = path.join(dynamicGlyphPath, fileName);
+  const filePath = resolveGlyphFilePath(dynamicGlyphPath, fileName);
   console.log('[LOOM] 📝 Saving dynamic glyph:', filePath);
   fs.writeFileSync(filePath, code);
   return { success: true, path: filePath };
@@ -2224,10 +2295,15 @@ function processStreamingChunk(
             
             // Write file to disk immediately
             if (state.glyphDir) {
-              const filePath = path.join(state.glyphDir, state.currentFileName);
-              fs.writeFileSync(filePath, fileContent, 'utf-8');
-              log(`📝 [Streaming] Wrote ${state.currentFileName} (${fileContent.length} chars)`);
-              result.fileWritten = state.currentFileName;
+              try {
+                const filePath = resolveGlyphFilePath(state.glyphDir, state.currentFileName);
+                fs.writeFileSync(filePath, fileContent, 'utf-8');
+                log(`📝 [Streaming] Wrote ${state.currentFileName} (${fileContent.length} chars)`);
+                result.fileWritten = state.currentFileName;
+              } catch (err) {
+                log(`❌ [Streaming] Failed to write ${state.currentFileName}:`, err);
+                throw err;
+              }
             }
             
             // If it's an HTML file, send it for preview
@@ -2293,7 +2369,7 @@ function finalizeStreamingGlyph(
   }
   
   fs.writeFileSync(
-    path.join(state.glyphDir, 'manifest.json'),
+    resolveGlyphFilePath(state.glyphDir, 'manifest.json'),
     JSON.stringify(metadata, null, 2)
   );
   log(`📋 [Streaming] Wrote manifest.json`);
@@ -2325,7 +2401,7 @@ function finalizeStreamingGlyph(
     });
   }
   fs.writeFileSync(
-    path.join(state.glyphDir, 'chat.json'),
+    resolveGlyphFilePath(state.glyphDir, 'chat.json'),
     JSON.stringify(chatHistory, null, 2)
   );
   
@@ -2337,14 +2413,15 @@ function finalizeStreamingGlyph(
     
     // Copy all files
     for (const [fileName, content] of Object.entries(state.files)) {
-      fs.writeFileSync(path.join(libraryDir, fileName), content, 'utf-8');
+      const filePath = resolveGlyphFilePath(libraryDir, fileName);
+      fs.writeFileSync(filePath, content, 'utf-8');
     }
     fs.writeFileSync(
-      path.join(libraryDir, 'manifest.json'),
+      resolveGlyphFilePath(libraryDir, 'manifest.json'),
       JSON.stringify(metadata, null, 2)
     );
     fs.writeFileSync(
-      path.join(libraryDir, 'chat.json'),
+      resolveGlyphFilePath(libraryDir, 'chat.json'),
       JSON.stringify(chatHistory, null, 2)
     );
     locations.push(libraryDir);
@@ -2478,14 +2555,13 @@ async function writeGlyphBundle(
     log(`📂 [Bundle] Writing ${glyphId} → ${glyphDir}`);
     
     for (const [filename, content] of Object.entries(manifest.files)) {
-      const filePath = path.join(glyphDir, filename);
-      ensureDirectoryExists(path.dirname(filePath));
+      const filePath = resolveGlyphFilePath(glyphDir, filename);
       fs.writeFileSync(filePath, content, 'utf-8');
       log(`📝 Wrote ${filename} (${content.length} chars) → ${glyphDir}`);
     }
     
     fs.writeFileSync(
-      path.join(glyphDir, 'manifest.json'),
+      resolveGlyphFilePath(glyphDir, 'manifest.json'),
       JSON.stringify(metadata, null, 2)
     );
     
@@ -2517,7 +2593,7 @@ async function writeGlyphBundle(
         });
       }
       fs.writeFileSync(
-        path.join(glyphDir, 'chat.json'),
+        resolveGlyphFilePath(glyphDir, 'chat.json'),
         JSON.stringify(chatHistory, null, 2)
       );
       log(`💬 Saved chat history with ${chatHistory.length} messages`);
@@ -4209,9 +4285,13 @@ ipcMain.handle('read-glyph-file', async (event, glyphId: string, fileName: strin
   const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
   
   for (const basePath of searchPaths) {
-    const filePath = path.join(basePath, glyphId, fileName);
-    if (fs.existsSync(filePath)) {
-      return fs.readFileSync(filePath, 'utf-8');
+    try {
+      const safePath = resolveGlyphFilePath(path.join(basePath, glyphId), fileName);
+      if (fs.existsSync(safePath)) {
+        return fs.readFileSync(safePath, 'utf-8');
+      }
+    } catch (err) {
+      log(`⚠️ Invalid glyph file read request: ${glyphId}/${fileName}`, err);
     }
   }
   
@@ -4225,7 +4305,7 @@ ipcMain.handle('save-glyph-file', async (event, glyphId: string, fileName: strin
   for (const basePath of searchPaths) {
     const glyphDir = path.join(basePath, glyphId);
     if (fs.existsSync(glyphDir)) {
-      const filePath = path.join(glyphDir, fileName);
+      const filePath = resolveGlyphFilePath(glyphDir, fileName);
       fs.writeFileSync(filePath, content, 'utf-8');
       log(`💾 Saved ${fileName} to ${glyphId}`);
       

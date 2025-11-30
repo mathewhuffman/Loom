@@ -1407,7 +1407,7 @@ export default function OverlayUI() {
             alignItems: 'center',
             justifyContent: 'center',
             background: 'rgba(0, 0, 0, 0.7)',
-            backdropFilter: 'blur(8px)',
+            backdropFilter: 'none',
             animation: 'fadeIn 0.3s ease',
           }}
           onClick={(e) => {

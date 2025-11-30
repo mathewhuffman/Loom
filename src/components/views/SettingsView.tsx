@@ -72,11 +72,46 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const [updateProgress, setUpdateProgress] = useState(0);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [currentVersion, setCurrentVersion] = useState('0.0.0');
+  const [autoLaunchEnabled, setAutoLaunchEnabled] = useState<boolean | null>(null);
+  const [autoLaunchLoading, setAutoLaunchLoading] = useState(false);
+  const [autoLaunchError, setAutoLaunchError] = useState<string | null>(null);
 
   // Entrance animation
   useEffect(() => {
     const timer = setTimeout(() => setIsVisible(true), 50);
     return () => clearTimeout(timer);
+  }, []);
+
+  // Load auto-start preference on mount
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadAutoLaunch = async () => {
+      try {
+        const result = await (window as any).loom?.getAutoLaunchStatus?.();
+        if (!isMounted) return;
+
+        if (result?.success && typeof result.enabled === 'boolean') {
+          setAutoLaunchEnabled(result.enabled);
+        } else if (typeof result?.enabled === 'boolean') {
+          setAutoLaunchEnabled(result.enabled);
+          if (result?.error) setAutoLaunchError(result.error);
+        } else {
+          setAutoLaunchEnabled(false);
+          if (result?.error) setAutoLaunchError(result.error);
+        }
+      } catch (err: any) {
+        if (!isMounted) return;
+        setAutoLaunchEnabled(false);
+        setAutoLaunchError(err?.message || 'Unable to load auto-start preference');
+      }
+    };
+
+    loadAutoLaunch();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Load stored keys and LLM API keys on mount
@@ -166,6 +201,27 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
       setUpdateError(err.message || 'Failed to install update');
     }
   }, []);
+
+  const handleToggleAutoLaunch = useCallback(async () => {
+    if (autoLaunchEnabled === null || autoLaunchLoading) return;
+    setAutoLaunchLoading(true);
+    setAutoLaunchError(null);
+    try {
+      const result = await (window as any).loom?.setAutoLaunchStatus?.(!autoLaunchEnabled);
+      if (result?.success && typeof result.enabled === 'boolean') {
+        setAutoLaunchEnabled(result.enabled);
+      } else {
+        if (typeof result?.enabled === 'boolean') {
+          setAutoLaunchEnabled(result.enabled);
+        }
+        setAutoLaunchError(result?.error || 'Unable to update auto-start');
+      }
+    } catch (err: any) {
+      setAutoLaunchError(err?.message || 'Unable to update auto-start');
+    } finally {
+      setAutoLaunchLoading(false);
+    }
+  }, [autoLaunchEnabled, autoLaunchLoading]);
 
   const loadStoredKeys = useCallback(async () => {
     try {
@@ -846,8 +902,27 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                 <div style={styles.settingInfo}>
                   <span style={styles.settingLabel}>Auto-start on login</span>
                   <span style={styles.settingDescription}>Launch Loom automatically when Windows starts</span>
+                  {autoLaunchError && (
+                    <span style={styles.settingError}>{autoLaunchError}</span>
+                  )}
                 </div>
-                <button style={styles.toggleOff}>Off</button>
+                <button
+                  style={{
+                    ...(autoLaunchEnabled ? styles.toggleOn : styles.toggleOff),
+                    opacity: autoLaunchLoading || autoLaunchEnabled === null ? 0.5 : 1,
+                    cursor: autoLaunchLoading || autoLaunchEnabled === null ? 'not-allowed' : 'pointer',
+                  }}
+                  onClick={handleToggleAutoLaunch}
+                  disabled={autoLaunchLoading || autoLaunchEnabled === null}
+                >
+                  {autoLaunchLoading
+                    ? 'Saving...'
+                    : autoLaunchEnabled === null
+                      ? 'Loading...'
+                      : autoLaunchEnabled
+                        ? 'On'
+                        : 'Off'}
+                </button>
               </div>
 
               <div style={styles.settingRow}>
@@ -1627,6 +1702,11 @@ const styles: Record<string, React.CSSProperties> = {
   settingDescription: {
     fontSize: '12px',
     color: 'rgba(255, 255, 255, 0.4)',
+  },
+  settingError: {
+    fontSize: '11px',
+    color: '#ff6666',
+    marginTop: '4px',
   },
   toggleOn: {
     padding: '8px 16px',

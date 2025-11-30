@@ -691,6 +691,13 @@ contextBridge.exposeInMainWorld('loom', {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🚀 AUTO-START ON LOGIN
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  getAutoLaunchStatus: () => ipcRenderer.invoke('auto-launch:get-state'),
+  setAutoLaunchStatus: (enabled: boolean) => ipcRenderer.invoke('auto-launch:set-state', enabled),
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 🖥️ MULTI-MONITOR MANAGEMENT — Set backgrounds per monitor
   // ═══════════════════════════════════════════════════════════════════════════
   
