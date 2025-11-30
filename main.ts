@@ -311,6 +311,22 @@ console.log('[LOOM]    glyphLibraryPath:', glyphLibraryPath);
 console.log('[LOOM]    distGlyphsPath:', distGlyphsPath);
 console.log('[LOOM]    isDev:', isDev);
 
+// Log what's in the dist glyphs folder (for debugging production issues)
+if (!isDev && fs.existsSync(distGlyphsPath)) {
+  try {
+    const distGlyphsList = fs.readdirSync(distGlyphsPath);
+    console.log(`[LOOM] 📁 Dist glyphs available for migration: ${distGlyphsList.length} items`);
+    distGlyphsList.slice(0, 5).forEach(g => console.log(`[LOOM]    - ${g}`));
+    if (distGlyphsList.length > 5) {
+      console.log(`[LOOM]    ... and ${distGlyphsList.length - 5} more`);
+    }
+  } catch (err) {
+    console.log('[LOOM] ⚠️ Could not list dist glyphs:', err);
+  }
+} else if (!isDev) {
+  console.log('[LOOM] ⚠️ Dist glyphs path does not exist:', distGlyphsPath);
+}
+
 // Migration: Copy glyphs from dist to userData on first run (production only)
 // This ensures glyphs bundled with the app are available and editable
 function migrateDistGlyphsToUserData() {
@@ -327,11 +343,13 @@ function migrateDistGlyphsToUserData() {
       .filter(d => d.isDirectory());
     
     let migratedCount = 0;
+    let filesAddedCount = 0;
+    
     for (const glyphDir of distGlyphs) {
       const sourceDir = path.join(distGlyphsPath, glyphDir.name);
       const targetDir = path.join(dynamicGlyphPath, glyphDir.name);
       
-      // Only migrate if not already in user's folder
+      // If folder doesn't exist, copy everything
       if (!fs.existsSync(targetDir)) {
         try {
           fs.cpSync(sourceDir, targetDir, { recursive: true });
@@ -340,11 +358,30 @@ function migrateDistGlyphsToUserData() {
         } catch (err) {
           console.warn(`[LOOM] ⚠️ Failed to migrate glyph ${glyphDir.name}:`, err);
         }
+      } else {
+        // Folder exists - check for missing files (like index.html)
+        // This handles the case where manifest was saved but entry file is missing
+        try {
+          const sourceFiles = fs.readdirSync(sourceDir);
+          for (const file of sourceFiles) {
+            const sourceFile = path.join(sourceDir, file);
+            const targetFile = path.join(targetDir, file);
+            
+            // Only copy if target file doesn't exist
+            if (!fs.existsSync(targetFile) && fs.statSync(sourceFile).isFile()) {
+              fs.copyFileSync(sourceFile, targetFile);
+              filesAddedCount++;
+              console.log(`[LOOM] 📄 Added missing file: ${glyphDir.name}/${file}`);
+            }
+          }
+        } catch (err) {
+          console.warn(`[LOOM] ⚠️ Failed to check missing files for ${glyphDir.name}:`, err);
+        }
       }
     }
     
-    if (migratedCount > 0) {
-      console.log(`[LOOM] ✅ Migrated ${migratedCount} glyphs from dist to userData`);
+    if (migratedCount > 0 || filesAddedCount > 0) {
+      console.log(`[LOOM] ✅ Migration complete: ${migratedCount} glyphs migrated, ${filesAddedCount} missing files added`);
     }
   } catch (err) {
     console.warn('[LOOM] ⚠️ Failed to migrate dist glyphs:', err);
