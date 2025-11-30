@@ -65,6 +65,13 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   
   const inputRef = useRef<HTMLInputElement>(null);
   const llmInputRef = useRef<HTMLInputElement>(null);
+  
+  // Update checking state
+  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error'>('idle');
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = useState('0.0.0');
 
   // Entrance animation
   useEffect(() => {
@@ -76,6 +83,88 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   useEffect(() => {
     loadStoredKeys();
     loadLlmApiKeys();
+  }, []);
+
+  // Load update state on mount
+  useEffect(() => {
+    const loadUpdateState = async () => {
+      try {
+        const state = await (window as any).loom?.getUpdaterState?.();
+        if (state) {
+          setCurrentVersion(state.currentVersion || '0.0.0');
+          if (state.available) setUpdateStatus('available');
+          if (state.downloading) setUpdateStatus('downloading');
+          if (state.downloaded) setUpdateStatus('downloaded');
+          if (state.updateInfo?.version) setUpdateVersion(state.updateInfo.version);
+          if (state.progress) setUpdateProgress(state.progress);
+          if (state.error) {
+            setUpdateStatus('error');
+            setUpdateError(state.error);
+          }
+        }
+      } catch (err) {
+        console.error('[Settings] Failed to load update state:', err);
+      }
+    };
+    
+    loadUpdateState();
+    
+    // Subscribe to update state changes
+    const unsubscribe = (window as any).loom?.onUpdaterState?.((state: any) => {
+      setCurrentVersion(state.currentVersion || '0.0.0');
+      if (state.checking) setUpdateStatus('checking');
+      else if (state.downloading) {
+        setUpdateStatus('downloading');
+        setUpdateProgress(state.progress || 0);
+      }
+      else if (state.downloaded) setUpdateStatus('downloaded');
+      else if (state.available) setUpdateStatus('available');
+      else if (state.error) {
+        setUpdateStatus('error');
+        setUpdateError(state.error);
+      }
+      else setUpdateStatus('idle');
+      
+      if (state.updateInfo?.version) setUpdateVersion(state.updateInfo.version);
+    });
+    
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
+  const handleCheckForUpdates = useCallback(async () => {
+    setUpdateStatus('checking');
+    setUpdateError(null);
+    try {
+      const result = await (window as any).loom?.checkForUpdates?.();
+      if (!result?.success && result?.error) {
+        setUpdateStatus('error');
+        setUpdateError(result.error);
+      }
+    } catch (err: any) {
+      setUpdateStatus('error');
+      setUpdateError(err.message || 'Failed to check for updates');
+    }
+  }, []);
+
+  const handleDownloadUpdate = useCallback(async () => {
+    setUpdateStatus('downloading');
+    try {
+      await (window as any).loom?.downloadUpdate?.();
+    } catch (err: any) {
+      setUpdateStatus('error');
+      setUpdateError(err.message || 'Failed to download update');
+    }
+  }, []);
+
+  const handleInstallUpdate = useCallback(async () => {
+    try {
+      await (window as any).loom?.installUpdate?.();
+    } catch (err: any) {
+      setUpdateStatus('error');
+      setUpdateError(err.message || 'Failed to install update');
+    }
   }, []);
 
   const loadStoredKeys = useCallback(async () => {
@@ -851,12 +940,72 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
               <span style={styles.aboutLogoText}>L O O M</span>
             </div>
             <p style={styles.aboutTagline}>Manifest Digital Reality</p>
-            <p style={styles.aboutVersion}>Version 0.1.0</p>
+            <p style={styles.aboutVersion}>Version {currentVersion}</p>
+            
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* UPDATE SECTION */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            <div style={styles.updateSection}>
+              {updateStatus === 'idle' && (
+                <button style={styles.updateButton} onClick={handleCheckForUpdates}>
+                  🔄 Check for Updates
+                </button>
+              )}
+              
+              {updateStatus === 'checking' && (
+                <div style={styles.updateStatus}>
+                  <span style={styles.updateSpinner}>⟳</span>
+                  <span>Checking for updates...</span>
+                </div>
+              )}
+              
+              {updateStatus === 'available' && (
+                <div style={styles.updateAvailable}>
+                  <div style={styles.updateAvailableText}>
+                    <span style={styles.updateIcon}>🆕</span>
+                    <span>Update available: v{updateVersion}</span>
+                  </div>
+                  <button style={styles.downloadButton} onClick={handleDownloadUpdate}>
+                    ⬇️ Download Update
+                  </button>
+                </div>
+              )}
+              
+              {updateStatus === 'downloading' && (
+                <div style={styles.updateDownloading}>
+                  <span>Downloading... {Math.round(updateProgress)}%</span>
+                  <div style={styles.progressTrack}>
+                    <div style={{...styles.progressBar, width: `${updateProgress}%`}} />
+                  </div>
+                </div>
+              )}
+              
+              {updateStatus === 'downloaded' && (
+                <div style={styles.updateReady}>
+                  <div style={styles.updateReadyText}>
+                    <span style={styles.updateIcon}>✅</span>
+                    <span>Update ready to install!</span>
+                  </div>
+                  <button style={styles.installButton} onClick={handleInstallUpdate}>
+                    🚀 Install & Restart
+                  </button>
+                </div>
+              )}
+              
+              {updateStatus === 'error' && (
+                <div style={styles.updateError}>
+                  <span style={styles.errorIcon}>⚠️</span>
+                  <span>{updateError || 'Update check failed'}</span>
+                  <button style={styles.retryButton} onClick={handleCheckForUpdates}>
+                    Retry
+                  </button>
+                </div>
+              )}
+            </div>
             
             <div style={styles.aboutLinks}>
-              <a href="#" style={styles.aboutLink}>📖 Documentation</a>
-              <a href="#" style={styles.aboutLink}>🐙 GitHub</a>
-              <a href="#" style={styles.aboutLink}>💬 Discord</a>
+              <a href="https://github.com/mathewhuffman/Loom" target="_blank" rel="noopener noreferrer" style={styles.aboutLink}>🐙 GitHub</a>
+              <a href="https://github.com/mathewhuffman/Loom/releases" target="_blank" rel="noopener noreferrer" style={styles.aboutLink}>📦 Releases</a>
             </div>
 
             <div style={styles.aboutCredits}>
@@ -898,6 +1047,11 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
           50% {
             box-shadow: 0 0 30px rgba(0, 255, 255, 0.4);
           }
+        }
+        
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
         }
       `}</style>
     </div>
@@ -1626,6 +1780,154 @@ const styles: Record<string, React.CSSProperties> = {
   aboutCopyright: {
     marginTop: '8px',
     color: 'rgba(255, 255, 255, 0.3)',
+  },
+
+  // Update Section
+  updateSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '12px',
+    padding: '20px',
+    background: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: '12px',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    marginTop: '8px',
+    marginBottom: '8px',
+    minWidth: '280px',
+  },
+  updateButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '12px 24px',
+    background: 'rgba(0, 255, 255, 0.1)',
+    border: '1px solid rgba(0, 255, 255, 0.4)',
+    borderRadius: '10px',
+    color: '#00ffff',
+    fontSize: '14px',
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+  updateStatus: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: '14px',
+  },
+  updateSpinner: {
+    display: 'inline-block',
+    animation: 'spin 1s linear infinite',
+    fontSize: '18px',
+  },
+  updateAvailable: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  updateAvailableText: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    color: '#00ff88',
+    fontSize: '14px',
+    fontWeight: 600,
+  },
+  updateIcon: {
+    fontSize: '18px',
+  },
+  downloadButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '10px 20px',
+    background: 'linear-gradient(135deg, rgba(0, 255, 136, 0.2) 0%, rgba(0, 200, 136, 0.2) 100%)',
+    border: '1px solid rgba(0, 255, 136, 0.5)',
+    borderRadius: '8px',
+    color: '#00ff88',
+    fontSize: '13px',
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+  updateDownloading: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '10px',
+    width: '100%',
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: '13px',
+  },
+  progressTrack: {
+    width: '100%',
+    height: '6px',
+    background: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: '3px',
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    background: 'linear-gradient(90deg, #00ffff, #ff00ff)',
+    borderRadius: '3px',
+    transition: 'width 0.3s ease',
+  },
+  updateReady: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  updateReadyText: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    color: '#00ff88',
+    fontSize: '14px',
+    fontWeight: 600,
+  },
+  installButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '12px 24px',
+    background: 'linear-gradient(135deg, rgba(255, 0, 255, 0.2) 0%, rgba(200, 0, 255, 0.2) 100%)',
+    border: '1px solid rgba(255, 0, 255, 0.5)',
+    borderRadius: '10px',
+    color: '#ff00ff',
+    fontSize: '14px',
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    animation: 'pulseGlow 2s ease-in-out infinite',
+  },
+  updateError: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '10px',
+    color: '#ff6666',
+    fontSize: '13px',
+  },
+  errorIcon: {
+    fontSize: '20px',
+  },
+  retryButton: {
+    padding: '8px 16px',
+    background: 'rgba(255, 255, 255, 0.05)',
+    border: '1px solid rgba(255, 255, 255, 0.2)',
+    borderRadius: '6px',
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: '12px',
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
   },
 };
 

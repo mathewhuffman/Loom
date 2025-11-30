@@ -51,6 +51,18 @@ let updateState: UpdateState = {
 // Configure auto-updater
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.allowDowngrade = false;
+
+// Set the feed URL explicitly for GitHub releases
+autoUpdater.setFeedURL({
+  provider: 'github',
+  owner: 'mathewhuffman',
+  repo: 'Loom',
+});
+
+// Log the current version on startup
+log('[Updater] Current app version:', app.getVersion());
+log('[Updater] Is packaged:', app.isPackaged);
 
 function parseChangelog(): ChangelogEntry[] {
   try {
