@@ -4310,7 +4310,8 @@ ipcMain.handle('save-glyph-file', async (event, glyphId: string, fileName: strin
       log(`💾 Saved ${fileName} to ${glyphId}`);
       
       // Broadcast glyph update to all windows so widgets can refresh
-      broadcastGlyphUpdate(glyphId, fileName);
+      // IMPORTANT: await the broadcast to ensure it completes before returning
+      await broadcastGlyphUpdate(glyphId, fileName);
       
       return { success: true };
     }
@@ -4323,100 +4324,116 @@ ipcMain.handle('save-glyph-file', async (event, glyphId: string, fileName: strin
 async function broadcastGlyphUpdate(glyphId: string, changedFile: string) {
   log(`📢 Broadcasting glyph update: ${glyphId} (${changedFile})`);
   
-  // Find and load the updated glyph data
-  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
-  
-  for (const basePath of searchPaths) {
-    const glyphDir = path.join(basePath, glyphId);
-    const manifestPath = path.join(glyphDir, 'manifest.json');
+  try {
+    // Find and load the updated glyph data
+    const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
     
-    if (fs.existsSync(manifestPath)) {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      const entryFile = manifest.entry
-        || (fs.existsSync(path.join(glyphDir, 'index.html')) ? 'index.html' : 'index.tsx');
-      const entryPath = path.join(glyphDir, entryFile);
+    for (const basePath of searchPaths) {
+      const glyphDir = path.join(basePath, glyphId);
+      const manifestPath = path.join(glyphDir, 'manifest.json');
       
-      if (!fs.existsSync(entryPath)) {
-        log(`❌ Entry file missing for glyph ${glyphId}: ${entryFile}`);
+      log(`🔍 Checking for manifest at: ${manifestPath}`);
+      
+      if (fs.existsSync(manifestPath)) {
+        log(`✅ Found manifest at: ${manifestPath}`);
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const entryFile = manifest.entry
+          || (fs.existsSync(path.join(glyphDir, 'index.html')) ? 'index.html' : 'index.tsx');
+        const entryPath = path.join(glyphDir, entryFile);
+        
+        if (!fs.existsSync(entryPath)) {
+          log(`❌ Entry file missing for glyph ${glyphId}: ${entryFile}`);
+          return;
+        }
+        
+        const code = fs.readFileSync(entryPath, 'utf-8');
+        log(`📄 Read code from ${entryFile}: ${code.length} chars`);
+        
+        // Resolve inputs for the update
+        const inputs: Record<string, unknown> = {};
+        
+        if (manifest.inputs && Array.isArray(manifest.inputs)) {
+          for (const input of manifest.inputs) {
+            if (input.value !== undefined) {
+              inputs[input.id] = input.value;
+            } else if (input.defaultValue !== undefined) {
+              inputs[input.id] = input.defaultValue;
+            }
+          }
+        }
+        
+        // Resolve linked keys
+        if (manifest.linkedKeys && Array.isArray(manifest.linkedKeys)) {
+          const apiKeyInputs = (manifest.inputs || []).filter((i: any) => i.type === 'apiKey');
+          
+          for (const keyId of manifest.linkedKeys) {
+            try {
+              const keyData = getSecureKeyValue(keyId);
+              if (keyData) {
+                const keyNameLower = keyData.name.toLowerCase().replace(/\s+/g, '');
+                
+                let matchedInputId: string | null = null;
+                for (const apiInput of apiKeyInputs) {
+                  const inputIdLower = apiInput.id.toLowerCase();
+                  const inputLabelLower = (apiInput.label || '').toLowerCase().replace(/\s+/g, '');
+                  const inputService = (apiInput.service || '').toLowerCase();
+                  
+                  if (inputIdLower.includes(keyNameLower) || 
+                      keyNameLower.includes(inputIdLower) ||
+                      keyNameLower.includes(inputService) ||
+                      (inputService && keyNameLower.includes(inputService)) ||
+                      inputLabelLower.includes(keyNameLower) ||
+                      keyNameLower.includes(inputLabelLower)) {
+                    matchedInputId = apiInput.id;
+                    break;
+                  }
+                }
+                
+                const inputKey = matchedInputId || keyNameLower;
+                inputs[inputKey] = keyData.value;
+              }
+            } catch (err) {
+              log(`⚠️ Failed to resolve key ${keyId} for update:`, err);
+            }
+          }
+        }
+        
+        const updateData = {
+          glyphId,
+          code,
+          inputs,
+          changedFile,
+          manifest: {
+            name: manifest.name,
+            prompt: manifest.prompt,
+          },
+        };
+        
+        log(`📤 Broadcasting update data for ${glyphId}: code=${code.length}chars, inputs=${Object.keys(inputs).length}, changedFile=${changedFile}`);
+        
+        // Send to overlay (widgets in foreground)
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+          overlayWindow.webContents.send('glyph-updated', updateData);
+          log(`📤 Sent glyph-updated to overlay`);
+        } else {
+          log(`⚠️ Overlay window not available for glyph-updated`);
+        }
+        
+        // Send to background (widgets in background layer)
+        if (backgroundWindow && !backgroundWindow.isDestroyed()) {
+          backgroundWindow.webContents.send('glyph-updated', updateData);
+          log(`📤 Sent glyph-updated to background`);
+        } else {
+          log(`⚠️ Background window not available for glyph-updated`);
+        }
+        
         return;
       }
-      
-      const code = fs.readFileSync(entryPath, 'utf-8');
-      
-      // Resolve inputs for the update
-      const inputs: Record<string, unknown> = {};
-      
-      if (manifest.inputs && Array.isArray(manifest.inputs)) {
-        for (const input of manifest.inputs) {
-          if (input.value !== undefined) {
-            inputs[input.id] = input.value;
-          } else if (input.defaultValue !== undefined) {
-            inputs[input.id] = input.defaultValue;
-          }
-        }
-      }
-      
-      // Resolve linked keys
-      if (manifest.linkedKeys && Array.isArray(manifest.linkedKeys)) {
-        const apiKeyInputs = (manifest.inputs || []).filter((i: any) => i.type === 'apiKey');
-        
-        for (const keyId of manifest.linkedKeys) {
-          try {
-            const keyData = getSecureKeyValue(keyId);
-            if (keyData) {
-              const keyNameLower = keyData.name.toLowerCase().replace(/\s+/g, '');
-              
-              let matchedInputId: string | null = null;
-              for (const apiInput of apiKeyInputs) {
-                const inputIdLower = apiInput.id.toLowerCase();
-                const inputLabelLower = (apiInput.label || '').toLowerCase().replace(/\s+/g, '');
-                const inputService = (apiInput.service || '').toLowerCase();
-                
-                if (inputIdLower.includes(keyNameLower) || 
-                    keyNameLower.includes(inputIdLower) ||
-                    keyNameLower.includes(inputService) ||
-                    (inputService && keyNameLower.includes(inputService)) ||
-                    inputLabelLower.includes(keyNameLower) ||
-                    keyNameLower.includes(inputLabelLower)) {
-                  matchedInputId = apiInput.id;
-                  break;
-                }
-              }
-              
-              const inputKey = matchedInputId || keyNameLower;
-              inputs[inputKey] = keyData.value;
-            }
-          } catch (err) {
-            log(`⚠️ Failed to resolve key ${keyId} for update:`, err);
-          }
-        }
-      }
-      
-      const updateData = {
-        glyphId,
-        code,
-        inputs,
-        changedFile,
-        manifest: {
-          name: manifest.name,
-          prompt: manifest.prompt,
-        },
-      };
-      
-      // Send to overlay (widgets in foreground)
-      if (overlayWindow && !overlayWindow.isDestroyed()) {
-        overlayWindow.webContents.send('glyph-updated', updateData);
-        log(`📤 Sent glyph-updated to overlay`);
-      }
-      
-      // Send to background (widgets in background layer)
-      if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-        backgroundWindow.webContents.send('glyph-updated', updateData);
-        log(`📤 Sent glyph-updated to background`);
-      }
-      
-      return;
     }
+    
+    log(`❌ Glyph not found in any search path: ${glyphId}`);
+  } catch (err) {
+    log(`❌ Error broadcasting glyph update:`, err);
   }
 }
 
