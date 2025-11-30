@@ -17,6 +17,7 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -37,14 +38,11 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: 'loom/package-lock.json'
 
       - name: Install dependencies
-        working-directory: loom
         run: npm ci
 
       - name: Build application
-        working-directory: loom
         run: npm run build:${{ matrix.platform }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -54,11 +52,12 @@ jobs:
         with:
           name: loom-${{ matrix.platform }}
           path: |
-            loom/release/*.exe
-            loom/release/*.dmg
-            loom/release/*.AppImage
-            loom/release/*.yml
-            loom/release/*.yaml
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+            release/*.yml
+            release/*.yaml
+            release/*.blockmap
           if-no-files-found: warn
 
   release:
@@ -109,4 +108,3 @@ jobs:
             *If you already have LOOM installed, it will auto-update to this version.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

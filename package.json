@@ -41,8 +41,8 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "noodster",
-      "repo": "loom",
+      "owner": "mathewhuffman",
+      "repo": "Loom",
       "releaseType": "release"
     },
     "mac": {
