@@ -4419,12 +4419,20 @@ async function broadcastGlyphUpdate(glyphId: string, changedFile: string) {
           log(`⚠️ Overlay window not available for glyph-updated`);
         }
         
-        // Send to background (widgets in background layer)
-        if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-          backgroundWindow.webContents.send('glyph-updated', updateData);
-          log(`📤 Sent glyph-updated to background`);
+        // Send to ALL background windows (multi-monitor support)
+        let backgroundSendCount = 0;
+        for (const [displayId, win] of backgroundWindows.entries()) {
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('glyph-updated', updateData);
+            backgroundSendCount++;
+            log(`📤 Sent glyph-updated to background display: ${displayId}`);
+          }
+        }
+        
+        if (backgroundSendCount === 0) {
+          log(`⚠️ No background windows available for glyph-updated`);
         } else {
-          log(`⚠️ Background window not available for glyph-updated`);
+          log(`📤 Sent glyph-updated to ${backgroundSendCount} background window(s)`);
         }
         
         return;
@@ -4608,12 +4616,23 @@ ipcMain.on('widget-layer-change', (event, data: {
   
   const { widgetId, widgetData } = data;
   
-  if (!widgetData) {
-    // Widget being removed - notify background to remove it
-    log(`🗑️ Widget ${widgetId} removed from layer system`);
-    if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-      backgroundWindow.webContents.send('widget-layer-update', { widgetId, widgetData: null });
+  // Helper to send to all background windows
+  const sendToAllBackgrounds = (eventName: string, payload: any) => {
+    let sendCount = 0;
+    for (const [displayId, win] of backgroundWindows.entries()) {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(eventName, payload);
+        sendCount++;
+      }
     }
+    return sendCount;
+  };
+
+  if (!widgetData) {
+    // Widget being removed - notify ALL background windows to remove it
+    log(`🗑️ Widget ${widgetId} removed from layer system`);
+    const count = sendToAllBackgrounds('widget-layer-update', { widgetId, widgetData: null });
+    log(`📤 Sent widget removal to ${count} background window(s)`);
     return;
   }
   
@@ -4621,20 +4640,18 @@ ipcMain.on('widget-layer-change', (event, data: {
   log(`📐 Widget dimensions: x=${widgetData.x}, y=${widgetData.y}, w=${widgetData.width}, h=${widgetData.height}`);
   
   if (widgetData.layer === 'background') {
-    // Widget moving to background layer - send to background window
-    if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-      log(`📤 Sending widget-layer-update to background window`);
-      backgroundWindow.webContents.send('widget-layer-update', { widgetId, widgetData });
-      log(`✨ Widget ${widgetId} sent to background layer`);
+    // Widget moving to background layer - send to ALL background windows
+    log(`📤 Sending widget-layer-update to all background windows`);
+    const count = sendToAllBackgrounds('widget-layer-update', { widgetId, widgetData });
+    if (count > 0) {
+      log(`✨ Widget ${widgetId} sent to ${count} background window(s)`);
     } else {
-      log(`❌ backgroundWindow not available!`);
+      log(`❌ No background windows available!`);
     }
   } else {
-    // Widget moving to foreground - tell background to remove it
-    if (backgroundWindow && !backgroundWindow.isDestroyed()) {
-      backgroundWindow.webContents.send('widget-layer-update', { widgetId, widgetData: null });
-      log(`✨ Widget ${widgetId} removed from background (now foreground)`);
-    }
+    // Widget moving to foreground - tell ALL background windows to remove it
+    const count = sendToAllBackgrounds('widget-layer-update', { widgetId, widgetData: null });
+    log(`✨ Widget ${widgetId} removed from ${count} background window(s) (now foreground)`);
   }
 });
 
