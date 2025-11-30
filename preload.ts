@@ -506,6 +506,17 @@ contextBridge.exposeInMainWorld('loom', {
     return () => ipcRenderer.removeListener('glyph-updated', listener);
   },
   
+  // Listen for glyph list changes (new glyph created)
+  onGlyphListChanged: (callback: (data: { glyphId: string }) => void) => {
+    console.log(`[${layer}] 🎧 Registering listener: glyph-list-changed`);
+    const listener = (_event: Electron.IpcRendererEvent, data: { glyphId: string }) => {
+      console.log(`[${layer}] 📥 CALLBACK: glyph-list-changed`, data?.glyphId);
+      callback(data);
+    };
+    ipcRenderer.on('glyph-list-changed', listener);
+    return () => ipcRenderer.removeListener('glyph-list-changed', listener);
+  },
+  
   // Delete a glyph
   deleteGlyph: (glyphId: string) => ipcRenderer.invoke('delete-glyph', glyphId),
   

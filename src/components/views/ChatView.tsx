@@ -1304,6 +1304,63 @@ useEffect(() => {
 
   return (
     <div style={styles.container}>
+      {/* Goopy scrollbar styles for chat input */}
+      <style>{`
+        .chat-input-goopy {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(0, 255, 200, 0.4) transparent;
+        }
+        .chat-input-goopy::-webkit-scrollbar {
+          width: 8px;
+        }
+        .chat-input-goopy::-webkit-scrollbar-track {
+          background: transparent;
+          border-radius: 10px;
+        }
+        .chat-input-goopy::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, 
+            rgba(0, 255, 200, 0.5) 0%, 
+            rgba(0, 200, 255, 0.4) 50%, 
+            rgba(150, 0, 255, 0.5) 100%
+          );
+          border-radius: 10px;
+          border: 2px solid transparent;
+          background-clip: padding-box;
+          transition: all 0.3s cubic-bezier(0.68, -0.15, 0.32, 1.15);
+          box-shadow: 
+            0 0 8px rgba(0, 255, 200, 0.3),
+            inset 0 0 4px rgba(255, 255, 255, 0.2);
+        }
+        .chat-input-goopy::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, 
+            rgba(0, 255, 200, 0.8) 0%, 
+            rgba(0, 255, 255, 0.6) 50%, 
+            rgba(200, 0, 255, 0.7) 100%
+          );
+          box-shadow: 
+            0 0 16px rgba(0, 255, 200, 0.5),
+            0 0 24px rgba(150, 0, 255, 0.3),
+            inset 0 0 6px rgba(255, 255, 255, 0.3);
+          transform: scaleX(1.1);
+        }
+        .chat-input-goopy::-webkit-scrollbar-thumb:active {
+          background: linear-gradient(180deg, 
+            rgba(255, 0, 200, 0.9) 0%, 
+            rgba(0, 255, 255, 0.8) 50%, 
+            rgba(100, 255, 200, 0.9) 100%
+          );
+          box-shadow: 
+            0 0 20px rgba(255, 0, 200, 0.6),
+            0 0 30px rgba(0, 255, 255, 0.4);
+        }
+        @keyframes goopPulse {
+          0%, 100% { opacity: 0.5; transform: scaleY(1); }
+          50% { opacity: 0.8; transform: scaleY(1.02); }
+        }
+        .chat-input-goopy::-webkit-scrollbar-thumb {
+          animation: goopPulse 3s ease-in-out infinite;
+        }
+      `}</style>
       {/* Collapsible History Sidebar */}
       <div 
         style={{
@@ -1600,12 +1657,13 @@ useEffect(() => {
               value={input}
               onChange={(e) => {
                 setInput(e.target.value);
-                // Auto-resize textarea
+                // Auto-resize textarea up to max height, then enable scroll
                 const textarea = e.target;
                 textarea.style.height = 'auto';
-                const maxHeight = e.target.value.length > 600 ? 180 : 120;
-                textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
-                textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+                // Max height ~160px allows roughly 500 chars before scrolling kicks in
+                const maxHeight = 160;
+                const newHeight = Math.max(36, Math.min(textarea.scrollHeight, maxHeight));
+                textarea.style.height = newHeight + 'px';
               }}
               onKeyDown={(e) => {
                 // Submit on Enter (without Shift), new line on Shift+Enter
@@ -1624,11 +1682,9 @@ useEffect(() => {
                     : 'Ask anything...'
               }
               disabled={isGenerating}
-              style={{
-                ...styles.input,
-                overflowY: input.length > 600 ? 'auto' : 'hidden',
-              }}
+              style={styles.input}
               rows={1}
+              className="chat-input-goopy"
             />
             
             <div style={styles.inlineTools} ref={inlineToolsRef}>
@@ -2477,9 +2533,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'inherit',
     resize: 'none',
     zIndex: 1,
-    minHeight: '24px',
-    maxHeight: '180px',
-    lineHeight: '1.4',
+    minHeight: '36px', // Match search box height for easy clicking
+    maxHeight: '160px', // Allow expansion up to ~500 chars before scrolling
+    lineHeight: '1.5',
+    padding: '6px 0', // Vertical padding for better touch targets
+    overflowY: 'auto',
+    overflowX: 'hidden',
   },
   
   keysSelector: {

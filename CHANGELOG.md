@@ -5,6 +5,38 @@
 ## Multi-monitor Support, stability update
 
 ### ✨ New Features
+- Inputs of Glyphs now properly relay their data to the glyph
+- Multi Monitor Support
+- Proper auto updating now
+- 
+
+### 🔧 Improvements  
+- said above
+
+### 🐛 Bug Fixes
+- tons
+
+## [0.1.0] - 2025-11-29
+
+### ✨ New Features
+- **Auto-Update System** — LOOM now automatically checks for updates and prompts you to install them with a beautiful, goopy changelog interface
+- **Changelog Viewer** — See what's new in each version with a gorgeous, animated changelog panel
+- **Version History** — Browse through all previous versions and their changes
+
+### 🔧 Improvements
+- Enhanced overall stability and performance
+- Refined cyberpunk aesthetic across the UI
+
+### 🐛 Bug Fixes
+- Initial release - no bugs yet! 🪲✨
+
+---
+
+## [0.2.0] - 11/29/2025
+
+## Multi-monitor Support, stability update
+
+### ✨ New Features
 - You can now use other monitors for background glyphs, and display Loom interface elements..
 - general stability pass, inputs for glyphs operation again.
 

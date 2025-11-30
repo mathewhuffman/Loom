@@ -2351,6 +2351,10 @@ function finalizeStreamingGlyph(
   }
   
   log(`✅ [Streaming] Glyph finalized: ${state.glyphId}`);
+  
+  // Broadcast that glyph list has changed
+  broadcastGlyphListChanged(state.glyphId);
+  
   return { glyphId: state.glyphId, locations };
 }
 
@@ -2521,6 +2525,9 @@ async function writeGlyphBundle(
     
     savedLocations.push(glyphDir);
   }
+  
+  // Broadcast that glyph list has changed
+  broadcastGlyphListChanged(glyphId);
   
   return { glyphId, locations: savedLocations };
 }
@@ -4330,6 +4337,17 @@ async function broadcastGlyphUpdate(glyphId: string, changedFile: string) {
       
       return;
     }
+  }
+}
+
+// Helper to broadcast when glyph list changes (new glyph created)
+function broadcastGlyphListChanged(glyphId: string) {
+  log(`📢 Broadcasting glyph list changed: ${glyphId}`);
+  
+  // Send to overlay (where LoomPanel lives)
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('glyph-list-changed', { glyphId });
+    log(`📤 Sent glyph-list-changed to overlay`);
   }
 }
 

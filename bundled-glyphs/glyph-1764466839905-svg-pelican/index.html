@@ -1,0 +1,190 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Pelican</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: system-ui, sans-serif;
+        }
+
+        #scene {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: var(--sky-color, #87CEEB);
+            transition: background-color 0.5s ease;
+            position: relative;
+        }
+
+        svg {
+            width: 80vmin;
+            height: 80vmin;
+            filter: drop-shadow(0 10px 20px rgba(0,0,0,0.1));
+        }
+
+        /* Animations */
+        @keyframes bob {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-15px); }
+        }
+
+        @keyframes blink {
+            0%, 48%, 52%, 100% { transform: scaleY(1); }
+            50% { transform: scaleY(0.1); }
+        }
+
+        @keyframes wave {
+            0% { transform: translateX(-20px); }
+            100% { transform: translateX(0px); }
+        }
+
+        .pelican-group {
+            animation-name: bob;
+            animation-duration: var(--bob-duration, 3s);
+            animation-iteration-count: infinite;
+            animation-timing-function: ease-in-out;
+        }
+
+        .eye-lid {
+            transform-origin: center;
+            animation: blink 4s infinite;
+        }
+
+        .water-layer {
+            animation: wave 4s ease-in-out infinite alternate;
+        }
+        
+        .water-layer:nth-child(2) {
+            animation-duration: 3s;
+            opacity: 0.7;
+        }
+
+        /* Interactive Hover States */
+        .beak-group {
+            transform-origin: 280px 180px;
+            transition: transform 0.3s ease;
+        }
+        
+        svg:hover .beak-group {
+            transform: rotate(5deg);
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="scene">
+        <!-- SVG ViewBox 500x500 -->
+        <svg viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg">
+            <!-- Sun -->
+            <circle cx="420" cy="80" r="40" fill="#FFD700" opacity="0.8" />
+
+            <!-- Water Background -->
+            <rect x="0" y="350" width="500" height="150" fill="var(--water-color, #4682B4)" opacity="0.5" />
+            
+            <!-- Waves Behind -->
+            <path class="water-layer" d="M-50,380 Q25,360 100,380 T250,380 T400,380 T550,380 V500 H-50 Z" fill="var(--water-color, #4682B4)" opacity="0.6" />
+
+            <!-- Pelican Group -->
+            <g class="pelican-group">
+                <!-- Legs (submerged mostly) -->
+                <path d="M220,380 L220,420" stroke="#333" stroke-width="8" stroke-linecap="round" />
+                <path d="M280,380 L280,420" stroke="#333" stroke-width="8" stroke-linecap="round" />
+
+                <!-- Body -->
+                <ellipse cx="250" cy="320" rx="90" ry="70" fill="var(--feather-color, #f0f0f0)" />
+                
+                <!-- Wing -->
+                <path d="M200,310 Q250,380 310,300 Q260,320 200,310" fill="#e0e0e0" />
+
+                <!-- Neck -->
+                <path d="M290,280 Q320,250 310,200 Q300,160 260,160" fill="none" stroke="var(--feather-color, #f0f0f0)" stroke-width="45" stroke-linecap="round" />
+
+                <!-- Head Circle -->
+                <circle cx="260" cy="160" r="35" fill="var(--feather-color, #f0f0f0)" />
+                
+                <!-- Crest/Feathers on head -->
+                <path d="M240,140 Q220,130 230,150" fill="none" stroke="var(--feather-color, #f0f0f0)" stroke-width="5" stroke-linecap="round" />
+
+                <!-- Beak Group -->
+                <g class="beak-group">
+                    <!-- Upper Beak -->
+                    <path d="M280,150 L400,170 Q410,175 400,180 L290,180" fill="var(--beak-color, #ffaa00)" />
+                    <!-- Pouch (Lower Beak) -->
+                    <path d="M290,180 L400,180 Q380,240 290,220 Z" fill="#ffcc00" stroke="var(--beak-color, #ffaa00)" stroke-width="2" />
+                </g>
+
+                <!-- Eye -->
+                <circle cx="270" cy="160" r="5" fill="#333" />
+                <g class="eye-lid">
+                    <circle cx="270" cy="160" r="5" fill="none" stroke="#333" stroke-width="1" opacity="0" /> 
+                    <!-- Simple blink logic handled by scale transform on a rect masking or similar, 
+                         but for simple SVG, we just scale a skin colored eyelid over it or similar.
+                         Let's just scale the pupil for a cartoon blink effect or use a rect. -->
+                    <rect x="260" y="150" width="20" height="20" fill="var(--feather-color, #f0f0f0)" transform="translate(0, -10)" />
+                </g>
+            </g>
+
+            <!-- Waves Front -->
+            <path class="water-layer" d="M-50,400 Q25,420 100,400 T250,400 T400,400 T550,400 V500 H-50 Z" fill="var(--water-color, #4682B4)" opacity="0.8" />
+        </svg>
+    </div>
+
+    <script>
+        // Initialize inputs
+        const inputs = window.GLYPH_INPUTS || {};
+        
+        // Configuration
+        const config = {
+            featherColor: inputs.featherColor || '#f0f0f0',
+            beakColor: inputs.beakColor || '#ffaa00',
+            skyColor: inputs.skyColor || '#87CEEB',
+            waterColor: inputs.waterColor || '#4682B4',
+            bobSpeed: inputs.bobSpeed !== undefined ? inputs.bobSpeed : 2
+        };
+
+        // Apply CSS Variables
+        const root = document.documentElement;
+        root.style.setProperty('--feather-color', config.featherColor);
+        root.style.setProperty('--beak-color', config.beakColor);
+        root.style.setProperty('--sky-color', config.skyColor);
+        root.style.setProperty('--water-color', config.waterColor);
+
+        // Calculate animation duration (inverse of speed)
+        // Avoid division by zero
+        const speed = parseFloat(config.bobSpeed);
+        const duration = speed > 0 ? (1 / speed) * 3 : 0; 
+        
+        if (duration === 0) {
+            root.style.setProperty('--bob-duration', '0s');
+        } else {
+            root.style.setProperty('--bob-duration', `${duration}s`);
+        }
+
+        // Add some simple interactivity
+        const scene = document.getElementById('scene');
+        
+        // Parallax effect on mouse move
+        scene.addEventListener('mousemove', (e) => {
+            const x = (window.innerWidth - e.pageX * 2) / 100;
+            const y = (window.innerHeight - e.pageY * 2) / 100;
+            
+            const sun = document.querySelector('circle[cx="420"]');
+            if(sun) {
+                sun.style.transform = `translate(${x}px, ${y}px)`;
+            }
+        });
+
+    </script>
+</body>
+</html>

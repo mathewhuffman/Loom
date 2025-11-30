@@ -455,6 +455,9 @@ interface LoomAPI {
     changedFile: string;
     manifest?: { name: string; prompt?: string };
   }) => void) => () => void;
+  
+  // Listen for glyph list changes (new glyph created)
+  onGlyphListChanged: (callback: (data: { glyphId: string }) => void) => () => void;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 🖥️ MULTI-MONITOR MANAGEMENT

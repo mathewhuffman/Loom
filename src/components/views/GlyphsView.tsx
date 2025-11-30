@@ -181,6 +181,25 @@ export default function GlyphsView() {
     loadData();
   }, []);
   
+  // Listen for glyph list changes (new glyphs created) and auto-refresh
+  useEffect(() => {
+    const unsubscribe = window.loom?.onGlyphListChanged?.(async (data) => {
+      console.log('[GlyphsView] 🔄 Glyph list changed, refreshing...', data.glyphId);
+      try {
+        // Reload glyphs
+        const loadedGlyphs = await window.loom?.loadGlyphs?.() || [];
+        setGlyphs(loadedGlyphs as GlyphManifest[]);
+        console.log('[GlyphsView] ✅ Glyphs refreshed, count:', loadedGlyphs.length);
+      } catch (error) {
+        console.error('[GlyphsView] Failed to refresh glyphs:', error);
+      }
+    });
+    
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+  
   // Save folders whenever they change
   const saveFolders = useCallback(async (newFolders: GlyphFolder[], newUnassignedOrder: string[]) => {
     try {

@@ -1,0 +1,50 @@
+{
+  "id": "glyph-1764466839905-svg-pelican",
+  "name": "SVG Pelican",
+  "prompt": "create a SVG pelican",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-30T01:40:59.415Z",
+  "inputs": [
+    {
+      "id": "featherColor",
+      "type": "color",
+      "label": "Feather Color",
+      "defaultValue": "#f0f0f0"
+    },
+    {
+      "id": "beakColor",
+      "type": "color",
+      "label": "Beak Color",
+      "defaultValue": "#ffaa00"
+    },
+    {
+      "id": "skyColor",
+      "type": "color",
+      "label": "Sky Color",
+      "defaultValue": "#87CEEB"
+    },
+    {
+      "id": "waterColor",
+      "type": "color",
+      "label": "Water Color",
+      "defaultValue": "#4682B4"
+    },
+    {
+      "id": "bobSpeed",
+      "type": "range",
+      "label": "Bobbing Speed",
+      "min": 0,
+      "max": 5,
+      "defaultValue": 2,
+      "step": 0.1
+    }
+  ],
+  "icon": "🐦",
+  "bundled": true,
+  "version": "1.0.0"
+}
