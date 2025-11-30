@@ -698,6 +698,19 @@ contextBridge.exposeInMainWorld('loom', {
   setAutoLaunchStatus: (enabled: boolean) => ipcRenderer.invoke('auto-launch:set-state', enabled),
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🧠 MEMORY PROFILER — Deep RAM analysis tool
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get detailed memory snapshot with all processes
+  getMemorySnapshot: () => ipcRenderer.invoke('memory-profiler:get-snapshot'),
+  
+  // Force garbage collection (requires --expose-gc flag)
+  forceGarbageCollection: () => ipcRenderer.invoke('memory-profiler:force-gc'),
+  
+  // Get V8 heap statistics for deeper analysis
+  getHeapStats: () => ipcRenderer.invoke('memory-profiler:get-heap-stats'),
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 🖥️ MULTI-MONITOR MANAGEMENT — Set backgrounds per monitor
   // ═══════════════════════════════════════════════════════════════════════════
   
@@ -1033,6 +1046,41 @@ declare global {
           }>;
         }>;
       }) => void) => (() => void) | void;
+      
+      // Memory Profiler
+      getMemorySnapshot: () => Promise<{
+        success: boolean;
+        snapshot?: {
+          timestamp: number;
+          entries: Array<{
+            id: string;
+            name: string;
+            type: 'main-process' | 'renderer' | 'webview' | 'gpu' | 'utility' | 'shared';
+            category: string;
+            heapUsed: number;
+            heapTotal: number;
+            external: number;
+            rss: number;
+            arrayBuffers: number;
+            details: string;
+            processId?: number;
+            windowTitle?: string;
+            url?: string;
+          }>;
+          totalHeap: number;
+          totalRss: number;
+          systemFreeMemory: number;
+          systemTotalMemory: number;
+        };
+        error?: string;
+      }>;
+      forceGarbageCollection: () => Promise<{ success: boolean; error?: string }>;
+      getHeapStats: () => Promise<{
+        success: boolean;
+        stats?: Record<string, number>;
+        spaces?: Array<{ space_name: string; space_size: number; space_used_size: number }>;
+        error?: string;
+      }>;
       
       // Multi-Monitor Management
       getAllDisplays: () => Promise<Array<{

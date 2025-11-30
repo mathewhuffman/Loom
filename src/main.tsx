@@ -3,12 +3,14 @@ import ReactDOM from 'react-dom/client';
 import LoomScene from './LoomScene';
 import BackgroundWidgetLayer from './BackgroundWidgetLayer';
 import OverlayUI from './OverlayUI';
+import MemoryProfilerView from './components/views/MemoryProfilerView';
 import './index.css';
 
 const params = new URLSearchParams(window.location.search);
 const layer = params.get('layer') || 'background';
+const view = params.get('view');
 
-console.log(`🎭 LOOM Layer: ${layer}`);
+console.log(`🎭 LOOM Layer: ${layer}${view ? `, View: ${view}` : ''}`);
 
 if (layer === 'overlay') {
   document.documentElement.classList.add('overlay-layer');
@@ -22,7 +24,15 @@ if (import.meta.hot) {
   });
 }
 
-if (layer === 'overlay') {
+// Handle special views (like memory profiler)
+if (view === 'memory-profiler') {
+  document.documentElement.classList.add('memory-profiler-layer');
+  root.render(
+    <React.StrictMode>
+      <MemoryProfilerView />
+    </React.StrictMode>
+  );
+} else if (layer === 'overlay') {
   root.render(
     <React.StrictMode>
       <OverlayUI />

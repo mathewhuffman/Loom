@@ -764,6 +764,297 @@ const MOUSE_LEAVE_DEBOUNCE_MS = 150;
 
 const log = (...args: any[]) => console.log('[LOOM]', ...args);
 
+// ════════════════════════════════════════════════════════════════════════════
+// 🧠 MEMORY PROFILER — Deep RAM analysis tool
+// ════════════════════════════════════════════════════════════════════════════
+
+let memoryProfilerWindow: BrowserWindow | null = null;
+
+interface MemoryEntry {
+  id: string;
+  name: string;
+  type: 'main-process' | 'renderer' | 'webview' | 'gpu' | 'utility' | 'shared';
+  category: string;
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  rss: number;
+  arrayBuffers: number;
+  details: string;
+  processId?: number;
+  windowTitle?: string;
+  url?: string;
+}
+
+interface MemorySnapshot {
+  timestamp: number;
+  entries: MemoryEntry[];
+  totalHeap: number;
+  totalRss: number;
+  systemFreeMemory: number;
+  systemTotalMemory: number;
+}
+
+// Track glyph windows for memory profiling
+const trackedGlyphWindows: Map<number, { name: string; url: string; createdAt: number }> = new Map();
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+async function getDetailedMemorySnapshot(): Promise<MemorySnapshot> {
+  const os = require('os');
+  const entries: MemoryEntry[] = [];
+  
+  // 1. Main process memory
+  const mainMemory = process.memoryUsage();
+  entries.push({
+    id: 'main-process',
+    name: 'Main Process (Electron Core)',
+    type: 'main-process',
+    category: 'Core',
+    heapUsed: mainMemory.heapUsed,
+    heapTotal: mainMemory.heapTotal,
+    external: mainMemory.external,
+    rss: mainMemory.rss,
+    arrayBuffers: mainMemory.arrayBuffers || 0,
+    details: `Node.js runtime, IPC handlers, file system operations`,
+    processId: process.pid,
+  });
+  
+  // 2. Get all app metrics (renderer processes, GPU, etc.)
+  const metrics = app.getAppMetrics();
+  
+  for (const metric of metrics) {
+    // Skip the main/browser process (we already added it)
+    if (metric.type === 'Browser') continue;
+    
+    let name = metric.name || metric.type;
+    let category = 'System';
+    let details = '';
+    let windowTitle = '';
+    let url = '';
+    
+    // Match to known windows
+    // Note: 'Tab' is used for renderer processes, we also check for any renderer-like type
+    if (metric.type === 'Tab' || (metric.type as string) === 'Renderer') {
+      // Try to find which window this is
+      const allWindows = BrowserWindow.getAllWindows();
+      for (const win of allWindows) {
+        if (!win.isDestroyed() && win.webContents.getOSProcessId() === metric.pid) {
+          windowTitle = win.getTitle() || 'Untitled Window';
+          url = win.webContents.getURL();
+          
+          // Identify window type
+          if (win === overlayWindow) {
+            name = 'Overlay (UI Layer)';
+            category = 'UI';
+            details = 'Loom Panel, Summon Bar, all UI components';
+          } else if (win === backgroundWindow) {
+            name = 'Background (Wallpaper)';
+            category = 'Wallpaper';
+            details = 'Three.js scene, active glyphs rendering';
+          } else if (backgroundWindows.has(String(win.id))) {
+            const displayId = [...backgroundWindows.entries()]
+              .find(([_, w]) => w === win)?.[0] || 'unknown';
+            name = `Background (Monitor ${displayId})`;
+            category = 'Wallpaper';
+            details = 'Multi-monitor wallpaper instance';
+          } else if (win === memoryProfilerWindow) {
+            name = 'Memory Profiler';
+            category = 'Debug';
+            details = 'This debug window';
+          } else {
+            // Check if it's a tracked glyph window
+            const glyphInfo = trackedGlyphWindows.get(win.id);
+            if (glyphInfo) {
+              name = `Glyph: ${glyphInfo.name}`;
+              category = 'Glyph';
+              const age = Date.now() - glyphInfo.createdAt;
+              details = `Running for ${Math.floor(age / 1000 / 60)} min, URL: ${glyphInfo.url.slice(0, 50)}...`;
+            } else {
+              name = windowTitle || 'Unknown Window';
+              category = 'Other';
+              details = url ? `URL: ${url.slice(0, 80)}...` : 'No URL available';
+            }
+          }
+          break;
+        }
+      }
+    } else if (metric.type === 'GPU') {
+      name = 'GPU Process';
+      category = 'Graphics';
+      details = 'WebGL rendering, compositing, hardware acceleration';
+    } else if (metric.type === 'Utility') {
+      name = 'Utility Process';
+      category = 'System';
+      details = 'Network, audio, or other background services';
+    }
+    
+    // Note: Electron's app.getAppMetrics() returns memory in KILOBYTES, convert to bytes
+    const workingSetBytes = metric.memory.workingSetSize * 1024;
+    const peakWorkingSetBytes = metric.memory.peakWorkingSetSize * 1024;
+    // privateBytes (Windows only) - memory not shared with other processes
+    const privateBytesKB = (metric.memory as any).privateBytes || 0;
+    const privateBytes = privateBytesKB * 1024;
+    
+    entries.push({
+      id: `process-${metric.pid}`,
+      name,
+      type: metric.type === 'GPU' ? 'gpu' : 
+            metric.type === 'Utility' ? 'utility' : 'renderer',
+      category,
+      heapUsed: privateBytes || workingSetBytes, // Prefer private bytes when available
+      heapTotal: peakWorkingSetBytes,
+      external: 0,
+      rss: workingSetBytes,
+      arrayBuffers: privateBytes, // Store privateBytes here for display
+      details,
+      processId: metric.pid,
+      windowTitle,
+      url,
+    });
+  }
+  
+  // 3. Calculate shared memory (approximation based on process sharing)
+  // Note: workingSetSize is in KB, convert to bytes
+  const sharedMemory = metrics
+    .filter(m => m.memory.workingSetSize > 0)
+    .reduce((acc, m) => acc + (m.memory.workingSetSize * 1024 * 0.1), 0); // ~10% is typically shared
+  
+  if (sharedMemory > 1024 * 1024) { // Only show if > 1MB (in bytes)
+    entries.push({
+      id: 'shared-memory',
+      name: 'Shared Memory (estimated)',
+      type: 'shared',
+      category: 'System',
+      heapUsed: sharedMemory,
+      heapTotal: sharedMemory,
+      external: 0,
+      rss: sharedMemory,
+      arrayBuffers: 0,
+      details: 'Chromium shared libraries, code cache, font cache',
+    });
+  }
+  
+  // 4. Sort by memory usage (highest first)
+  entries.sort((a, b) => b.rss - a.rss);
+  
+  // Calculate totals
+  const totalHeap = entries.reduce((acc, e) => acc + e.heapUsed, 0);
+  const totalRss = entries.reduce((acc, e) => acc + e.rss, 0);
+  
+  return {
+    timestamp: Date.now(),
+    entries,
+    totalHeap,
+    totalRss,
+    systemFreeMemory: os.freemem(),
+    systemTotalMemory: os.totalmem(),
+  };
+}
+
+// Track when glyph windows are created
+function trackGlyphWindow(windowId: number, name: string, url: string) {
+  trackedGlyphWindows.set(windowId, { name, url, createdAt: Date.now() });
+}
+
+function untrackGlyphWindow(windowId: number) {
+  trackedGlyphWindows.delete(windowId);
+}
+
+// IPC handler for memory profiler
+ipcMain.handle('memory-profiler:get-snapshot', async () => {
+  try {
+    return { success: true, snapshot: await getDetailedMemorySnapshot() };
+  } catch (error) {
+    log('❌ Memory profiler error:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+// Force garbage collection (if running with --expose-gc)
+ipcMain.handle('memory-profiler:force-gc', async () => {
+  try {
+    if (global.gc) {
+      global.gc();
+      log('🧹 Forced garbage collection');
+      return { success: true };
+    }
+    return { success: false, error: 'GC not exposed. Run with --expose-gc flag' };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Get V8 heap statistics for deeper analysis
+ipcMain.handle('memory-profiler:get-heap-stats', async () => {
+  try {
+    const v8 = require('v8');
+    return {
+      success: true,
+      stats: v8.getHeapStatistics(),
+      spaces: v8.getHeapSpaceStatistics(),
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+function createMemoryProfilerWindow() {
+  if (memoryProfilerWindow && !memoryProfilerWindow.isDestroyed()) {
+    memoryProfilerWindow.focus();
+    return;
+  }
+  
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  
+  memoryProfilerWindow = new BrowserWindow({
+    width: Math.min(900, width - 100),
+    height: Math.min(700, height - 100),
+    x: 50,
+    y: 50,
+    title: 'Loom Memory Profiler',
+    backgroundColor: '#0a0a0f',
+    frame: false,
+    transparent: false,
+    resizable: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  
+  // Load the profiler UI
+  if (isDev) {
+    memoryProfilerWindow.loadURL('http://localhost:5173/?view=memory-profiler');
+  } else {
+    memoryProfilerWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), {
+      query: { view: 'memory-profiler' },
+    });
+  }
+  
+  memoryProfilerWindow.on('closed', () => {
+    memoryProfilerWindow = null;
+  });
+  
+  log('🧠 Memory Profiler window opened');
+}
+
+function toggleMemoryProfiler() {
+  if (memoryProfilerWindow && !memoryProfilerWindow.isDestroyed()) {
+    memoryProfilerWindow.close();
+    memoryProfilerWindow = null;
+    log('🧠 Memory Profiler closed');
+  } else {
+    createMemoryProfilerWindow();
+  }
+}
+
 function readSettingsFromDisk(): LoomSettings {
   try {
     if (!fs.existsSync(settingsPath)) {
@@ -6168,6 +6459,18 @@ app.whenReady().then(() => {
     log('⌨️  Background DevTools: Ctrl+Shift+C');
   } else {
     log('❌ Failed to register Ctrl+Shift+C');
+  }
+
+  // Memory Profiler shortcut — Ctrl+Shift+P to toggle profiler
+  const memoryProfilerShortcut = globalShortcut.register('Control+Shift+P', () => {
+    log('🧠 MEMORY PROFILER SHORTCUT TRIGGERED');
+    toggleMemoryProfiler();
+  });
+  
+  if (memoryProfilerShortcut) {
+    log('⌨️  Memory Profiler: Ctrl+Shift+P');
+  } else {
+    log('❌ Failed to register Ctrl+Shift+P');
   }
 
   refreshBackgroundShortcutBinding();

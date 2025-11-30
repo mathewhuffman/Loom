@@ -225,3 +225,34 @@ html.overlay-layer .ui-interactive {
     opacity: 0;
   }
 }
+
+/* MEMORY PROFILER LAYER */
+.memory-profiler-layer,
+.memory-profiler-layer body,
+.memory-profiler-layer #root {
+  background: #0a0a0f;
+  overflow: auto;
+}
+
+.memory-profiler-layer * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 200, 255, 0.3) transparent;
+}
+
+.memory-profiler-layer *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.memory-profiler-layer *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.memory-profiler-layer *::-webkit-scrollbar-thumb {
+  background: rgba(100, 200, 255, 0.3);
+  border-radius: 4px;
+}
+
+.memory-profiler-layer *::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 200, 255, 0.5);
+}
