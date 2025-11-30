@@ -883,12 +883,26 @@ function restoreBackgroundWallpaper() {
   ) {
     return;
   }
+  
+  // Load fresh inputs from manifest to ensure config changes persist
+  let inputs: Record<string, unknown> = wallpaper.inputs || {};
+  let freshCode = wallpaper.code;
+  if (wallpaper.glyphId) {
+    const freshData = loadFreshGlyphData(wallpaper.glyphId);
+    if (freshData) {
+      inputs = freshData.inputs;
+      freshCode = freshData.code; // Use fresh code too in case it was updated
+      log(`📦 [RestoreWallpaper] Loaded fresh inputs for ${wallpaper.glyphId}: ${Object.keys(inputs).length} inputs`);
+    }
+  }
+  
   backgroundWindow.webContents.send('summon-inject', {
-    code: wallpaper.code,
+    code: freshCode,
     prompt: wallpaper.prompt,
     glyphId: wallpaper.glyphId,
     type: wallpaper.type,
     mode: 'background' as const,
+    inputs,
   });
   log('[UIState] Restored persisted wallpaper');
 }
@@ -3777,12 +3791,26 @@ function restoreBackgroundForDisplay(displayId: string) {
     const win = backgroundWindows.get(displayId);
     if (win && !win.isDestroyed()) {
       log('🖼️ Restoring background for display:', displayId, config.glyphId);
+      
+      // Load fresh inputs from manifest to ensure config changes persist
+      let inputs: Record<string, unknown> = {};
+      let freshCode = config.code;
+      if (config.glyphId) {
+        const freshData = loadFreshGlyphData(config.glyphId);
+        if (freshData) {
+          inputs = freshData.inputs;
+          freshCode = freshData.code; // Use fresh code too in case it was updated
+          log(`📦 [Restore] Loaded fresh inputs for ${config.glyphId}: ${Object.keys(inputs).length} inputs`);
+        }
+      }
+      
       win.webContents.send('summon-inject', {
-        code: config.code,
+        code: freshCode,
         prompt: config.prompt || 'Monitor Background',
         glyphId: config.glyphId,
         type: config.type,
         mode: 'background',
+        inputs,
       });
     }
   } else if (displayId === backgroundDisplayId) {
@@ -4419,6 +4447,122 @@ ipcMain.handle('save-glyph-file', async (event, glyphId: string, fileName: strin
   throw new Error(`Glyph not found: ${glyphId}`);
 });
 
+/**
+ * Load fresh glyph data from disk, including resolved inputs from manifest.json
+ * This ensures configuration changes persist across app restarts
+ */
+function loadFreshGlyphData(glyphId: string): { manifest: any; inputs: Record<string, unknown>; code: string } | null {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  for (const basePath of searchPaths) {
+    const glyphDir = path.join(basePath, glyphId);
+    const manifestPath = path.join(glyphDir, 'manifest.json');
+    
+    if (fs.existsSync(manifestPath)) {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const entryFile = manifest.entry
+          || (fs.existsSync(path.join(glyphDir, 'index.html')) ? 'index.html' : 'index.tsx');
+        const entryPath = path.join(glyphDir, entryFile);
+        
+        if (!fs.existsSync(entryPath)) {
+          log(`⚠️ [loadFreshGlyphData] Entry file missing: ${entryFile} for ${glyphId}`);
+          continue;
+        }
+        
+        const code = fs.readFileSync(entryPath, 'utf-8');
+        
+        // Resolve inputs from manifest.inputs (value or defaultValue)
+        const inputs: Record<string, unknown> = {};
+        if (manifest.inputs && Array.isArray(manifest.inputs)) {
+          for (const input of manifest.inputs) {
+            if (input.value !== undefined) {
+              inputs[input.id] = input.value;
+            } else if (input.defaultValue !== undefined) {
+              inputs[input.id] = input.defaultValue;
+            }
+          }
+        }
+        
+        // Resolve linked keys from the secure vault
+        if (manifest.linkedKeys && Array.isArray(manifest.linkedKeys) && manifest.linkedKeys.length > 0) {
+          const keyValues = loadSecureKeysData();
+          const keyMetadata = loadSecureKeysMetadata();
+          const apiKeyInputs = (manifest.inputs || []).filter((i: GlyphInput) => i.type === 'apiKey');
+          
+          for (const keyId of manifest.linkedKeys) {
+            if (keyValues[keyId]) {
+              const meta = keyMetadata.find(k => k.id === keyId);
+              const keyName = meta?.name || keyId;
+              const keyNameLower = keyName.toLowerCase().replace(/\s+/g, '');
+              
+              let matchedInputId: string | null = null;
+              for (const apiInput of apiKeyInputs) {
+                const inputIdLower = apiInput.id.toLowerCase();
+                const inputLabelLower = (apiInput.label || '').toLowerCase().replace(/\s+/g, '');
+                const inputService = ((apiInput as any).service || '').toLowerCase();
+                
+                if (inputIdLower.includes(keyNameLower) || 
+                    keyNameLower.includes(inputIdLower) ||
+                    inputIdLower.includes(inputService) ||
+                    inputLabelLower.includes(keyNameLower) ||
+                    keyNameLower.includes(inputLabelLower)) {
+                  matchedInputId = apiInput.id;
+                  break;
+                }
+              }
+              
+              const inputKey = matchedInputId || keyNameLower;
+              inputs[inputKey] = keyValues[keyId];
+            }
+          }
+        }
+        
+        log(`📦 [loadFreshGlyphData] Loaded ${glyphId}: ${Object.keys(inputs).length} inputs resolved`);
+        return { manifest, inputs, code };
+      } catch (err) {
+        log(`⚠️ [loadFreshGlyphData] Error loading ${glyphId}:`, err);
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Try to copy missing entry file from another glyph location
+ * This handles cases where glyph was created in production but manifest exists in dev
+ */
+function tryRecoverMissingEntryFile(glyphId: string, entryFile: string, targetDir: string): boolean {
+  const searchPaths = [dynamicGlyphPath, glyphLibraryPath];
+  
+  // Also check userData path explicitly (production glyphs location)
+  const userDataGlyphPath = path.join(app.getPath('userData'), 'glyphs', 'dynamic');
+  if (!searchPaths.includes(userDataGlyphPath)) {
+    searchPaths.push(userDataGlyphPath);
+  }
+  
+  for (const basePath of searchPaths) {
+    if (basePath === targetDir) continue; // Skip the target directory itself
+    
+    const sourceDir = path.join(basePath, glyphId);
+    const sourceFile = path.join(sourceDir, entryFile);
+    
+    if (fs.existsSync(sourceFile)) {
+      try {
+        const targetFile = path.join(targetDir, entryFile);
+        fs.copyFileSync(sourceFile, targetFile);
+        log(`📄 [Recovery] Copied missing ${entryFile} from ${sourceDir} to ${targetDir}`);
+        return true;
+      } catch (err) {
+        log(`⚠️ [Recovery] Failed to copy ${entryFile}:`, err);
+      }
+    }
+  }
+  
+  return false;
+}
+
 // Helper to broadcast glyph updates to all windows
 async function broadcastGlyphUpdate(glyphId: string, changedFile: string) {
   log(`📢 Broadcasting glyph update: ${glyphId} (${changedFile})`);
@@ -4441,8 +4585,13 @@ async function broadcastGlyphUpdate(glyphId: string, changedFile: string) {
         const entryPath = path.join(glyphDir, entryFile);
         
         if (!fs.existsSync(entryPath)) {
-          log(`❌ Entry file missing for glyph ${glyphId}: ${entryFile}`);
-          return;
+          log(`⚠️ Entry file missing for glyph ${glyphId}: ${entryFile}, attempting recovery...`);
+          // Try to recover the missing entry file from another location
+          const recovered = tryRecoverMissingEntryFile(glyphId, entryFile, glyphDir);
+          if (!recovered) {
+            log(`❌ Could not recover entry file for glyph ${glyphId}: ${entryFile}`);
+            return;
+          }
         }
         
         const code = fs.readFileSync(entryPath, 'utf-8');

@@ -15,7 +15,7 @@
       "type": "color",
       "label": "Mower Color",
       "defaultValue": "#ff4444",
-      "value": "#cfc4c4"
+      "value": "#5f3fde"
     },
     {
       "id": "grassColor",

@@ -1,0 +1,342 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Lawnmower</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #5d4037; /* Dirt color */
+            font-family: sans-serif;
+        }
+
+        #lawn-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        #mower {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0; /* Set via JS */
+            height: 0; /* Set via JS */
+            transform-origin: center center;
+            pointer-events: none;
+            filter: drop-shadow(0px 5px 10px rgba(0,0,0,0.3));
+            z-index: 10;
+        }
+
+        /* Particle styling for cut grass flying out */
+        .particle {
+            position: absolute;
+            background: #2e7d32;
+            pointer-events: none;
+            border-radius: 50%;
+        }
+
+        #controls-hint {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 20;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+<div id="lawn-container">
+    <canvas id="grass-canvas"></canvas>
+    
+    <!-- The Mower SVG -->
+    <div id="mower">
+        <svg viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" style="width:100%; height:100%;">
+            <!-- Wheels -->
+            <rect x="5" y="15" width="15" height="25" rx="5" fill="#333" />
+            <rect x="80" y="15" width="15" height="25" rx="5" fill="#333" />
+            <rect x="5" y="70" width="15" height="25" rx="5" fill="#333" />
+            <rect x="80" y="70" width="15" height="25" rx="5" fill="#333" />
+            
+            <!-- Deck -->
+            <rect x="15" y="10" width="70" height="90" rx="15" id="mower-body" fill="#ff4444" stroke="#333" stroke-width="2"/>
+            
+            <!-- Engine/Top detail -->
+            <circle cx="50" cy="50" r="20" fill="#333" opacity="0.2" />
+            <circle cx="50" cy="50" r="15" fill="#222" />
+            <rect x="45" y="30" width="10" height="40" fill="#444" rx="2" />
+            <rect x="30" y="45" width="40" height="10" fill="#444" rx="2" />
+
+            <!-- Handle Bars -->
+            <path d="M25 90 L25 115 L75 115 L75 90" fill="none" stroke="#222" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+            <rect x="20" y="112" width="60" height="6" rx="3" fill="#111" />
+            
+            <!-- Discharge Chute -->
+            <path d="M85 30 L95 40 L85 50" fill="#333" opacity="0.5" />
+        </svg>
+    </div>
+
+    <div id="controls-hint">Click to summon mower • Auto-roam active</div>
+</div>
+
+<script>
+    // --- Configuration & State ---
+    const inputs = window.GLYPH_INPUTS || {};
+    const config = {
+        mowerColor: inputs.mowerColor || '#ff4444',
+        grassColor: inputs.grassColor || '#4caf50',
+        speed: parseInt(inputs.speed) || 5,
+        size: parseInt(inputs.size) || 80,
+        regrowthRate: parseInt(inputs.regrowth) || 5
+    };
+
+    const canvas = document.getElementById('grass-canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const mowerEl = document.getElementById('mower');
+    const mowerBody = document.getElementById('mower-body');
+    const container = document.getElementById('lawn-container');
+
+    let width, height;
+    
+    // Mower State
+    const mower = {
+        x: 0,
+        y: 0,
+        vx: config.speed,
+        vy: config.speed,
+        angle: 0,
+        targetX: null,
+        targetY: null,
+        mode: 'auto' // 'auto' or 'manual'
+    };
+
+    // --- Initialization ---
+    function init() {
+        resize();
+        window.addEventListener('resize', resize);
+        
+        // Initial mower placement
+        mower.x = width / 2;
+        mower.y = height / 2;
+        mower.vx = (Math.random() - 0.5) * config.speed;
+        mower.vy = (Math.random() - 0.5) * config.speed;
+        
+        // Apply inputs
+        mowerBody.setAttribute('fill', config.mowerColor);
+        updateMowerSize();
+
+        // Draw initial grass
+        drawFullGrass();
+
+        // Start loop
+        requestAnimationFrame(loop);
+    }
+
+    function updateMowerSize() {
+        mowerEl.style.width = `${config.size}px`;
+        mowerEl.style.height = `${config.size * 1.2}px`; // Aspect ratio of SVG
+    }
+
+    function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+        drawFullGrass(); // Redraw grass on resize
+    }
+
+    // --- Graphics ---
+    function drawFullGrass() {
+        ctx.fillStyle = config.grassColor;
+        ctx.fillRect(0, 0, width, height);
+        
+        // Add some texture
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        for(let i=0; i<width*height/400; i++) {
+            const x = Math.random() * width;
+            const y = Math.random() * height;
+            const h = Math.random() * 10 + 5;
+            ctx.fillRect(x, y, 2, h);
+        }
+    }
+
+    function regrowGrass() {
+        if (config.regrowthRate <= 0) return;
+        
+        // Randomly draw patches of grass back
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = config.grassColor;
+        
+        const patches = config.regrowthRate * 2;
+        for(let i=0; i<patches; i++) {
+            const x = Math.random() * width;
+            const y = Math.random() * height;
+            const s = Math.random() * 20 + 10;
+            
+            // Simple patch
+            ctx.beginPath();
+            ctx.arc(x, y, s, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Add texture detail occasionally
+            if (Math.random() > 0.5) {
+                ctx.fillStyle = 'rgba(0,0,0,0.05)';
+                ctx.fillRect(x, y, 2, 8);
+                ctx.fillStyle = config.grassColor;
+            }
+        }
+    }
+
+    // --- Physics & Logic ---
+    function updateMower() {
+        const speed = config.speed;
+        const radius = config.size / 2;
+
+        if (mower.mode === 'manual' && mower.targetX !== null) {
+            // Move towards target (mouse click)
+            const dx = mower.targetX - mower.x;
+            const dy = mower.targetY - mower.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            if (dist < 10) {
+                mower.mode = 'auto'; // Resume auto when reached
+                mower.vx = (Math.random() - 0.5) * speed;
+                mower.vy = (Math.random() - 0.5) * speed;
+            } else {
+                mower.vx = (dx / dist) * speed;
+                mower.vy = (dy / dist) * speed;
+            }
+        } else {
+            // Auto bounce
+            mower.x += mower.vx;
+            mower.y += mower.vy;
+
+            // Wall collisions
+            if (mower.x < radius || mower.x > width - radius) {
+                mower.vx *= -1;
+                mower.x = Math.max(radius, Math.min(width - radius, mower.x));
+                // Add a little randomness to avoid infinite loops
+                mower.vy += (Math.random() - 0.5) * 2;
+            }
+            if (mower.y < radius || mower.y > height - radius) {
+                mower.vy *= -1;
+                mower.y = Math.max(radius, Math.min(height - radius, mower.y));
+                mower.vx += (Math.random() - 0.5) * 2;
+            }
+            
+            // Normalize speed
+            const currentSpeed = Math.sqrt(mower.vx*mower.vx + mower.vy*mower.vy);
+            if (currentSpeed > 0.1) {
+                mower.vx = (mower.vx / currentSpeed) * speed;
+                mower.vy = (mower.vy / currentSpeed) * speed;
+            }
+        }
+
+        // Update position for next frame if manual (already done for auto)
+        if (mower.mode === 'manual') {
+            mower.x += mower.vx;
+            mower.y += mower.vy;
+        }
+
+        // Calculate Angle
+        mower.angle = Math.atan2(mower.vy, mower.vx) * (180 / Math.PI) + 90;
+
+        // Apply visual transform
+        // Adjust center offset because SVG is rectangular
+        mowerEl.style.transform = `translate(${mower.x - config.size/2}px, ${mower.y - config.size/2}px) rotate(${mower.angle}deg)`;
+    }
+
+    function cutGrass() {
+        // Cut the grass at mower position
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.beginPath();
+        // Cut slightly smaller than the mower width to simulate the blade deck
+        ctx.arc(mower.x, mower.y, config.size * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Reset composite operation
+        ctx.globalCompositeOperation = 'source-over';
+        
+        // Spawn particles (grass clippings)
+        if (Math.random() > 0.5) {
+            spawnParticle(mower.x, mower.y);
+        }
+    }
+
+    function spawnParticle(x, y) {
+        const el = document.createElement('div');
+        el.className = 'particle';
+        const size = Math.random() * 4 + 2;
+        el.style.width = size + 'px';
+        el.style.height = size + 'px';
+        
+        // Throw particles behind the mower
+        // Reverse vector
+        const angle = Math.atan2(mower.vy, mower.vx) + Math.PI + (Math.random() - 0.5); 
+        const dist = config.size / 2;
+        
+        const startX = x + Math.cos(angle) * dist;
+        const startY = y + Math.sin(angle) * dist;
+        
+        el.style.left = startX + 'px';
+        el.style.top = startY + 'px';
+        
+        container.appendChild(el);
+        
+        // Animate out
+        const duration = 500 + Math.random() * 500;
+        const throwDist = 50 + Math.random() * 50;
+        
+        const destX = startX + Math.cos(angle) * throwDist;
+        const destY = startY + Math.sin(angle) * throwDist;
+        
+        const anim = el.animate([
+            { transform: 'translate(0,0) scale(1)', opacity: 1 },
+            { transform: `translate(${destX - startX}px, ${destY - startY}px) scale(0.5)`, opacity: 0 }
+        ], {
+            duration: duration,
+            easing: 'ease-out'
+        });
+        
+        anim.onfinish = () => el.remove();
+    }
+
+    // --- Interaction ---
+    window.addEventListener('mousedown', (e) => {
+        mower.mode = 'manual';
+        mower.targetX = e.clientX;
+        mower.targetY = e.clientY;
+    });
+
+    // --- Main Loop ---
+    function loop() {
+        updateMower();
+        cutGrass();
+        regrowGrass();
+        requestAnimationFrame(loop);
+    }
+
+    // Start
+    init();
+
+</script>
+</body>
+</html>
