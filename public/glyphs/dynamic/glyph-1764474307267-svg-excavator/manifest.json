@@ -1,0 +1,40 @@
+{
+  "id": "glyph-1764474307267-svg-excavator",
+  "name": "SVG Excavator",
+  "prompt": "create a shove digging sim leveraging svg's",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-30T03:45:47.902Z",
+  "inputs": [
+    {
+      "id": "gridSize",
+      "type": "range",
+      "label": "Grid Size",
+      "min": 5,
+      "max": 30,
+      "defaultValue": 12,
+      "value": 29
+    },
+    {
+      "id": "treasureDensity",
+      "type": "range",
+      "label": "Treasure Chance %",
+      "min": 5,
+      "max": 50,
+      "defaultValue": 15,
+      "value": 19
+    },
+    {
+      "id": "showGrid",
+      "type": "toggle",
+      "label": "Show Grid Lines",
+      "defaultValue": false,
+      "value": false
+    }
+  ],
+  "icon": "⛏️"
+}

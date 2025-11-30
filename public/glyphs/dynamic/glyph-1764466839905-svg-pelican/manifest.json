@@ -14,25 +14,29 @@
       "id": "featherColor",
       "type": "color",
       "label": "Feather Color",
-      "defaultValue": "#f0f0f0"
+      "defaultValue": "#f0f0f0",
+      "value": "#f0f0f0"
     },
     {
       "id": "beakColor",
       "type": "color",
       "label": "Beak Color",
-      "defaultValue": "#ffaa00"
+      "defaultValue": "#ffaa00",
+      "value": "#f7ba36"
     },
     {
       "id": "skyColor",
       "type": "color",
       "label": "Sky Color",
-      "defaultValue": "#87CEEB"
+      "defaultValue": "#87CEEB",
+      "value": "#87CEEB"
     },
     {
       "id": "waterColor",
       "type": "color",
       "label": "Water Color",
-      "defaultValue": "#4682B4"
+      "defaultValue": "#4682B4",
+      "value": "#4682B4"
     },
     {
       "id": "bobSpeed",
@@ -41,7 +45,8 @@
       "min": 0,
       "max": 5,
       "defaultValue": 2,
-      "step": 0.1
+      "step": 0.1,
+      "value": 2
     }
   ],
   "icon": "🐦"

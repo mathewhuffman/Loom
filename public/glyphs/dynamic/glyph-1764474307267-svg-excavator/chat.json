@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764474347903-user",
+    "role": "user",
+    "content": "create a shove digging sim leveraging svg's",
+    "timestamp": 1764474347903,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764474347903-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"SVG Excavator\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764474347904,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764474347903-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764474347905,
+    "type": "info"
+  }
+]

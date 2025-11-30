@@ -16,6 +16,12 @@ if (layer === 'overlay') {
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    window.loom?.removeAllListeners?.();
+  });
+}
+
 if (layer === 'overlay') {
   root.render(
     <React.StrictMode>

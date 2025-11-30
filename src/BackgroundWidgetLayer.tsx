@@ -6,8 +6,8 @@
  * The GlyphIframe should only re-render when the actual glyph code changes.
  */
 
-import { useState, useEffect, useRef, memo, useMemo } from 'react';
-import GlyphIframe from './components/GlyphIframe';
+import { useState, useEffect, useRef, memo, useMemo, useCallback } from 'react';
+import GlyphIframe, { type GlyphIframeHandle } from './components/GlyphIframe';
 
 interface BackgroundWidget {
   id: string;
@@ -21,17 +21,37 @@ interface BackgroundWidget {
 }
 
 // Memoized iframe wrapper - only re-renders when code, glyphId, or inputs actually changes
-const MemoizedGlyphIframe = memo(function MemoizedGlyphIframe({ 
-  code, 
+const MemoizedGlyphIframe = memo(function MemoizedGlyphIframe({
+  code,
   glyphId,
-  inputs 
-}: { 
-  code: string; 
+  inputs,
+  widgetId,
+  registerDisposer,
+}: {
+  code: string;
   glyphId: string;
   inputs?: Record<string, unknown>;
+  widgetId: string;
+  registerDisposer?: (id: string, disposer: () => void) => (() => void) | void;
 }) {
+  const glyphRef = useRef<GlyphIframeHandle>(null);
+
+  useEffect(() => {
+    if (!registerDisposer) {
+      return;
+    }
+    const unregister = registerDisposer(widgetId, () => {
+      glyphRef.current?.dispose('widget-dispose');
+    });
+    return () => {
+      glyphRef.current?.dispose('widget-unmount');
+      unregister && unregister();
+    };
+  }, [registerDisposer, widgetId]);
+
   return (
     <GlyphIframe
+      ref={glyphRef}
       code={code}
       glyphId={glyphId}
       glyphType="widget"
@@ -44,10 +64,12 @@ const MemoizedGlyphIframe = memo(function MemoizedGlyphIframe({
   return prev.code === next.code && prev.glyphId === next.glyphId && prev.inputs === next.inputs;
 });
 
-const BackgroundWidgetContainer = memo(function BackgroundWidgetContainer({ 
-  widget 
-}: { 
+const BackgroundWidgetContainer = memo(function BackgroundWidgetContainer({
+  widget,
+  registerDisposer,
+}: {
   widget: BackgroundWidget;
+  registerDisposer?: (id: string, disposer: () => void) => (() => void) | void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -82,7 +104,13 @@ const BackgroundWidgetContainer = memo(function BackgroundWidgetContainer({
 
   return (
     <div ref={containerRef} style={containerStyle}>
-      <MemoizedGlyphIframe code={widget.code} glyphId={widget.glyphId} inputs={widget.inputs} />
+      <MemoizedGlyphIframe
+        code={widget.code}
+        glyphId={widget.glyphId}
+        inputs={widget.inputs}
+        widgetId={widget.id}
+        registerDisposer={registerDisposer}
+      />
     </div>
   );
 }, (prev, next) => {
@@ -101,7 +129,31 @@ const BackgroundWidgetContainer = memo(function BackgroundWidgetContainer({
 
 export default function BackgroundWidgetLayer() {
   const [widgets, setWidgets] = useState<BackgroundWidget[]>([]);
-  const listenerRegistered = useRef(false);
+  const widgetTokenMap = useRef(new Map<string, object>());
+  const widgetDisposerMap = useRef(new WeakMap<object, () => void>());
+
+  const registerWidgetDisposer = useCallback((widgetId: string, disposer: () => void) => {
+    let token = widgetTokenMap.current.get(widgetId);
+    if (!token) {
+      token = {};
+      widgetTokenMap.current.set(widgetId, token);
+    }
+    widgetDisposerMap.current.set(token, disposer);
+    return () => {
+      widgetDisposerMap.current.delete(token!);
+    };
+  }, []);
+
+  const invokeWidgetDisposer = useCallback((widgetId: string) => {
+    const token = widgetTokenMap.current.get(widgetId);
+    if (!token) return;
+    const disposer = widgetDisposerMap.current.get(token);
+    if (disposer) {
+      disposer();
+      widgetDisposerMap.current.delete(token);
+    }
+    widgetTokenMap.current.delete(widgetId);
+  }, []);
 
   useEffect(() => {
     if (!window.loom) {
@@ -109,30 +161,27 @@ export default function BackgroundWidgetLayer() {
       return;
     }
 
-    if (listenerRegistered.current) return;
-    listenerRegistered.current = true;
+    console.log('[BackgroundWidgetLayer] 🎧 Registering widget listeners');
+    const unsubs: Array<(() => void) | undefined> = [];
 
-    console.log('[BackgroundWidgetLayer] 🎧 Registering widget-layer-update listener');
-
-    window.loom.onWidgetLayerUpdate?.(({ widgetId, widgetData }) => {
-      if (!widgetData) {
-        setWidgets((prev) => prev.filter((w) => w.id !== widgetId));
-        return;
-      }
-
-      if (widgetData.layer !== 'background') {
-        setWidgets((prev) => prev.filter((w) => w.id !== widgetId));
+    const widgetLayerUnsub = window.loom.onWidgetLayerUpdate?.(({ widgetId, widgetData }) => {
+      if (!widgetData || widgetData.layer !== 'background') {
+        setWidgets((prev) => {
+          if (!prev.some((w) => w.id === widgetId)) {
+            return prev;
+          }
+          invokeWidgetDisposer(widgetId);
+          return prev.filter((w) => w.id !== widgetId);
+        });
         return;
       }
 
       setWidgets((prev) => {
         const existingIndex = prev.findIndex((w) => w.id === widgetId);
-        
+
         if (existingIndex >= 0) {
           const existing = prev[existingIndex];
-          
-          // Check if anything actually changed to avoid unnecessary re-renders
-          const positionChanged = 
+          const positionChanged =
             existing.x !== widgetData.x ||
             existing.y !== widgetData.y ||
             existing.width !== widgetData.width ||
@@ -140,18 +189,16 @@ export default function BackgroundWidgetLayer() {
           const codeChanged = existing.code !== widgetData.code;
           const glyphIdChanged = existing.glyphId !== widgetData.glyphId;
           const inputsChanged = existing.inputs !== widgetData.inputs;
-          
-          // If nothing changed, return the same array reference
+
           if (!positionChanged && !codeChanged && !glyphIdChanged && !inputsChanged) {
             return prev;
           }
-          
-          // Only update what actually changed, preserving code reference if unchanged
+
           const clone = [...prev];
           clone[existingIndex] = {
             id: widgetId,
             glyphId: glyphIdChanged ? widgetData.glyphId : existing.glyphId,
-            code: codeChanged ? widgetData.code : existing.code, // Preserve code reference if unchanged
+            code: codeChanged ? widgetData.code : existing.code,
             x: widgetData.x,
             y: widgetData.y,
             width: widgetData.width,
@@ -160,8 +207,7 @@ export default function BackgroundWidgetLayer() {
           };
           return clone;
         }
-        
-        // New widget
+
         const newWidget: BackgroundWidget = {
           id: widgetId,
           glyphId: widgetData.glyphId,
@@ -175,24 +221,18 @@ export default function BackgroundWidgetLayer() {
         return [...prev, newWidget];
       });
     });
-    
-    // Listen for glyph code updates - auto-refresh widgets when glyph is saved
-    console.log('[BackgroundWidgetLayer] 🎧 Registering glyph-updated listener');
-    window.loom.onGlyphUpdated?.((data: { 
-      glyphId: string; 
-      code: string; 
+
+    const glyphUpdatedUnsub = window.loom.onGlyphUpdated?.((data: {
+      glyphId: string;
+      code: string;
       inputs?: Record<string, unknown>;
       changedFile: string;
     }) => {
-      console.log('[BackgroundWidgetLayer] 🔄 Glyph updated:', data.glyphId, data.changedFile);
-      
-      // Update all widgets that use this glyph
       setWidgets((prev) => {
-        const hasMatchingWidget = prev.some(w => w.glyphId === data.glyphId);
+        const hasMatchingWidget = prev.some((w) => w.glyphId === data.glyphId);
         if (!hasMatchingWidget) return prev;
-        
-        console.log('[BackgroundWidgetLayer] 🔄 Refreshing background widgets for glyph:', data.glyphId);
-        return prev.map(widget => {
+
+        return prev.map((widget) => {
           if (widget.glyphId === data.glyphId) {
             return {
               ...widget,
@@ -204,7 +244,19 @@ export default function BackgroundWidgetLayer() {
         });
       });
     });
-  }, []);
+
+    unsubs.push(widgetLayerUnsub, glyphUpdatedUnsub);
+
+    return () => {
+      unsubs.forEach((unsub) => {
+        try {
+          unsub && unsub();
+        } catch (err) {
+          console.error('[BackgroundWidgetLayer] ⚠️ Failed to remove listener', err);
+        }
+      });
+    };
+  }, [invokeWidgetDisposer]);
 
   return (
     <div
@@ -219,7 +271,11 @@ export default function BackgroundWidgetLayer() {
       }}
     >
       {widgets.map((widget) => (
-        <BackgroundWidgetContainer key={widget.id} widget={widget} />
+        <BackgroundWidgetContainer
+          key={widget.id}
+          widget={widget}
+          registerDisposer={registerWidgetDisposer}
+        />
       ))}
     </div>
   );

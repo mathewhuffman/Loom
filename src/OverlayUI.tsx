@@ -1209,20 +1209,22 @@ export default function OverlayUI() {
         const newLayer: WidgetLayer = w.layer === 'foreground' ? 'background' : 'foreground';
         console.log(`[Overlay] 🔄 Widget ${id} layer: ${w.layer} → ${newLayer}`);
         
-        // Notify main process to handle layer change
-        const widgetData = {
-          id: w.id,
-          glyphId: w.glyphId,
-          x: w.x,
-          y: w.y,
-          width: w.width,
-          height: w.height,
-          prompt: w.prompt,
-          code: w.code,
-          layer: newLayer,
-          inputs: w.inputs,
-        };
-        window.loom?.sendWidgetToLayer?.(id, widgetData);
+        if (newLayer === 'background') {
+          window.loom?.sendWidgetToLayer?.(id, {
+            id: w.id,
+            glyphId: w.glyphId,
+            x: w.x,
+            y: w.y,
+            width: w.width,
+            height: w.height,
+            prompt: w.prompt,
+            code: w.code,
+            layer: newLayer,
+            inputs: w.inputs,
+          });
+        } else {
+          window.loom?.sendWidgetToLayer?.(id, null);
+        }
         
         return { 
           ...w, 
@@ -1232,7 +1234,7 @@ export default function OverlayUI() {
       });
       return updated;
     });
-  }, []);
+  }, [allocateZIndex]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();

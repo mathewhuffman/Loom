@@ -1,0 +1,312 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Dino</title>
+    <style>
+        :root {
+            --skin: #6bbc55;
+            --belly: #96dba8;
+            --eye: #222222;
+            --speed: 0.6s;
+            --bg-color: transparent;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: var(--bg-color);
+            overflow: hidden;
+            font-family: sans-serif;
+        }
+
+        .scene {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        svg {
+            width: 80vmin;
+            height: 80vmin;
+            overflow: visible;
+            cursor: pointer;
+            transition: transform 0.1s ease-out;
+        }
+
+        /* Body Parts Coloring */
+        .skin-fill { fill: var(--skin); }
+        .skin-stroke { stroke: var(--skin); }
+        .belly-fill { fill: var(--belly); }
+        .eye-fill { fill: var(--eye); }
+
+        /* Animations */
+        .anim-group {
+            animation-play-state: running;
+        }
+
+        .leg-back {
+            transform-origin: 90px 130px;
+            animation: walk var(--speed) infinite ease-in-out alternate-reverse;
+        }
+
+        .leg-front {
+            transform-origin: 130px 130px;
+            animation: walk var(--speed) infinite ease-in-out alternate;
+        }
+
+        .tail {
+            transform-origin: 60px 110px;
+            animation: wag var(--speed) infinite ease-in-out alternate;
+        }
+
+        .arm {
+            transform-origin: 140px 100px;
+            animation: arm-sway var(--speed) infinite ease-in-out alternate;
+        }
+
+        .body-wrapper {
+            animation: bob calc(var(--speed) / 2) infinite ease-in-out alternate;
+        }
+        
+        .head-group {
+            transform-origin: 140px 80px;
+            transition: transform 0.1s ease-out;
+        }
+
+        /* Keyframes */
+        @keyframes walk {
+            from { transform: rotate(-25deg); }
+            to { transform: rotate(25deg); }
+        }
+
+        @keyframes wag {
+            from { transform: rotate(-5deg); }
+            to { transform: rotate(10deg); }
+        }
+
+        @keyframes bob {
+            from { transform: translateY(0); }
+            to { transform: translateY(2px); }
+        }
+
+        @keyframes arm-sway {
+            from { transform: rotate(15deg); }
+            to { transform: rotate(-15deg); }
+        }
+
+        /* Roar Interaction */
+        .mouth-open {
+            opacity: 0;
+            transition: opacity 0.1s;
+        }
+        .mouth-closed {
+            opacity: 1;
+            transition: opacity 0.1s;
+        }
+        
+        .roaring .mouth-open { opacity: 1; }
+        .roaring .mouth-closed { opacity: 0; }
+        
+        .roar-text {
+            position: absolute;
+            top: 20%;
+            right: 20%;
+            font-size: 3rem;
+            font-weight: 900;
+            color: var(--skin);
+            text-shadow: 2px 2px 0px #000;
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(0.5) rotate(-10deg);
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .roaring-text-active {
+            opacity: 1;
+            transform: scale(1.2) rotate(10deg);
+            top: 15%;
+        }
+
+        /* Shadow */
+        .shadow {
+            fill: rgba(0,0,0,0.2);
+            transform-origin: center;
+            animation: shadow-scale calc(var(--speed) / 2) infinite ease-in-out alternate;
+        }
+        
+        @keyframes shadow-scale {
+            from { transform: scale(1); opacity: 0.2; }
+            to { transform: scale(1.1); opacity: 0.25; }
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="scene">
+    <svg id="dino" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <!-- Shadow -->
+        <ellipse cx="100" cy="170" rx="60" ry="10" class="shadow" />
+
+        <!-- Back Leg -->
+        <g class="leg-back anim-group">
+            <path d="M75,120 Q70,160 85,170 L105,170 Q110,160 105,120 Z" class="skin-fill" style="filter: brightness(0.8);"/>
+            <path d="M85,170 L90,170 L90,165" fill="none" stroke="rgba(0,0,0,0.2)" stroke-width="2" stroke-linecap="round"/>
+        </g>
+
+        <!-- Tail -->
+        <g class="tail anim-group">
+            <path d="M60,110 Q20,110 5,90 L5,100 Q30,130 70,125 Z" class="skin-fill" />
+            <path d="M20,105 L40,115" stroke="rgba(0,0,0,0.1)" stroke-width="3" fill="none" />
+        </g>
+
+        <!-- Body Wrapper for Bobbing -->
+        <g class="body-wrapper anim-group">
+            <!-- Main Body -->
+            <ellipse cx="100" cy="110" rx="50" ry="40" class="skin-fill" />
+            <!-- Belly Patch -->
+            <path d="M70,135 Q100,155 130,135 Q120,100 100,100 Q80,100 70,135" class="belly-fill" opacity="0.8" />
+            
+            <!-- Spikes (Conditional) -->
+            <g id="spikes-group" fill="#4a8c3a" style="display: none;">
+                <path d="M55,90 L65,75 L75,85 Z" />
+                <path d="M75,80 L85,65 L95,75 Z" />
+                <path d="M95,75 L105,60 L115,70 Z" />
+                <path d="M115,75 L125,65 L135,80 Z" />
+            </g>
+
+            <!-- Front Leg -->
+            <g class="leg-front anim-group">
+                <path d="M115,120 Q110,160 125,170 L145,170 Q150,160 145,120 Z" class="skin-fill" />
+                <path d="M125,170 L130,170 L130,165" fill="none" stroke="rgba(0,0,0,0.2)" stroke-width="2" stroke-linecap="round"/>
+            </g>
+
+            <!-- Head Group -->
+            <g class="head-group" id="head">
+                <!-- Neck connection -->
+                <path d="M120,90 Q130,70 140,80 L140,100 Z" class="skin-fill" />
+                
+                <!-- Head Shape -->
+                <rect x="120" y="50" width="60" height="50" rx="15" ry="15" class="skin-fill" />
+                
+                <!-- Snout/Mouth Area -->
+                <path d="M160,75 L180,75 Q185,75 185,85 L160,85 Z" class="skin-fill" />
+
+                <!-- Eye -->
+                <circle cx="145" cy="70" r="5" class="eye-fill" />
+                <circle cx="147" cy="68" r="1.5" fill="white" />
+
+                <!-- Mouth Closed -->
+                <path class="mouth-closed" d="M160,85 Q170,85 180,85" stroke="#333" stroke-width="2" fill="none" stroke-linecap="round"/>
+                
+                <!-- Mouth Open (Roar) -->
+                <path class="mouth-open" d="M160,82 Q170,75 180,80 L175,95 Q165,95 160,82 Z" fill="#333" />
+                <path class="mouth-open" d="M165,84 L168,88 L171,84" fill="white" /> <!-- Tooth -->
+            </g>
+
+            <!-- Arm -->
+            <g class="arm anim-group">
+                <rect x="130" y="100" width="30" height="10" rx="5" class="skin-fill" />
+                <circle cx="155" cy="105" r="2" fill="rgba(0,0,0,0.2)" />
+            </g>
+        </g>
+    </svg>
+    <div id="roar-bubble" class="roar-text">RAWR!</div>
+</div>
+
+<script>
+    const inputs = window.GLYPH_INPUTS || {};
+    const root = document.documentElement;
+
+    // Apply configuration
+    root.style.setProperty('--skin', inputs.skinColor || '#6bbc55');
+    root.style.setProperty('--belly', inputs.bellyColor || '#96dba8');
+    root.style.setProperty('--eye', inputs.eyeColor || '#222222');
+    
+    // Spikes visibility
+    if (inputs.showSpikes !== false) {
+        document.getElementById('spikes-group').style.display = 'block';
+    }
+
+    // Animation Speed
+    const speed = inputs.walkSpeed !== undefined ? inputs.walkSpeed : 1.5;
+    if (speed <= 0) {
+        root.style.setProperty('--speed', '0s');
+        // Pause animations via JS if needed, but 0s duration usually freezes or snaps
+        document.querySelectorAll('.anim-group').forEach(el => el.style.animationPlayState = 'paused');
+    } else {
+        root.style.setProperty('--speed', (1 / speed) + 's');
+    }
+
+    // Interaction Logic
+    const dino = document.getElementById('dino');
+    const head = document.getElementById('head');
+    const roarBubble = document.getElementById('roar-bubble');
+    const scene = document.querySelector('.scene');
+    let isRoaring = false;
+
+    // Head Tracking
+    window.addEventListener('mousemove', (e) => {
+        if (!head) return;
+        
+        const rect = dino.getBoundingClientRect();
+        const dinoCenterX = rect.left + rect.width / 2;
+        const dinoCenterY = rect.top + rect.height / 2;
+        
+        // Calculate angle
+        const dx = e.clientX - dinoCenterX;
+        const dy = e.clientY - dinoCenterY;
+        
+        // Dampen the movement and clamp it
+        let angleX = dx / 20; 
+        let angleY = dy / 20;
+        
+        // Limits
+        angleX = Math.max(-15, Math.min(15, angleX));
+        angleY = Math.max(-15, Math.min(15, angleY));
+        
+        head.style.transform = `translate(${angleX}px, ${angleY}px) rotate(${angleX * 0.5}deg)`;
+    });
+
+    // Roar Action
+    const triggerRoar = () => {
+        if (isRoaring) return;
+        isRoaring = true;
+        
+        dino.classList.add('roaring');
+        roarBubble.classList.add('roaring-text-active');
+        
+        // Shake effect
+        dino.style.transform = 'scale(1.05)';
+        setTimeout(() => dino.style.transform = 'scale(1.0)', 100);
+
+        setTimeout(() => {
+            dino.classList.remove('roaring');
+            roarBubble.classList.remove('roaring-text-active');
+            isRoaring = false;
+        }, 800);
+    };
+
+    dino.addEventListener('click', triggerRoar);
+    
+    // Also roar on key press
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' || e.key === 'Enter') {
+            triggerRoar();
+        }
+    });
+
+</script>
+</body>
+</html>
