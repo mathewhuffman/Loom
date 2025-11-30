@@ -1,0 +1,15 @@
+{
+  "id": "glyph-1764220946040-occult-nebula",
+  "name": "Occult Nebula",
+  "type": "background",
+  "prompt": "recreate this glyph: #define pi 3.14159 float h(vec3 p3){ \tp3 = fract(p3 * vec3(.1031,.1030, .0973));     p3 += dot(p3, p3.yxz+33.33);     return fract((p3.x + p3.y)*p3.z); } #define q smoothstep float a(vec2 uv, float i, out float f){     float cs, c, v, l = length(uv),     n = fract(((atan(uv.y, uv.x)+pi)/6.28318) + .801 * i);          n += .0125*sin(.5*iTime);     n += q(.17, .1, l) * .004*sin(.5*i + 3.*iTime+100.*l);             cs = 250. + mod(i, 3.) * 75.;     c = mod(floor(cs*n), cs);     if(step(1., mod(c, 2.)) > 0.){         return 1.;     }     v = fract(cs * n) - .5;     f = sqrt(1.-v*v);          return mix(.18,.19, .5+.5*sin(0.5*i)) - .05 * h(vec3(11. * c, 5.0142*i, .125+17.*c)) - .012*f; } float s(vec3 o, vec3 r, out float f){     float g = .0066, l = 180., ff, q, d, dd = 1e5;     for(float i = float(min(iFrame, 0)); i < l; i++){         q = mod(g * i - .1 * iTime, l * g);         d = -(o.z + q) / r.z;         vec2 uv = (o + r * d).xy;         if(length(uv) > a(uv, i, ff)){             if(d < dd){                 dd = d;                 f = ff;             }         }     }     return dd; } float g(vec3 p, float f){     return clamp(abs(dot(sin(p*0.5), cos(p.zxy*1.23) * f)) - 0.1, 0.0, 3.0)/3.0; } float fbm(vec3 p){      p.z -= 1.6*iTime;      int o = 4;     float s = 1.95, n = pi / float(o), w = 0.0, a = 1.0, f = 1.0, r = 0.0;     mat3 m3 = s * mat3(cos(n), sin(n), 0, -sin(n), cos(n), 0, 0, 0, 1);          for(int i = min(0, iFrame); i < o; i++){         r += a * g(p, f);         p *= m3;         w += a;         a *= 0.7;         f *= 0.78;     }          return clamp(r / w, 0.0, 1.0); } float i(float d, float r, float i){ \treturn max(0.0, pow(r/max(d, 1e-5), i));\t } #define j iResolution void mainImage( out vec4 fc, vec2 fg ) {     vec3 k, z, x, r, p, c;     float t = 0.05 * iTime + 20.0;     k = vec3(0.075*cos(t),-0.075*sin(t),.05);     z = normalize(vec3(0,0,-1)-k);         x = normalize(cross(z, vec3(0, 1, 0)));     r = normalize(mat3(x, cross(x, z), -z) * vec3(fg - j.xy * .5, -(.5 * j.y) / .36397040));     float f, d;     d = s(k, r, f);     p = k + r * d;          c = 0.25*vec3(q(.2, 0., length(p.xy))) * vec3(0.3, 0.7, 0.9) * 0.25 * i(fbm(16.0*p), 0.5, 1.5);     c += 0.5 * vec3(0.74, 0.65, 0.65) * i(1.0-q(0.15, 0.1155, length(p.xy)), 0.1, 3.0);     c *= vec3(f*f*f) * q(-1.2, 0., p.z);     c = 1.-exp(-c);     c = pow(c, vec3(.4545));     vec2 u = fg.xy / j.xy;     c *= .5 + .5 * pow(16. * u.x * u.y * (1. - u.x) * (1. - u.y), .5);     fc = vec4(c, 1); }",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-27T05:22:26.040Z",
+  "bundled": true,
+  "version": "1.0.0"
+}

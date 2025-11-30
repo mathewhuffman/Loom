@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import GlyphIframe from './components/GlyphIframe';
 
 interface GlyphInstance {
@@ -7,6 +7,7 @@ interface GlyphInstance {
   code: string;
   prompt: string;
   createdAt: number;
+  inputs?: Record<string, unknown>;
 }
 
 function DefaultBackdrop() {
@@ -39,44 +40,79 @@ export default function LoomScene() {
   const [backgroundGlyph, setBackgroundGlyph] = useState<GlyphInstance | null>(null);
   const [summoningPrompt, setSummoningPrompt] = useState<string | null>(null);
 
+  const handleSummonStart = useCallback((data: { prompt: string }) => {
+    setSummoningPrompt(data.prompt);
+  }, []);
+
+  const handleInject = useCallback((data: { code: string; prompt: string; glyphId?: string; inputs?: Record<string, unknown> }) => {
+    console.log('[Background] 📥 summon-inject received', {
+      glyphId: data.glyphId,
+      codeLength: data.code?.length,
+      promptPreview: data.prompt?.slice(0, 80),
+      inputsCount: data.inputs ? Object.keys(data.inputs).length : 0,
+    });
+    const glyph: GlyphInstance = {
+      id: `glyph-${Date.now()}`,
+      glyphId: data.glyphId,
+      code: data.code,
+      prompt: data.prompt,
+      createdAt: Date.now(),
+      inputs: data.inputs,
+    };
+
+    setSummoningPrompt(null);
+    console.log('[Background] 🌌 Setting background glyph', glyph.glyphId || glyph.id);
+    setBackgroundGlyph(glyph);
+    console.log('[Background] ✅ Glyph enqueued for rendering');
+  }, []);
+
+  const handleSummonComplete = useCallback(() => {
+    setSummoningPrompt(null);
+  }, []);
+
+  const handleSummonClear = useCallback(() => {
+    console.log('[Background] 🧹 summon-clear received - clearing background glyph');
+    setSummoningPrompt(null);
+    setBackgroundGlyph(null);
+  }, []);
+
   useEffect(() => {
     if (!window.loom) return;
+    const unsubs: Array<(() => void) | undefined> = [];
 
-    const handleSummonStart = (data: { prompt: string }) => {
-      setSummoningPrompt(data.prompt);
-    };
-
-    const handleInject = (data: { code: string; prompt: string; glyphId?: string }) => {
-      console.log('[Background] 📥 summon-inject received', {
-        glyphId: data.glyphId,
-        codeLength: data.code?.length,
-        promptPreview: data.prompt?.slice(0, 80),
-      });
-      const glyph: GlyphInstance = {
-        id: `glyph-${Date.now()}`,
-        glyphId: data.glyphId,
-        code: data.code,
-        prompt: data.prompt,
-        createdAt: Date.now(),
-      };
-
-      setSummoningPrompt(null);
-      console.log('[Background] 🌌 Setting background glyph', glyph.glyphId || glyph.id);
-      setBackgroundGlyph(glyph);
-      console.log('[Background] ✅ Glyph enqueued for rendering');
-    };
-
-    const handleSummonComplete = () => {
-      // Clear the summoning prompt when streaming completes (entering review mode)
-      setSummoningPrompt(null);
-    };
-
-    window.loom.onSummonStart?.(handleSummonStart);
-    window.loom.onSummonInject?.(handleInject);
-    window.loom.onSummonComplete?.(handleSummonComplete);
+    unsubs.push(
+      window.loom.onSummonStart?.(handleSummonStart),
+      window.loom.onSummonInject?.(handleInject),
+      window.loom.onSummonComplete?.(handleSummonComplete),
+      window.loom.onSummonClear?.(handleSummonClear),
+    );
 
     return () => {
-      // keep global listeners (no removeAll to avoid disrupting overlay)
+      unsubs.forEach((unsub) => unsub && unsub());
+    };
+  }, [handleSummonStart, handleInject, handleSummonComplete, handleSummonClear]);
+
+  useEffect(() => {
+    if (!window.loom?.onGlyphUpdated) return;
+    const unsubscribe = window.loom.onGlyphUpdated((data: {
+      glyphId: string;
+      code: string;
+      inputs?: Record<string, unknown>;
+    }) => {
+      setBackgroundGlyph(prev => {
+        if (!prev) return prev;
+        const prevId = prev.glyphId || prev.id;
+        if (prevId !== data.glyphId) return prev;
+        return {
+          ...prev,
+          code: data.code,
+          inputs: data.inputs ?? prev.inputs,
+          createdAt: Date.now(),
+        };
+      });
+    });
+    return () => {
+      unsubscribe?.();
     };
   }, []);
 
@@ -88,6 +124,7 @@ export default function LoomScene() {
           glyphId={backgroundGlyph.glyphId || backgroundGlyph.id}
           glyphType="background"
           title="loom-background"
+          inputs={backgroundGlyph.inputs}
         />
       ) : (
         <DefaultBackdrop />

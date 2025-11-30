@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .portal-container {
+      position: relative;
+      width: 300px;
+      height: 300px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .portal-ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      animation: spin 8s linear infinite;
+    }
+
+    .ring-1 {
+      width: 280px;
+      height: 280px;
+      border-color: rgba(0, 255, 255, 0.6);
+      animation-duration: 12s;
+    }
+
+    .ring-2 {
+      width: 240px;
+      height: 240px;
+      border-color: rgba(255, 0, 255, 0.5);
+      animation-duration: 8s;
+      animation-direction: reverse;
+    }
+
+    .ring-3 {
+      width: 200px;
+      height: 200px;
+      border-color: rgba(0, 255, 136, 0.4);
+      animation-duration: 6s;
+    }
+
+    .portal-core {
+      position: relative;
+      width: 150px;
+      height: 150px;
+      background: radial-gradient(circle at 30% 30%, rgba(0, 255, 255, 0.3), rgba(255, 0, 255, 0.2), transparent);
+      border-radius: 50%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      animation: pulse 3s ease-in-out infinite;
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
+
+    .portal-core:hover {
+      transform: scale(1.1);
+    }
+
+    .portal-icon {
+      font-size: 36px;
+      margin-bottom: 8px;
+      filter: drop-shadow(0 0 10px rgba(0, 255, 255, 0.8));
+    }
+
+    .portal-text {
+      font-size: 11px;
+      letter-spacing: 3px;
+      color: rgba(255, 255, 255, 0.9);
+      text-transform: uppercase;
+      text-align: center;
+    }
+
+    .particles {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .particle {
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      background: #00ffff;
+      border-radius: 50%;
+      animation: float 4s ease-in-out infinite;
+      box-shadow: 0 0 10px rgba(0, 255, 255, 0.8);
+    }
+
+    .welcome-message {
+      position: absolute;
+      bottom: -60px;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 12px;
+      letter-spacing: 1px;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s ease;
+    }
+
+    .portal-container:hover .welcome-message {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { 
+        box-shadow: 0 0 30px rgba(0, 255, 255, 0.3), 0 0 60px rgba(255, 0, 255, 0.2);
+      }
+      50% { 
+        box-shadow: 0 0 50px rgba(0, 255, 255, 0.5), 0 0 100px rgba(255, 0, 255, 0.3);
+      }
+    }
+
+    @keyframes float {
+      0%, 100% { 
+        transform: translateY(0) scale(1);
+        opacity: 0.8;
+      }
+      50% { 
+        transform: translateY(-20px) scale(1.2);
+        opacity: 0.4;
+      }
+    }
+
+    .glyph-info {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <div class="portal-container">
+    <div class="portal-ring ring-1"></div>
+    <div class="portal-ring ring-2"></div>
+    <div class="portal-ring ring-3"></div>
+    
+    <div class="particles" id="particles"></div>
+    
+    <div class="portal-core" onclick="showGreeting()">
+      <span class="portal-icon">🔮</span>
+      <span class="portal-text">LOOM</span>
+    </div>
+    
+    <div class="welcome-message">
+      Click to manifest your first creation
+    </div>
+  </div>
+  
+  <div class="glyph-info">📦 Bundled Example Glyph</div>
+
+  <script>
+    // Create floating particles
+    const particlesContainer = document.getElementById('particles');
+    for (let i = 0; i < 8; i++) {
+      const particle = document.createElement('div');
+      particle.className = 'particle';
+      particle.style.left = Math.random() * 100 + '%';
+      particle.style.top = Math.random() * 100 + '%';
+      particle.style.animationDelay = Math.random() * 4 + 's';
+      particle.style.background = Math.random() > 0.5 ? '#00ffff' : '#ff00ff';
+      particlesContainer.appendChild(particle);
+    }
+
+    // Greeting animation
+    function showGreeting() {
+      const core = document.querySelector('.portal-core');
+      const icon = document.querySelector('.portal-icon');
+      
+      // Burst animation
+      core.style.animation = 'none';
+      core.offsetHeight; // Trigger reflow
+      core.style.animation = 'pulse 0.5s ease-out';
+      
+      // Change icon temporarily
+      const originalIcon = icon.textContent;
+      icon.textContent = '✨';
+      
+      setTimeout(() => {
+        icon.textContent = originalIcon;
+        core.style.animation = 'pulse 3s ease-in-out infinite';
+      }, 1000);
+    }
+  </script>
+</body>
+</html>
+

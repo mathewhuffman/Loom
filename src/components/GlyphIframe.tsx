@@ -1,7 +1,14 @@
-import React, { useMemo, useRef, useEffect, useCallback } from 'react';
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+} from 'react';
 import { buildGlyphIframe } from '../ai/GlyphCompiler';
 
-interface GlyphIframeProps {
+export interface GlyphIframeProps {
   code: string;
   glyphId?: string;
   glyphType?: string;
@@ -10,115 +17,179 @@ interface GlyphIframeProps {
   style?: React.CSSProperties;
   background?: string;
   allowPointerEvents?: boolean;
-  inputs?: Record<string, unknown>; // Dynamic input values to inject
+  inputs?: Record<string, unknown>;
   onError?: (error: string | null) => void;
   onLoad?: () => void;
-  allowExternalUrls?: boolean; // Allow loading external URLs (removes sandbox restrictions)
+  allowExternalUrls?: boolean;
 }
 
-// Type for window.loom API
-declare global {
-  interface Window {
-    loom?: {
-      readLocalFile?: (path: string) => Promise<unknown>;
-      listDirectory?: (path: string) => Promise<unknown>;
-      getSystemPaths?: () => Promise<unknown>;
-      readGlyphFile?: (glyphId: string, fileName: string) => Promise<unknown>;
-      saveGlyphFile?: (glyphId: string, fileName: string, content: string) => Promise<unknown>;
-    };
+export interface GlyphIframeHandle {
+  dispose: (reason?: string) => void;
+  element: () => HTMLIFrameElement | null;
+}
+
+const hashString = (input: string) => {
+  let hash = 5381;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 33) ^ input.charCodeAt(i);
   }
-}
+  return (hash >>> 0).toString(36);
+};
 
-export default function GlyphIframe({
-  code,
-  glyphId,
-  glyphType,
-  title,
-  className,
-  style,
-  background,
-  allowPointerEvents = true,
-  inputs,
-  onError,
-  onLoad,
-  allowExternalUrls = false,
-}: GlyphIframeProps) {
+const GlyphIframe = forwardRef<GlyphIframeHandle, GlyphIframeProps>(function GlyphIframe(
+  {
+    code,
+    glyphId,
+    glyphType,
+    title,
+    className,
+    style,
+    background,
+    allowPointerEvents = true,
+    inputs,
+    onError,
+    onLoad,
+    allowExternalUrls = false,
+  },
+  ref,
+) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  
   const iframeDoc = useMemo(
     () => buildGlyphIframe(code, { glyphId, glyphType, background, inputs }),
-    [code, glyphId, glyphType, background, inputs]
+    [code, glyphId, glyphType, background, inputs],
   );
-  
-  // Handle loom API requests from iframe via postMessage
-  const handleMessage = useCallback(async (event: MessageEvent) => {
-    // Only handle messages from our iframe
-    if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) {
-      return;
-    }
-    
-    const data = event.data;
-    if (!data || data.type !== 'loom-request') {
-      return;
-    }
-    
-    const { id, method, args } = data;
-    let result: unknown = { success: false, error: 'Method not available' };
-    
-    try {
-      // Check if we have access to the real loom API
-      if (window.loom) {
-        switch (method) {
-          case 'readLocalFile':
-            if (window.loom.readLocalFile) {
-              result = await window.loom.readLocalFile(args[0]);
-            }
-            break;
-          case 'listDirectory':
-            if (window.loom.listDirectory) {
-              result = await window.loom.listDirectory(args[0]);
-            }
-            break;
-          case 'getSystemPaths':
-            if (window.loom.getSystemPaths) {
-              result = await window.loom.getSystemPaths();
-            }
-            break;
-          case 'readGlyphFile':
-            if (window.loom.readGlyphFile) {
-              result = await window.loom.readGlyphFile(args[0], args[1]);
-            }
-            break;
-          case 'saveGlyphFile':
-            if (window.loom.saveGlyphFile) {
-              result = await window.loom.saveGlyphFile(args[0], args[1], args[2]);
-            }
-            break;
-          default:
-            result = { success: false, error: `Unknown method: ${method}` };
-        }
-      } else {
-        result = { success: false, error: 'Loom API not available in parent context' };
+  const codeHash = useMemo(
+    () => hashString(iframeDoc.srcDoc || code || ''),
+    [iframeDoc.srcDoc, code],
+  );
+
+  const disposeFrame = useCallback(
+    (frame: HTMLIFrameElement | null, reason: 'update' | 'unmount' | 'external' = 'update') => {
+      if (!frame) return;
+      try {
+        frame.contentWindow?.postMessage({ type: 'glyph-dispose', reason }, '*');
+      } catch {
+        // Ignore cross-origin errors (cross-origin src)
       }
-    } catch (err) {
-      result = { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
-    }
-    
-    // Send response back to iframe
-    iframeRef.current?.contentWindow?.postMessage({
-      type: 'loom-response',
-      id,
-      result,
-    }, '*');
-  }, []);
+      try {
+        frame.srcdoc = 'about:blank';
+      } catch {
+        // Ignore assignment errors (detached frame)
+      }
+    },
+    [],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      dispose: (reason?: string) => disposeFrame(iframeRef.current, (reason as any) ?? 'external'),
+      element: () => iframeRef.current,
+    }),
+    [disposeFrame],
+  );
+
+  // Use a mounted ref to detect React StrictMode double-mount
+  // StrictMode unmounts/remounts synchronously, so we delay disposal
+  const isMountedRef = useRef(true);
   
-  // Listen for messages from iframe
+  useEffect(() => {
+    isMountedRef.current = true;
+    const frame = iframeRef.current;
+    
+    return () => {
+      isMountedRef.current = false;
+      
+      // Delay disposal to avoid wiping content during StrictMode remount
+      // StrictMode's remount happens synchronously, so a microtask delay is enough
+      Promise.resolve().then(() => {
+        // Only dispose if the component didn't immediately remount
+        if (!isMountedRef.current && frame) {
+          disposeFrame(frame, 'unmount');
+        }
+      });
+    };
+  }, [disposeFrame]);
+
+  useEffect(() => {
+    if (!import.meta.env?.DEV) return;
+    const docLen = iframeDoc.srcDoc?.length ?? 0;
+    console.log(
+      `[GlyphIframe] render glyphId=${glyphId || 'unknown'} type=${glyphType || 'html'} len=${docLen}`,
+    );
+    return () => {
+      console.log(`[GlyphIframe] dispose glyphId=${glyphId || 'unknown'} type=${glyphType || 'html'}`);
+    };
+  }, [glyphId, glyphType, iframeDoc.srcDoc]);
+
+  const handleMessage = useCallback(
+    async (event: MessageEvent) => {
+      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) {
+        return;
+      }
+      const data = event.data;
+      if (!data || data.type !== 'loom-request') {
+        return;
+      }
+
+      const { id, method, args } = data;
+      let result: unknown = { success: false, error: 'Method not available' };
+
+      try {
+        if (window.loom) {
+          switch (method) {
+            case 'readLocalFile':
+              if (window.loom.readLocalFile) {
+                result = await window.loom.readLocalFile(args[0]);
+              }
+              break;
+            case 'listDirectory':
+              if (window.loom.listDirectory) {
+                result = await window.loom.listDirectory(args[0]);
+              }
+              break;
+            case 'getSystemPaths':
+              if (window.loom.getSystemPaths) {
+                result = await window.loom.getSystemPaths();
+              }
+              break;
+            case 'readGlyphFile':
+              if (window.loom.readGlyphFile) {
+                result = await window.loom.readGlyphFile(args[0], args[1]);
+              }
+              break;
+            case 'saveGlyphFile':
+              if (window.loom.saveGlyphFile) {
+                result = await window.loom.saveGlyphFile(args[0], args[1], args[2]);
+              }
+              break;
+            default:
+              result = { success: false, error: `Unknown method: ${method}` };
+          }
+        } else {
+          result = { success: false, error: 'Loom API not available in parent context' };
+        }
+      } catch (err) {
+        result = { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+      }
+
+      iframeRef.current?.contentWindow?.postMessage(
+        {
+          type: 'loom-response',
+          id,
+          result,
+        },
+        '*',
+      );
+    },
+    [iframeRef],
+  );
+
   useEffect(() => {
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [handleMessage]);
-  
-  // Report errors to parent
+
   useEffect(() => {
     if (iframeDoc.error) {
       onError?.(iframeDoc.error);
@@ -155,12 +226,12 @@ export default function GlyphIframe({
 
   const sandboxValue = allowExternalUrls
     ? undefined
-    : "allow-scripts allow-pointer-lock allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-top-navigation allow-top-navigation-by-user-activation allow-presentation";
+    : 'allow-scripts allow-pointer-lock allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-top-navigation allow-top-navigation-by-user-activation allow-presentation';
 
   return (
     <iframe
+      key={`${glyphId || 'glyph'}-${iframeDoc.mode}-${codeHash}`}
       ref={iframeRef}
-      key={`${glyphId || 'glyph'}-${iframeDoc.mode}-${code.length}`}
       srcDoc={iframeDoc.srcDoc}
       title={title || glyphId || 'glyph'}
       className={className}
@@ -168,7 +239,7 @@ export default function GlyphIframe({
         border: 'none',
         width: '100%',
         height: '100%',
-        background: 'transparent',
+        background: background || 'transparent',
         pointerEvents: allowPointerEvents ? 'auto' : 'none',
         ...style,
       }}
@@ -178,5 +249,6 @@ export default function GlyphIframe({
       loading="lazy"
     />
   );
-}
+});
 
+export default GlyphIframe;

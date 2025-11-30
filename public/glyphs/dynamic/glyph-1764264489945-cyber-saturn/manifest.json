@@ -3,6 +3,7 @@
   "name": "Cyber Saturn",
   "prompt": "a cyber saturn with matrix text particle field rotating around it",
   "entry": "index.html",
+  "bundled": true,
   "files": [
     "manifest.json",
     "index.html"

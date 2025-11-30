@@ -1,0 +1,529 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Esoteric Synth</title>
+    <style>
+        :root {
+            --bg: #050505;
+            --primary: #00ff9d;
+            --secondary: #bd00ff;
+            --text: #a0a0a0;
+            --font-mono: 'Courier New', Courier, monospace;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg);
+            overflow: hidden;
+            font-family: var(--font-mono);
+            color: var(--primary);
+            user-select: none;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none; /* Let clicks pass to canvas/overlay */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .hud-text {
+            text-shadow: 0 0 5px var(--primary);
+            font-size: 12px;
+            opacity: 0.8;
+            pointer-events: auto;
+        }
+
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+        }
+
+        .data-stream {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            font-size: 10px;
+            line-height: 1.4;
+            color: var(--secondary);
+            max-width: 300px;
+            height: 100px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column-reverse;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: opacity 0.5s ease;
+        }
+
+        #overlay h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 5px;
+            animation: pulse 2s infinite;
+        }
+
+        #overlay p {
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+
+        @keyframes pulse {
+            0% { text-shadow: 0 0 10px var(--primary); opacity: 1; }
+            50% { text-shadow: 0 0 20px var(--primary), 0 0 40px var(--secondary); opacity: 0.8; }
+            100% { text-shadow: 0 0 10px var(--primary); opacity: 1; }
+        }
+
+        .hidden {
+            opacity: 0;
+            pointer-events: none !important;
+        }
+
+        .scanline {
+            width: 100%;
+            height: 100px;
+            z-index: 5;
+            background: linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(0, 255, 157, 0.1) 50%, rgba(0,0,0,0) 100%);
+            opacity: 0.1;
+            position: absolute;
+            bottom: 100%;
+            animation: scanline 10s linear infinite;
+            pointer-events: none;
+        }
+
+        @keyframes scanline {
+            0% { bottom: 100%; }
+            100% { bottom: -100px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="scanline"></div>
+
+    <canvas id="canvas"></canvas>
+
+    <div id="ui-layer">
+        <div class="top-bar">
+            <div class="hud-text">
+                SYS.STATUS: <span id="status">STANDBY</span><br>
+                FREQ.MOD: <span id="mod-val">0.00</span><br>
+                FILTER.Q: <span id="q-val">0.00</span>
+            </div>
+            <div class="hud-text" style="text-align: right;">
+                <span id="scale-display">INIT...</span><br>
+                <span id="bpm-display">-- BPM</span>
+            </div>
+        </div>
+        <div class="data-stream" id="log">
+            > SYSTEM READY
+        </div>
+    </div>
+
+    <div id="overlay">
+        <h1>INITIALIZE</h1>
+        <p>[ CLICK TO ENGAGE AUDIO CORE ]</p>
+    </div>
+
+    <script type="module">
+        // ════════════════════════════════════════════════════════════════════════
+        // CONFIGURATION & STATE
+        // ════════════════════════════════════════════════════════════════════════
+        
+        const inputs = window.GLYPH_INPUTS || {};
+        
+        const CONFIG = {
+            scale: inputs.scale || 'hirajoshi',
+            rootFreq: parseInt(inputs.rootFreq) || 110,
+            tempo: parseInt(inputs.tempo) || 180,
+            waveform: inputs.waveform || 'sawtooth',
+            entropy: parseInt(inputs.entropy) || 25,
+            useDelay: inputs.useDelay !== false // Default true
+        };
+
+        const STATE = {
+            isPlaying: false,
+            mouseX: 0,
+            mouseY: 0,
+            width: window.innerWidth,
+            height: window.innerHeight,
+            frame: 0,
+            activeNotes: [],
+            lastNoteTime: 0
+        };
+
+        // DOM Elements
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const overlay = document.getElementById('overlay');
+        const statusEl = document.getElementById('status');
+        const modEl = document.getElementById('mod-val');
+        const qEl = document.getElementById('q-val');
+        const logEl = document.getElementById('log');
+        const scaleDisplay = document.getElementById('scale-display');
+        const bpmDisplay = document.getElementById('bpm-display');
+
+        // Update UI with Config
+        scaleDisplay.innerText = `SCALE: ${CONFIG.scale.toUpperCase()}`;
+        bpmDisplay.innerText = `TEMPO: ${CONFIG.tempo}`;
+
+        // ════════════════════════════════════════════════════════════════════════
+        // AUDIO ENGINE
+        // ════════════════════════════════════════════════════════════════════════
+
+        let audioCtx;
+        let masterGain;
+        let delayNode;
+        let analyser;
+        let nextNoteTime = 0;
+        let noteIndex = 0;
+
+        // Scales defined as intervals from root (semitones)
+        const SCALES = {
+            pentatonic_minor: [0, 3, 5, 7, 10, 12],
+            egyptian: [0, 2, 5, 7, 10, 12],
+            hirajoshi: [0, 2, 3, 7, 8, 12],
+            whole_tone: [0, 2, 4, 6, 8, 10, 12],
+            chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        };
+
+        function initAudio() {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+            
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.4;
+            
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+            
+            masterGain.connect(analyser);
+            analyser.connect(audioCtx.destination);
+
+            if (CONFIG.useDelay) {
+                delayNode = audioCtx.createDelay();
+                delayNode.delayTime.value = 0.3; // 300ms delay
+                
+                const feedback = audioCtx.createGain();
+                feedback.gain.value = 0.4;
+                
+                // Route: Master -> Delay -> Feedback -> Delay -> Master
+                masterGain.connect(delayNode);
+                delayNode.connect(feedback);
+                feedback.connect(delayNode);
+                delayNode.connect(audioCtx.destination);
+            }
+
+            STATE.isPlaying = true;
+            statusEl.innerText = "RUNNING";
+            log("AUDIO CORE: ONLINE");
+            
+            // Start sequencer
+            nextNoteTime = audioCtx.currentTime + 0.1;
+            schedule();
+        }
+
+        function getFrequency(root, semitones) {
+            return root * Math.pow(2, semitones / 12);
+        }
+
+        function playNote(freq, time, duration) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const filter = audioCtx.createBiquadFilter();
+
+            osc.type = CONFIG.waveform;
+            osc.frequency.value = freq;
+
+            // Interactive Filter
+            // Map mouse X to frequency (100Hz - 5000Hz)
+            const xRatio = STATE.mouseX / STATE.width;
+            const yRatio = STATE.mouseY / STATE.height;
+            
+            filter.type = 'lowpass';
+            filter.frequency.value = 200 + (xRatio * 4000);
+            filter.Q.value = 1 + (yRatio * 15);
+
+            // Envelope
+            gain.gain.setValueAtTime(0, time);
+            gain.gain.linearRampToValueAtTime(0.3, time + 0.05); // Attack
+            gain.gain.exponentialRampToValueAtTime(0.001, time + duration); // Decay
+
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(masterGain);
+
+            osc.start(time);
+            osc.stop(time + duration);
+
+            // Visual feedback
+            STATE.activeNotes.push({
+                freq: freq,
+                time: Date.now(),
+                x: Math.random() * STATE.width,
+                y: Math.random() * STATE.height,
+                life: 1.0
+            });
+
+            // Log occasionally
+            if (Math.random() > 0.8) {
+                log(`EXEC: OSC[${Math.floor(freq)}Hz]`);
+            }
+        }
+
+        function schedule() {
+            if (!STATE.isPlaying) return;
+
+            const secondsPerBeat = 60.0 / CONFIG.tempo;
+            // Lookahead 100ms
+            while (nextNoteTime < audioCtx.currentTime + 0.1) {
+                scheduleNote(nextNoteTime);
+                nextNoteTime += secondsPerBeat * 0.5; // Eighth notes
+            }
+            
+            requestAnimationFrame(schedule);
+        }
+
+        function scheduleNote(time) {
+            // Generative Logic
+            const scale = SCALES[CONFIG.scale] || SCALES.pentatonic_minor;
+            
+            // Base sequence logic: random walk
+            const entropyCheck = Math.random() * 100;
+            let interval;
+
+            if (entropyCheck < CONFIG.entropy) {
+                // Chaos: Pick random note from scale
+                interval = scale[Math.floor(Math.random() * scale.length)];
+                // Octave jump chance
+                if (Math.random() > 0.7) interval += 12;
+            } else {
+                // Order: Arpeggiate
+                interval = scale[noteIndex % scale.length];
+                noteIndex++;
+            }
+
+            // Sometimes add negative octave
+            let octaveMult = 1;
+            if (Math.random() > 0.9) octaveMult = 0.5;
+            if (Math.random() > 0.9) octaveMult = 2;
+
+            const freq = getFrequency(CONFIG.rootFreq, interval) * octaveMult;
+            
+            // Duration variance
+            const duration = (60 / CONFIG.tempo) * (Math.random() > 0.5 ? 0.5 : 0.25);
+            
+            playNote(freq, time, duration);
+        }
+
+        // ════════════════════════════════════════════════════════════════════════
+        // VISUALIZATION & INTERACTION
+        // ════════════════════════════════════════════════════════════════════════
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            STATE.width = canvas.width;
+            STATE.height = canvas.height;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function log(msg) {
+            const line = document.createElement('div');
+            line.innerText = `> ${msg}`;
+            logEl.prepend(line);
+            if (logEl.children.length > 8) logEl.lastChild.remove();
+        }
+
+        // Mouse Interaction
+        window.addEventListener('mousemove', (e) => {
+            STATE.mouseX = e.clientX;
+            STATE.mouseY = e.clientY;
+            
+            // Update UI readout
+            modEl.innerText = (e.clientX / STATE.width).toFixed(2);
+            qEl.innerText = (e.clientY / STATE.height).toFixed(2);
+        });
+
+        // Start Handler
+        overlay.addEventListener('click', () => {
+            overlay.classList.add('hidden');
+            if (!audioCtx) initAudio();
+            else if (audioCtx.state === 'suspended') audioCtx.resume();
+        });
+
+        // Keyboard Interaction - Glitch effects
+        window.addEventListener('keydown', (e) => {
+            if (!audioCtx) return;
+            
+            const key = e.key.toLowerCase();
+            const now = audioCtx.currentTime;
+
+            if ('asdfghjkl'.includes(key)) {
+                // Play manual note
+                const idx = 'asdfghjkl'.indexOf(key);
+                const scale = SCALES[CONFIG.scale];
+                const interval = scale[idx % scale.length];
+                const freq = getFrequency(CONFIG.rootFreq * 2, interval);
+                playNote(freq, now, 0.5);
+                log(`MANUAL_INPUT: ${key.toUpperCase()}`);
+            }
+            
+            if (key === ' ') {
+                // Spacebar: Glitch / Break
+                masterGain.gain.cancelScheduledValues(now);
+                masterGain.gain.setValueAtTime(0, now);
+                masterGain.gain.linearRampToValueAtTime(0.4, now + 0.5);
+                log("!! SYSTEM INTERRUPT !!");
+                
+                // Visual glitch
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0,0, STATE.width, STATE.height);
+            }
+        });
+
+        // ════════════════════════════════════════════════════════════════════════
+        // RENDER LOOP
+        // ════════════════════════════════════════════════════════════════════════
+
+        const bufferLength = 2048; // Must match fftSize
+        const dataArray = new Uint8Array(bufferLength);
+
+        function draw() {
+            requestAnimationFrame(draw);
+            
+            STATE.frame++;
+
+            // Clear with trail effect
+            ctx.fillStyle = 'rgba(5, 5, 5, 0.2)';
+            ctx.fillRect(0, 0, STATE.width, STATE.height);
+
+            if (!STATE.isPlaying) return;
+
+            // Get Audio Data
+            analyser.getByteTimeDomainData(dataArray);
+
+            const cx = STATE.width / 2;
+            const cy = STATE.height / 2;
+
+            // 1. Draw Waveform Ring
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#00ff9d';
+            ctx.beginPath();
+            
+            const radius = Math.min(cx, cy) * 0.4;
+            
+            for (let i = 0; i < bufferLength; i++) {
+                const v = dataArray[i] / 128.0; // 0..2
+                const angle = (i / bufferLength) * Math.PI * 2 + (STATE.frame * 0.01);
+                
+                // Distort radius based on audio
+                const r = radius + (v * 50);
+                
+                const x = cx + Math.cos(angle) * r;
+                const y = cy + Math.sin(angle) * r;
+                
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.stroke();
+
+            // 2. Draw Active Notes (Explosions/Runes)
+            for (let i = STATE.activeNotes.length - 1; i >= 0; i--) {
+                const note = STATE.activeNotes[i];
+                note.life -= 0.02;
+                
+                if (note.life <= 0) {
+                    STATE.activeNotes.splice(i, 1);
+                    continue;
+                }
+
+                const size = (1.0 - note.life) * 100;
+                const alpha = note.life;
+
+                ctx.strokeStyle = `rgba(189, 0, 255, ${alpha})`;
+                ctx.lineWidth = 1;
+                
+                // Draw expanding hex
+                ctx.beginPath();
+                for (let s = 0; s < 6; s++) {
+                    const angle = (s / 6) * Math.PI * 2;
+                    const hx = note.x + Math.cos(angle) * size;
+                    const hy = note.y + Math.sin(angle) * size;
+                    if (s === 0) ctx.moveTo(hx, hy);
+                    else ctx.lineTo(hx, hy);
+                }
+                ctx.closePath();
+                ctx.stroke();
+
+                // Draw Text
+                ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+                ctx.font = '10px monospace';
+                ctx.fillText(`0x${Math.floor(note.freq).toString(16)}`, note.x, note.y - size);
+            }
+
+            // 3. Draw Center "Eye" / Cursor tracker
+            const mouseDist = Math.hypot(STATE.mouseX - cx, STATE.mouseY - cy);
+            ctx.beginPath();
+            ctx.arc(cx, cy, 10 + (mouseDist * 0.05), 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(0, 255, 157, 0.5)`;
+            ctx.stroke();
+            
+            // Connecting line to mouse
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(STATE.mouseX, STATE.mouseY);
+            ctx.strokeStyle = `rgba(0, 255, 157, 0.2)`;
+            ctx.stroke();
+            
+            // Target reticle at mouse
+            ctx.strokeRect(STATE.mouseX - 10, STATE.mouseY - 10, 20, 20);
+        }
+
+        draw();
+
+    </script>
+</body>
+</html>

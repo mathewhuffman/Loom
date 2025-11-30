@@ -1,0 +1,41 @@
+{
+  "id": "glyph-1764390588030-github-glass",
+  "name": "GitHub Glass",
+  "prompt": "make a github interface that's clean, modern, and has a transparent background but can be modified with inputs. The widget should start the repo level, then allow click through to show PR's, issues, actions, and then you can click into those and see information.. Like for PR's, I should see a list of PR's, and then I can click on A PR to review it in full.",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-29T04:30:50.618Z",
+  "inputs": [
+    {
+      "id": "githubToken",
+      "type": "apiKey",
+      "label": "GitHub Token",
+      "service": "github",
+      "required": true,
+      "description": "Personal Access Token (Classic) with 'repo' scope."
+    },
+    {
+      "id": "repository",
+      "type": "string",
+      "label": "Repository",
+      "placeholder": "owner/repo",
+      "defaultValue": "facebook/react"
+    },
+    {
+      "id": "themeColor",
+      "type": "color",
+      "label": "Accent Color",
+      "defaultValue": "#58a6ff"
+    }
+  ],
+  "icon": "🐙",
+  "linkedKeys": [
+    "key-1764368938078-aaz2ot"
+  ],
+  "bundled": true,
+  "version": "1.0.0"
+}

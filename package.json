@@ -1,13 +1,24 @@
 {
   "name": "loom",
-  "version": "0.0.1",
+  "version": "0.2.17",
+  "description": "LOOM — A spatial shell for weaving digital reality",
+  "author": "LOOM Team",
+  "license": "MIT",
   "main": "dist-electron/main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mathewhuffman/loom.git"
+  },
   "scripts": {
     "compile": "tsc -p electron-main.tsconfig.json",
     "dev": "npm run compile && concurrently --kill-others-on-fail \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "dev:clean": "taskkill /F /IM electron.exe /T 2>nul & npm run dev",
     "start": "electron .",
     "build": "npm run compile && vite build && electron-builder",
+    "build:win": "npm run compile && vite build && electron-builder --win",
+    "build:mac": "npm run compile && vite build && electron-builder --mac",
+    "build:linux": "npm run compile && vite build && electron-builder --linux",
+    "release": "npm run compile && vite build && electron-builder --publish always",
     "preview": "vite preview"
   },
   "build": {
@@ -18,16 +29,55 @@
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "CHANGELOG.md"
     ],
+    "extraResources": [
+      {
+        "from": "bundled-glyphs",
+        "to": "bundled-glyphs",
+        "filter": ["**/*"]
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "mathewhuffman",
+      "repo": "Loom",
+      "releaseType": "release"
+    },
     "mac": {
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
     },
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": true
     },
     "linux": {
-      "target": "AppImage"
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
     }
   },
   "dependencies": {
@@ -39,6 +89,7 @@
     "@react-three/fiber": "^8.16.8",
     "diff": "^8.0.2",
     "electron-as-wallpaper": "^2.0.3",
+    "electron-updater": "^6.6.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "sucrase": "^3.35.1",

@@ -1,0 +1,640 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Steel Pan Jam</title>
+    <style>
+        :root {
+            --bg-color: #2b2b2b;
+            --drum-color: #d4d4d4;
+            --drum-shadow: #888;
+            --note-color: #e0e0e0;
+            --note-active: #4deeea;
+            --ui-color: #ffffff;
+            --accent: #ff0055;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: radial-gradient(circle at center, #333, #111);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #app {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Drum Container */
+        #drum-container {
+            position: relative;
+            width: 80vmin;
+            height: 80vmin;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #e0e0e0 0%, #999 100%);
+            box-shadow: 
+                inset 0 0 20px rgba(0,0,0,0.5),
+                0 20px 50px rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.1s;
+        }
+
+        #drum-inner {
+            position: relative;
+            width: 96%;
+            height: 96%;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #f0f0f0, #aaa);
+            box-shadow: inset 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        /* Notes */
+        .note {
+            position: absolute;
+            background: radial-gradient(circle at 30% 30%, #fff, #ccc);
+            border: 1px solid #999;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 
+                2px 2px 5px rgba(0,0,0,0.2),
+                inset 1px 1px 2px rgba(255,255,255,0.8);
+            transform-origin: center;
+            transition: transform 0.05s, box-shadow 0.05s, background 0.1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: #555;
+            font-size: 2vmin;
+            z-index: 10;
+        }
+
+        .note:active, .note.playing {
+            transform: scale(0.95);
+            background: radial-gradient(circle at 30% 30%, #fff, var(--note-active));
+            box-shadow: 0 0 15px var(--note-active);
+            color: #000;
+        }
+
+        /* Center Note */
+        .note.center {
+            width: 25%;
+            height: 25%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        .note.center:active, .note.center.playing {
+            transform: translate(-50%, -50%) scale(0.95);
+        }
+
+        /* Outer Ring Notes */
+        .note.outer {
+            width: 18%;
+            height: 14%;
+        }
+
+        /* UI Controls */
+        #controls {
+            position: absolute;
+            bottom: 30px;
+            display: flex;
+            gap: 15px;
+            z-index: 100;
+            background: rgba(0,0,0,0.6);
+            padding: 10px 20px;
+            border-radius: 30px;
+            backdrop-filter: blur(10px);
+        }
+
+        .btn {
+            background: transparent;
+            border: 2px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover {
+            border-color: white;
+            background: rgba(255,255,255,0.1);
+        }
+
+        .btn.record.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            animation: pulse 1.5s infinite;
+        }
+
+        .btn.loop.active {
+            background: var(--note-active);
+            border-color: var(--note-active);
+            color: #000;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 0, 85, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 0, 85, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 0, 85, 0); }
+        }
+
+        /* Loop Visualizer */
+        #loop-vis {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        /* Instructions Overlay */
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            transition: opacity 0.5s;
+        }
+        
+        #overlay-content {
+            text-align: center;
+            color: white;
+        }
+
+        h1 { margin: 0 0 10px 0; font-size: 2rem; }
+        p { margin: 0 0 20px 0; opacity: 0.8; }
+        
+        .start-btn {
+            background: var(--note-active);
+            color: #000;
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 0 20px rgba(77, 238, 234, 0.4);
+            transition: transform 0.2s;
+        }
+        
+        .start-btn:hover { transform: scale(1.05); }
+
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div id="drum-container">
+        <canvas id="loop-vis"></canvas>
+        <div id="drum-inner">
+            <!-- Notes injected by JS -->
+        </div>
+    </div>
+
+    <div id="controls">
+        <button id="btn-record" class="btn">
+            <span>●</span> REC
+        </button>
+        <button id="btn-play" class="btn" disabled>
+            <span>▶</span> Loop
+        </button>
+        <button id="btn-clear" class="btn">
+            <span>✕</span> Clear
+        </button>
+    </div>
+</div>
+
+<div id="overlay">
+    <div id="overlay-content">
+        <h1>Steel Pan Jam</h1>
+        <p>Click or tap to play. Record loops and jam along.</p>
+        <button class="start-btn" id="start-audio">Start Playing</button>
+    </div>
+</div>
+
+<script>
+    // --- Configuration ---
+    const inputs = window.GLYPH_INPUTS || {};
+    const BASE_FREQ = parseFloat(inputs.baseFreq) || 261.63; // Middle C
+    const DECAY_TIME = parseFloat(inputs.decay) || 1.5;
+    const USE_REVERB = inputs.reverb !== false;
+
+    // --- Music Theory ---
+    // Simple Major Pentatonic + a few extras for the circle
+    // Intervals from root: 0, 2, 4, 7, 9, 12, 14, 16
+    const SCALE_INTERVALS = [0, 2, 4, 5, 7, 9, 11, 12]; 
+    const NOTE_LABELS = ['C', 'D', 'E', 'F', 'G', 'A', 'B', 'C'];
+
+    // --- Audio Engine ---
+    let audioCtx;
+    let masterGain;
+    let reverbNode;
+
+    async function initAudio() {
+        if (audioCtx) return;
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+        
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0.8;
+        
+        if (USE_REVERB) {
+            reverbNode = await createReverb(audioCtx);
+            masterGain.connect(reverbNode);
+            reverbNode.connect(audioCtx.destination);
+        } else {
+            masterGain.connect(audioCtx.destination);
+        }
+    }
+
+    async function createReverb(ctx) {
+        const convolver = ctx.createConvolver();
+        
+        // Create a simple impulse response for reverb
+        const rate = ctx.sampleRate;
+        const length = rate * 2.0; // 2 seconds
+        const decay = 2.0;
+        const impulse = ctx.createBuffer(2, length, rate);
+        const left = impulse.getChannelData(0);
+        const right = impulse.getChannelData(1);
+
+        for (let i = 0; i < length; i++) {
+            const n = i; // sample index
+            // Exponential decay noise
+            const factor = Math.pow(1 - i / length, decay);
+            left[i] = (Math.random() * 2 - 1) * factor;
+            right[i] = (Math.random() * 2 - 1) * factor;
+        }
+
+        convolver.buffer = impulse;
+        
+        // Wet/Dry mix helper (simple version: just return convolver connected to dest)
+        // For better control we'd put a dry/wet gain node structure, but this is sufficient for "roomy" sound
+        return convolver;
+    }
+
+    function playNote(freq) {
+        if (!audioCtx) return;
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        const t = audioCtx.currentTime;
+        
+        // Create oscillators for additive synthesis + FM
+        // Steel drums have non-harmonic overtones
+        
+        const fundamental = audioCtx.createOscillator();
+        const overtone1 = audioCtx.createOscillator();
+        const overtone2 = audioCtx.createOscillator();
+        
+        const gain = audioCtx.createGain();
+        
+        // Ratios for metallic sound
+        fundamental.frequency.value = freq;
+        overtone1.frequency.value = freq * 2.0; // Octave
+        overtone2.frequency.value = freq * 2.98; // Non-integer for metallic ring
+        
+        fundamental.type = 'sine';
+        overtone1.type = 'sine';
+        overtone2.type = 'triangle'; // A bit more bite
+
+        const oscs = [fundamental, overtone1, overtone2];
+        const gains = [1.0, 0.4, 0.2]; // Relative volumes
+
+        // Envelope
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(1.0, t + 0.01); // Attack
+        gain.gain.exponentialRampToValueAtTime(0.01, t + DECAY_TIME); // Decay
+
+        oscs.forEach((osc, i) => {
+            const indGain = audioCtx.createGain();
+            indGain.gain.value = gains[i];
+            osc.connect(indGain);
+            indGain.connect(gain);
+            osc.start(t);
+            osc.stop(t + DECAY_TIME + 0.1);
+        });
+
+        gain.connect(masterGain);
+        
+        // Cleanup
+        setTimeout(() => {
+            gain.disconnect();
+        }, (DECAY_TIME + 0.2) * 1000);
+    }
+
+    // --- UI Generation ---
+    const drumInner = document.getElementById('drum-inner');
+    const notes = [];
+
+    function createNotes() {
+        // Center Note (Root)
+        const centerNote = document.createElement('div');
+        centerNote.className = 'note center';
+        centerNote.textContent = NOTE_LABELS[0];
+        centerNote.dataset.freq = BASE_FREQ;
+        centerNote.dataset.index = 0;
+        drumInner.appendChild(centerNote);
+        notes.push(centerNote);
+
+        // Outer Ring
+        const numOuter = 7;
+        const radius = 35; // % from center
+        const angleStep = (2 * Math.PI) / numOuter;
+        
+        for (let i = 0; i < numOuter; i++) {
+            const angle = i * angleStep - Math.PI / 2; // Start top
+            const x = 50 + radius * Math.cos(angle);
+            const y = 50 + radius * Math.sin(angle);
+            
+            const el = document.createElement('div');
+            el.className = 'note outer';
+            
+            // Calculate Frequency based on intervals
+            // i+1 because index 0 is center
+            const semitones = SCALE_INTERVALS[i + 1];
+            const freq = BASE_FREQ * Math.pow(2, semitones / 12);
+            
+            el.textContent = NOTE_LABELS[i + 1];
+            el.dataset.freq = freq;
+            el.dataset.index = i + 1;
+            
+            // Positioning
+            el.style.left = x + '%';
+            el.style.top = y + '%';
+            el.style.transform = `translate(-50%, -50%) rotate(${angle + Math.PI/2}rad)`;
+            
+            drumInner.appendChild(el);
+            notes.push(el);
+        }
+    }
+
+    // --- Interaction ---
+    function triggerNote(index, isPlayback = false) {
+        const el = notes[index];
+        if (!el) return;
+
+        // Audio
+        const freq = parseFloat(el.dataset.freq);
+        playNote(freq);
+
+        // Visual
+        el.classList.add('playing');
+        setTimeout(() => el.classList.remove('playing'), 150);
+
+        // Recording Logic
+        if (recorder.state === 'recording' && !isPlayback) {
+            const time = Date.now() - recorder.startTime;
+            recorder.events.push({ time, index });
+        }
+    }
+
+    // --- Recorder / Looper ---
+    const recorder = {
+        state: 'idle', // idle, recording, playing
+        startTime: 0,
+        loopDuration: 0,
+        events: [],
+        loopTimer: null,
+        playbackTime: 0
+    };
+
+    const btnRecord = document.getElementById('btn-record');
+    const btnPlay = document.getElementById('btn-play');
+    const btnClear = document.getElementById('btn-clear');
+    const canvas = document.getElementById('loop-vis');
+    const ctx = canvas.getContext('2d');
+
+    // Resize canvas
+    function resizeCanvas() {
+        const rect = document.getElementById('drum-container').getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Loop Animation
+    function drawLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        if (recorder.state === 'playing' || recorder.state === 'recording') {
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = canvas.width / 2 - 5;
+            
+            let progress = 0;
+            
+            if (recorder.state === 'recording') {
+                // Determine implicit progress or just spin?
+                // Just spin slowly to show activity
+                progress = (Date.now() / 2000) % 1;
+            } else {
+                // Playback progress
+                const now = Date.now();
+                const loopTime = (now - recorder.startTime) % recorder.loopDuration;
+                progress = loopTime / recorder.loopDuration;
+            }
+
+            // Draw progress ring
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, -Math.PI/2, (-Math.PI/2) + (Math.PI * 2 * progress));
+            ctx.strokeStyle = recorder.state === 'recording' ? '#ff0055' : '#4deeea';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
+
+        requestAnimationFrame(drawLoop);
+    }
+    requestAnimationFrame(drawLoop);
+
+    // Loop Logic
+    function playLoop() {
+        if (recorder.state !== 'playing') return;
+
+        const now = Date.now();
+        const loopTime = (now - recorder.startTime) % recorder.loopDuration;
+        
+        // Find events that should trigger in this frame
+        // This is a naive implementation; for high precision audio scheduling we'd use AudioContext time
+        // But for a "fun widget" Date.now() is sufficient and easier to sync with UI
+        
+        // We need to track which events fired in the current loop iteration
+        // Reset fired flags if loop wrapped
+        const currentLoopIteration = Math.floor((now - recorder.startTime) / recorder.loopDuration);
+        if (currentLoopIteration > recorder.lastLoopIteration) {
+             recorder.events.forEach(e => e.fired = false);
+             recorder.lastLoopIteration = currentLoopIteration;
+        }
+
+        recorder.events.forEach(e => {
+            if (!e.fired && e.time <= loopTime) {
+                triggerNote(e.index, true);
+                e.fired = true;
+            }
+        });
+
+        recorder.loopTimer = requestAnimationFrame(playLoop);
+    }
+
+    // Controls
+    btnRecord.addEventListener('click', () => {
+        if (recorder.state === 'idle' || recorder.state === 'playing') {
+            // Start Recording
+            recorder.state = 'recording';
+            recorder.events = [];
+            recorder.startTime = Date.now();
+            
+            btnRecord.classList.add('active');
+            btnRecord.innerHTML = '<span>■</span> Stop';
+            btnPlay.disabled = true;
+            btnPlay.classList.remove('active');
+            
+        } else if (recorder.state === 'recording') {
+            // Stop Recording -> Start Playing
+            recorder.loopDuration = Date.now() - recorder.startTime;
+            recorder.state = 'playing';
+            recorder.startTime = Date.now(); // Reset start for playback sync
+            recorder.lastLoopIteration = 0;
+            
+            btnRecord.classList.remove('active');
+            btnRecord.innerHTML = '<span>●</span> REC';
+            
+            btnPlay.disabled = false;
+            btnPlay.classList.add('active');
+            btnPlay.innerHTML = '<span>||</span> Pause';
+            
+            // Mark all events as not fired for the first loop
+            recorder.events.forEach(e => e.fired = false);
+            
+            playLoop();
+        }
+    });
+
+    btnPlay.addEventListener('click', () => {
+        if (recorder.state === 'playing') {
+            // Pause
+            recorder.state = 'idle';
+            cancelAnimationFrame(recorder.loopTimer);
+            btnPlay.classList.remove('active');
+            btnPlay.innerHTML = '<span>▶</span> Loop';
+        } else if (recorder.state === 'idle' && recorder.events.length > 0) {
+            // Resume
+            recorder.state = 'playing';
+            recorder.startTime = Date.now();
+            recorder.lastLoopIteration = 0;
+            recorder.events.forEach(e => e.fired = false);
+            btnPlay.classList.add('active');
+            btnPlay.innerHTML = '<span>||</span> Pause';
+            playLoop();
+        }
+    });
+
+    btnClear.addEventListener('click', () => {
+        recorder.state = 'idle';
+        recorder.events = [];
+        recorder.loopDuration = 0;
+        cancelAnimationFrame(recorder.loopTimer);
+        
+        btnRecord.classList.remove('active');
+        btnRecord.innerHTML = '<span>●</span> REC';
+        
+        btnPlay.disabled = true;
+        btnPlay.classList.remove('active');
+        btnPlay.innerHTML = '<span>▶</span> Loop';
+        
+        // Clear visualization
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+
+
+    // --- Setup ---
+    createNotes();
+
+    // Event Listeners for Notes
+    notes.forEach((note, index) => {
+        // Mouse
+        note.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            triggerNote(index);
+        });
+        
+        // Touch
+        note.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            triggerNote(index);
+        });
+    });
+
+    // Keyboard support (1-8 keys)
+    window.addEventListener('keydown', (e) => {
+        const key = e.key;
+        const map = {
+            ' ': 0, // Space for bass
+            'ArrowUp': 1,
+            'ArrowRight': 2,
+            'ArrowDown': 3,
+            'ArrowLeft': 4,
+            'w': 1, 'd': 2, 's': 3, 'a': 4, // WASD
+            'i': 5, 'l': 6, 'k': 7, 'j': 8  // IJKL
+        };
+        
+        if (map[key] !== undefined && map[key] < notes.length) {
+            triggerNote(map[key]);
+            const el = notes[map[key]];
+            el.classList.add('playing');
+        }
+    });
+
+    window.addEventListener('keyup', (e) => {
+        // Just for visual cleanup if needed, but we use setTimeout in triggerNote
+    });
+
+    // Overlay Start
+    document.getElementById('start-audio').addEventListener('click', async () => {
+        await initAudio();
+        document.getElementById('overlay').style.opacity = 0;
+        setTimeout(() => {
+            document.getElementById('overlay').style.display = 'none';
+        }, 500);
+        
+        // Play a little intro chord
+        setTimeout(() => triggerNote(0), 100);
+        setTimeout(() => triggerNote(2), 200);
+        setTimeout(() => triggerNote(4), 300);
+    });
+
+</script>
+</body>
+</html>

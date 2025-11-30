@@ -1,0 +1,383 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hydro Shader</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+        canvas { display: block; width: 100%; height: 100%; }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.5);
+            font-family: monospace;
+            pointer-events: none;
+            user-select: none;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas"></canvas>
+    <div id="instructions">Drag to interact • Toggle Rain in settings</div>
+
+    <script type="module">
+        const inputs = window.GLYPH_INPUTS || {};
+        const canvas = document.getElementById('glcanvas');
+        const gl = canvas.getContext('webgl2', { antialias: false });
+
+        if (!gl) {
+            document.body.innerHTML = '<div style="color:white;padding:20px">WebGL2 not supported.</div>';
+            throw new Error('WebGL2 not supported');
+        }
+
+        // Check for float texture support
+        const ext = gl.getExtension('EXT_color_buffer_float');
+        if (!ext) {
+            // Fallback to half float if full float not available
+            const extHalf = gl.getExtension('EXT_color_buffer_half_float');
+            if (!extHalf) console.warn('Float textures not supported, simulation may be unstable.');
+        }
+
+        // --- SHADERS ---
+
+        const vertShaderSource = `#version 300 es
+        in vec4 position;
+        void main() {
+            gl_Position = position;
+        }`;
+
+        // Simulation Shader: Wave Equation
+        const simFragSource = `#version 300 es
+        precision highp float;
+        uniform sampler2D uTexture;
+        uniform vec2 uResolution;
+        uniform vec4 uMouse;
+        uniform float uDamping;
+        uniform float uTime;
+        uniform bool uRain;
+        uniform bool uReset;
+        
+        out vec4 fragColor;
+
+        void main() {
+            if (uReset) {
+                fragColor = vec4(0.0);
+                return;
+            }
+
+            ivec2 p = ivec2(gl_FragCoord.xy);
+            
+            // State: x = current height, y = prev height, zw = velocity proxy (gradient)
+            vec4 state = texelFetch(uTexture, p, 0);
+            float h = state.x;
+            float h_prev = state.y;
+            
+            // Neighbors
+            float l = texelFetch(uTexture, p + ivec2(-1, 0), 0).x;
+            float r = texelFetch(uTexture, p + ivec2(1, 0), 0).x;
+            float b = texelFetch(uTexture, p + ivec2(0, -1), 0).x;
+            float t = texelFetch(uTexture, p + ivec2(0, 1), 0).x;
+            
+            // Wave equation: acceleration ~ laplacian
+            float lap = l + r + b + t - 4.0 * h;
+            
+            // Verlet integration / Wave propagation
+            // h_new = 2*h - h_prev + speed * lap
+            float h_new = 2.0 * h - h_prev + 0.5 * lap;
+            
+            h_new *= uDamping; 
+            
+            // Mouse Interaction
+            if (uMouse.z > 0.0) {
+                float d = distance(gl_FragCoord.xy, uMouse.xy);
+                if (d < 20.0) {
+                    h_new += 0.5 * (1.0 - smoothstep(0.0, 20.0, d));
+                }
+            }
+
+            // Auto Rain
+            if (uRain) {
+                // Random drops based on time and position hash
+                float hash = fract(sin(dot(gl_FragCoord.xy + vec2(uTime * 100.0), vec2(12.9898, 78.233))) * 43758.5453);
+                if (hash > 0.998) {
+                    h_new += 2.0;
+                }
+            }
+            
+            // Calculate gradient for "velocity" visualization (zw)
+            float dx = (r - l) * 0.5;
+            float dy = (t - b) * 0.5;
+            
+            // Clamp to prevent instability
+            h_new = clamp(h_new, -10.0, 10.0);
+
+            // Store: Current -> Prev, New -> Current
+            fragColor = vec4(h_new, h, dx, dy);
+        }`;
+
+        // Render Shader: The User's Code
+        const renderFragSource = `#version 300 es
+        precision highp float;
+        uniform sampler2D uTexture;
+        uniform vec2 uResolution;
+        out vec4 fragColor;
+
+        #define TEX0(p) texelFetch(uTexture, ivec2(p), 0)
+        #define TEX1(p) vec4(0.0) // Noise placeholder
+
+        // --- USER CODE START ---
+        vec2 grad(vec2 p)
+        {
+            float l = TEX0(p + vec2(-1,0)).x;
+            float r = TEX0(p + vec2(1,0)).x;
+            float b = TEX0(p + vec2(0,-1)).x;
+            float t = TEX0(p + vec2(0,1)).x;
+            
+            float dx = 0.5*(r - l);
+            float dy = 0.5*(t - b);
+            
+            return vec2(dx, dy);    
+        }
+
+        float butterworth(float x, float p)
+        {
+            x = pow(max(x,0.),p);
+            return x/(1. + x);
+        }
+
+        void mainImage( out vec4 fragColor, in vec2 fragCoord )
+        {
+            vec4 tex = TEX0(fragCoord);
+            
+            float f = tex.x;
+            
+            vec2 p = fragCoord;
+            
+            float fl = TEX0(p + vec2(-1,0)).x;
+            float fr = TEX0(p + vec2(1,0)).x;
+            float fb = TEX0(p + vec2(0,-1)).x;
+            float ft = TEX0(p + vec2(0,1)).x;
+            
+            float dfdx = 0.5*(fr - fl);
+            float dfdy = 0.5*(ft - fb);
+            
+            float lap = fl + fr + fb + ft - 4.*f;
+
+            vec2 df = vec2(dfdx, dfdy);
+            
+            vec3 n = normalize(vec3(-df.x,-df.y,1.));
+            vec3 L = normalize(vec3(1,1,1));
+            
+            float val = tanh(tex.x);
+            
+            float f_light = clamp(dot(n,L),0.,1.);
+            float f_vel = 0.1 + butterworth(0.008*length(tex.zw),9.);
+            float f_grad = length(df);
+            
+            f_vel*= 0.5;
+            
+            vec3 col = mix(f_light*(0.4*vec3(0.7,0.75,1)*val + vec3(0.7,0.7,0.3)*f_vel), vec3(0.4,0.2,1),f_grad);
+            
+            // Output to screen
+            fragColor = vec4(col,1.0);
+        }
+        // --- USER CODE END ---
+
+        void main() {
+            mainImage(fragColor, gl_FragCoord.xy);
+        }`;
+
+        // --- WEBGL HELPERS ---
+
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error(gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        function createProgram(gl, vsSource, fsSource) {
+            const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+            const prog = gl.createProgram();
+            gl.attachShader(prog, vs);
+            gl.attachShader(prog, fs);
+            gl.linkProgram(prog);
+            if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+                console.error(gl.getProgramInfoLog(prog));
+                return null;
+            }
+            return prog;
+        }
+
+        const simProgram = createProgram(gl, vertShaderSource, simFragSource);
+        const renderProgram = createProgram(gl, vertShaderSource, renderFragSource);
+
+        // --- BUFFERS ---
+
+        const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+        const positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+        let width = canvas.width;
+        let height = canvas.height;
+
+        // Ping-pong framebuffers
+        let textureA, textureB;
+        let fboA, fboB;
+
+        function createFramebufferTexture(w, h) {
+            const tex = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            // Use RGBA32F for high precision physics, or RGBA16F
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, null);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            const fbo = gl.createFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+            
+            return { tex, fbo };
+        }
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            width = canvas.width;
+            height = canvas.height;
+            gl.viewport(0, 0, width, height);
+
+            // Recreate buffers on resize
+            if (textureA) gl.deleteTexture(textureA);
+            if (textureB) gl.deleteTexture(textureB);
+            
+            const bufA = createFramebufferTexture(width, height);
+            textureA = bufA.tex;
+            fboA = bufA.fbo;
+            
+            const bufB = createFramebufferTexture(width, height);
+            textureB = bufB.tex;
+            fboB = bufB.fbo;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- INTERACTION ---
+
+        const mouse = { x: 0, y: 0, click: 0 };
+        
+        window.addEventListener('mousemove', e => {
+            mouse.x = e.clientX;
+            mouse.y = canvas.height - e.clientY; // Flip Y for GL
+        });
+        window.addEventListener('mousedown', () => mouse.click = 1);
+        window.addEventListener('mouseup', () => mouse.click = 0);
+        
+        // Touch support
+        window.addEventListener('touchmove', e => {
+            e.preventDefault();
+            mouse.x = e.touches[0].clientX;
+            mouse.y = canvas.height - e.touches[0].clientY;
+            mouse.click = 1;
+        }, { passive: false });
+        window.addEventListener('touchend', () => mouse.click = 0);
+
+        // --- RENDER LOOP ---
+
+        let currentFrame = 0; // 0 means read A write B, 1 means read B write A
+
+        function render(time) {
+            const now = time * 0.001;
+
+            // 1. SIMULATION PASS
+            gl.useProgram(simProgram);
+            
+            // Uniforms
+            const uResLoc = gl.getUniformLocation(simProgram, 'uResolution');
+            const uMouseLoc = gl.getUniformLocation(simProgram, 'uMouse');
+            const uDampLoc = gl.getUniformLocation(simProgram, 'uDamping');
+            const uTimeLoc = gl.getUniformLocation(simProgram, 'uTime');
+            const uRainLoc = gl.getUniformLocation(simProgram, 'uRain');
+            const uResetLoc = gl.getUniformLocation(simProgram, 'uReset');
+            
+            gl.uniform2f(uResLoc, width, height);
+            gl.uniform4f(uMouseLoc, mouse.x, mouse.y, mouse.click, 0);
+            gl.uniform1f(uDampLoc, inputs.damping || 0.985);
+            gl.uniform1f(uTimeLoc, now);
+            gl.uniform1i(uRainLoc, inputs.rain ? 1 : 0);
+            gl.uniform1i(uResetLoc, inputs.reset ? 1 : 0);
+
+            // Bind vertex attributes
+            const posLocSim = gl.getAttribLocation(simProgram, 'position');
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.enableVertexAttribArray(posLocSim);
+            gl.vertexAttribPointer(posLocSim, 2, gl.FLOAT, false, 0, 0);
+
+            // Bind Input Texture (Read) and Output FBO (Write)
+            gl.activeTexture(gl.TEXTURE0);
+            if (currentFrame === 0) {
+                gl.bindTexture(gl.TEXTURE_2D, textureA);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fboB);
+            } else {
+                gl.bindTexture(gl.TEXTURE_2D, textureB);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fboA);
+            }
+            gl.uniform1i(gl.getUniformLocation(simProgram, 'uTexture'), 0);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            // 2. RENDER PASS (To Screen)
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null); // Render to screen
+            gl.useProgram(renderProgram);
+            
+            const uResLocR = gl.getUniformLocation(renderProgram, 'uResolution');
+            gl.uniform2f(uResLocR, width, height);
+
+            const posLocRender = gl.getAttribLocation(renderProgram, 'position');
+            gl.enableVertexAttribArray(posLocRender);
+            gl.vertexAttribPointer(posLocRender, 2, gl.FLOAT, false, 0, 0);
+
+            gl.activeTexture(gl.TEXTURE0);
+            // Read from the texture we just wrote to
+            if (currentFrame === 0) {
+                gl.bindTexture(gl.TEXTURE_2D, textureB);
+            } else {
+                gl.bindTexture(gl.TEXTURE_2D, textureA);
+            }
+            gl.uniform1i(gl.getUniformLocation(renderProgram, 'uTexture'), 0);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            // Swap buffers for next frame
+            currentFrame = 1 - currentFrame;
+            
+            // Reset "Reset" toggle if it was active
+            if (inputs.reset) {
+                // We don't actually flip the input value back, but the visual effect 
+                // is momentary clearing. The user has to toggle it off to stop clearing.
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        requestAnimationFrame(render);
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,861 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Loop Piano</title>
+    <style>
+        :root {
+            --bg: #0a0b10;
+            --key-white: #e0e0e0;
+            --key-black: #1a1a1a;
+            --accent: #00ffcc;
+            --accent-glow: rgba(0, 255, 204, 0.6);
+            --record-color: #ff3366;
+            --record-glow: rgba(255, 51, 102, 0.6);
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg);
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+
+        /* Layout */
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            position: relative;
+            z-index: 2;
+        }
+
+        /* Visualizer Background */
+        #visualizer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        /* Controls Header */
+        .controls {
+            flex: 0 0 auto;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            z-index: 3;
+            background: linear-gradient(to bottom, rgba(10,11,16,0.9), transparent);
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 10px 24px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn.record {
+            border-color: var(--record-color);
+            color: var(--record-color);
+        }
+
+        .btn.record.active {
+            background: var(--record-color);
+            color: white;
+            box-shadow: 0 0 20px var(--record-glow);
+            animation: pulse 1.5s infinite;
+        }
+
+        .btn.loop.active {
+            background: var(--accent);
+            color: #000;
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 var(--record-glow); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 51, 102, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 51, 102, 0); }
+        }
+
+        .status {
+            color: rgba(255,255,255,0.5);
+            font-size: 12px;
+            position: absolute;
+            top: 10px;
+            right: 15px;
+        }
+
+        /* Keyboard Area */
+        .keyboard-wrapper {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            padding-bottom: 20px;
+            position: relative;
+        }
+
+        .piano {
+            display: flex;
+            position: relative;
+            height: 40vh;
+            justify-content: center;
+        }
+
+        .key {
+            position: relative;
+            cursor: pointer;
+            border-radius: 0 0 8px 8px;
+            transition: transform 0.1s, background-color 0.1s, box-shadow 0.1s;
+            user-select: none;
+        }
+
+        .key.white {
+            width: 6vw;
+            max-width: 60px;
+            height: 100%;
+            background: var(--key-white);
+            border: 1px solid #ccc;
+            border-top: none;
+            z-index: 1;
+            box-shadow: inset 0 -5px 10px rgba(0,0,0,0.1);
+        }
+
+        .key.white:active, .key.white.active {
+            background: #fff;
+            transform: scale(0.98);
+            box-shadow: 0 0 15px var(--accent-glow);
+            background: linear-gradient(to bottom, #fff, var(--accent));
+        }
+
+        .key.black {
+            width: 4vw;
+            max-width: 40px;
+            height: 60%;
+            background: var(--key-black);
+            margin-left: -2vw;
+            margin-right: -2vw;
+            z-index: 2;
+            border-radius: 0 0 5px 5px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
+        }
+
+        /* Fix negative margins for black keys layout */
+        .key-group {
+            display: flex;
+            position: relative;
+        }
+        
+        /* Specific tweaks for black key positioning logic handled in JS generation or precise CSS */
+        /* Simplified absolute positioning for black keys for robustness */
+        
+        .piano-container {
+            position: relative;
+            height: 40vh;
+            width: 90%;
+            max-width: 800px;
+            display: flex;
+        }
+
+        .white-keys-layer {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .wk {
+            flex: 1;
+            background: var(--key-white);
+            border: 1px solid #999;
+            border-radius: 0 0 5px 5px;
+            margin: 0 2px;
+            height: 100%;
+            position: relative;
+            transition: all 0.1s;
+        }
+        
+        .wk.active {
+            background: #fff;
+            box-shadow: 0 0 20px var(--accent);
+            transform: translateY(2px);
+        }
+
+        .black-keys-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 60%;
+            pointer-events: none; /* Let clicks pass through to container logic or handle separately */
+            display: flex;
+        }
+
+        /* We will generate keys dynamically to handle the spacing correctly */
+        
+        .bk-wrapper {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            pointer-events: none;
+        }
+
+        .bk {
+            width: 60%;
+            height: 100%;
+            background: var(--key-black);
+            border-radius: 0 0 5px 5px;
+            pointer-events: auto;
+            cursor: pointer;
+            box-shadow: 2px 5px 10px rgba(0,0,0,0.4);
+            transition: all 0.1s;
+        }
+
+        .bk.active {
+            background: #333;
+            box-shadow: 0 0 15px var(--record-color);
+            transform: scale(0.95);
+        }
+
+        .empty-bk {
+            flex: 1;
+            pointer-events: none;
+            visibility: hidden;
+        }
+
+        /* Key Labels */
+        .label {
+            position: absolute;
+            bottom: 10px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            font-size: 10px;
+            color: #666;
+            pointer-events: none;
+        }
+        .bk .label {
+            color: #888;
+            bottom: 8px;
+        }
+
+        /* Overlay for "Click to Start" */
+        #start-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            flex-direction: column;
+            color: white;
+            cursor: pointer;
+        }
+        #start-overlay h1 { margin: 0 0 10px 0; font-weight: 300; letter-spacing: 5px; }
+        #start-overlay p { opacity: 0.7; }
+
+    </style>
+</head>
+<body>
+
+    <canvas id="visualizer"></canvas>
+
+    <div class="container">
+        <div class="controls">
+            <button id="btn-record" class="btn record">
+                <span class="icon">●</span> REC
+            </button>
+            <button id="btn-loop" class="btn loop" disabled>
+                <span class="icon">↻</span> LOOP
+            </button>
+            <button id="btn-clear" class="btn">
+                <span class="icon">✕</span> CLEAR
+            </button>
+        </div>
+        <div class="status" id="status-text">Ready</div>
+
+        <div class="keyboard-wrapper">
+            <div class="piano-container" id="piano">
+                <!-- Generated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <div id="start-overlay">
+        <h1>NEON PIANO</h1>
+        <p>Click anywhere to enable audio</p>
+    </div>
+
+<script type="module">
+    // --- Configuration ---
+    const inputs = window.GLYPH_INPUTS || {};
+    const CONFIG = {
+        waveform: inputs.waveform || 'triangle',
+        release: parseFloat(inputs.releaseTime) || 0.5,
+        delayAmt: parseFloat(inputs.delayAmt) || 0.3
+    };
+
+    // --- Audio System ---
+    let audioCtx;
+    let masterGain;
+    let delayNode;
+    let analyser;
+    
+    // Notes definition (C3 to E5 range roughly)
+    // We'll create a range of about 1.5 octaves that fits well on screen
+    // C4 is 261.63Hz
+    const NOTES = [
+        { note: 'C', freq: 261.63, type: 'white', key: 'a' },
+        { note: 'C#', freq: 277.18, type: 'black', key: 'w' },
+        { note: 'D', freq: 293.66, type: 'white', key: 's' },
+        { note: 'D#', freq: 311.13, type: 'black', key: 'e' },
+        { note: 'E', freq: 329.63, type: 'white', key: 'd' },
+        { note: 'F', freq: 349.23, type: 'white', key: 'f' },
+        { note: 'F#', freq: 369.99, type: 'black', key: 't' },
+        { note: 'G', freq: 392.00, type: 'white', key: 'g' },
+        { note: 'G#', freq: 415.30, type: 'black', key: 'y' },
+        { note: 'A', freq: 440.00, type: 'white', key: 'h' },
+        { note: 'A#', freq: 466.16, type: 'black', key: 'u' },
+        { note: 'B', freq: 493.88, type: 'white', key: 'j' },
+        { note: 'C', freq: 523.25, type: 'white', key: 'k' },
+        { note: 'C#', freq: 554.37, type: 'black', key: 'o' },
+        { note: 'D', freq: 587.33, type: 'white', key: 'l' },
+        { note: 'D#', freq: 622.25, type: 'black', key: 'p' },
+        { note: 'E', freq: 659.25, type: 'white', key: ';' }
+    ];
+
+    let activeOscillators = {}; // Map note index to osc node
+
+    function initAudio() {
+        if (audioCtx) return;
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0.5;
+        
+        // Delay Effect
+        delayNode = audioCtx.createDelay();
+        delayNode.delayTime.value = 0.4;
+        const delayFeedback = audioCtx.createGain();
+        delayFeedback.gain.value = CONFIG.delayAmt;
+        
+        // Analyser for visuals
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+
+        // Routing: Source -> Master -> Analyser -> Dest
+        //          Source -> Delay -> Feedback -> Delay -> Master
+        
+        masterGain.connect(analyser);
+        analyser.connect(audioCtx.destination);
+        
+        masterGain.connect(delayNode);
+        delayNode.connect(delayFeedback);
+        delayFeedback.connect(delayNode);
+        delayNode.connect(masterGain); // Mix delay back in
+
+        // Start visual loop
+        drawVisuals();
+    }
+
+    function playNote(index) {
+        if (!audioCtx) initAudio();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        // If already playing, stop it first (retrigger)
+        if (activeOscillators[index]) {
+            stopNote(index);
+        }
+
+        const osc = audioCtx.createOscillator();
+        const env = audioCtx.createGain();
+
+        osc.type = CONFIG.waveform;
+        osc.frequency.setValueAtTime(NOTES[index].freq, audioCtx.currentTime);
+
+        // Envelope
+        env.gain.setValueAtTime(0, audioCtx.currentTime);
+        env.gain.linearRampToValueAtTime(0.8, audioCtx.currentTime + 0.02); // Attack
+        env.gain.setValueAtTime(0.8, audioCtx.currentTime + 0.1); // Sustain level start
+        
+        osc.connect(env);
+        env.connect(masterGain);
+
+        osc.start();
+        activeOscillators[index] = { osc, env };
+
+        // Visual feedback on UI
+        highlightKey(index, true);
+
+        // Record event if recording
+        if (looper.state === 'recording') {
+            looper.events.push({
+                type: 'on',
+                note: index,
+                time: audioCtx.currentTime - looper.startTime
+            });
+        }
+    }
+
+    function stopNote(index) {
+        if (!activeOscillators[index]) return;
+
+        const { osc, env } = activeOscillators[index];
+        
+        // Release
+        const now = audioCtx.currentTime;
+        // Cancel scheduled values to ensure release happens now
+        env.gain.cancelScheduledValues(now);
+        env.gain.setValueAtTime(env.gain.value, now);
+        env.gain.exponentialRampToValueAtTime(0.001, now + CONFIG.release);
+        
+        osc.stop(now + CONFIG.release + 0.1);
+        
+        delete activeOscillators[index];
+
+        // UI Feedback
+        highlightKey(index, false);
+
+        // Record event
+        if (looper.state === 'recording') {
+            looper.events.push({
+                type: 'off',
+                note: index,
+                time: audioCtx.currentTime - looper.startTime
+            });
+        }
+    }
+
+    // --- UI Generation ---
+    const pianoContainer = document.getElementById('piano');
+    
+    function buildPiano() {
+        const whiteLayer = document.createElement('div');
+        whiteLayer.className = 'white-keys-layer';
+        
+        const blackLayer = document.createElement('div');
+        blackLayer.className = 'black-keys-layer';
+
+        // Separate white and black notes for layout
+        let whiteKeysHTML = '';
+        let blackKeysHTML = '';
+        
+        let globalIndex = 0;
+        
+        // Iterate through notes to build structure
+        // We need to insert spacers in the black key layer where there are no black keys
+        // Pattern of black keys relative to white keys:
+        // C(W), C#(B), D(W), D#(B), E(W), F(W), F#(B), G(W), G#(B), A(W), A#(B), B(W)
+        
+        // We will iterate through NOTES. 
+        // If it's white, we add to white layer.
+        // If it's black, we add to black layer "slot" corresponding to the previous white key gap.
+        
+        // Actually, simpler approach for HTML/CSS grid:
+        // White layer is just flex of all white keys.
+        // Black layer is flex of wrappers. Each wrapper sits over a boundary between white keys.
+        // But standard CSS flex logic is tricky for piano.
+        
+        // Let's use the generated arrays method.
+        NOTES.forEach((n, i) => {
+            if (n.type === 'white') {
+                const label = n.key.toUpperCase();
+                const div = document.createElement('div');
+                div.className = 'wk';
+                div.dataset.index = i;
+                div.innerHTML = `<div class="label">${label}</div>`;
+                div.onmousedown = () => playNote(i);
+                div.onmouseup = () => stopNote(i);
+                div.onmouseleave = () => stopNote(i);
+                // Touch support
+                div.ontouchstart = (e) => { e.preventDefault(); playNote(i); };
+                div.ontouchend = (e) => { e.preventDefault(); stopNote(i); };
+                whiteLayer.appendChild(div);
+            }
+        });
+
+        // Black keys need to be positioned absolutely or via a parallel flex container that matches white key widths.
+        // A common trick: The black keys layer has children corresponding to the spaces between white keys.
+        // 1st slot: between C and D (C#). 2nd: between D and E (D#). 3rd: E and F (None).
+        
+        let whiteKeyCount = 0;
+        NOTES.forEach((n, i) => {
+            if (n.type === 'white') {
+                if (i > 0) { // Check if there is a black key before this white key (but after the previous white key)
+                    // Actually, looking at the array is easier.
+                    // We need to look between white keys.
+                }
+                whiteKeyCount++;
+            }
+        });
+        
+        // Let's iterate the notes and build the black key overlay manually based on the sequence
+        // We need a wrapper for every white key except the last one, representing the "right half" of it where a black key might sit.
+        // Actually, let's use % positioning for black keys, it's robust.
+        // 1 octave = 7 white keys. 100% / 7 = 14.28% width per white key.
+        // Black keys are centered on the border.
+        
+        // Let's recalculate indices for DOM elements
+        const domKeys = [];
+        let whiteIndex = 0;
+        
+        NOTES.forEach((n, i) => {
+            if (n.type === 'white') {
+                domKeys[i] = whiteLayer.children[whiteIndex];
+                whiteIndex++;
+            }
+        });
+        
+        // Now place black keys
+        whiteIndex = 0;
+        let leftPercent = 0;
+        const whiteWidth = 100 / whiteIndex; // Wait, need total count first
+        const totalWhite = NOTES.filter(n => n.type === 'white').length;
+        const pctStep = 100 / totalWhite;
+
+        NOTES.forEach((n, i) => {
+            if (n.type === 'white') {
+                leftPercent += pctStep;
+            } else {
+                // It's a black key. It goes on top of the boundary at 'leftPercent'.
+                const bk = document.createElement('div');
+                bk.className = 'bk';
+                bk.dataset.index = i;
+                bk.innerHTML = `<div class="label">${n.key.toUpperCase()}</div>`;
+                
+                // Position
+                // Center of black key should be at leftPercent
+                // Width is roughly 0.6 of a white key
+                const width = pctStep * 0.7; 
+                bk.style.position = 'absolute';
+                bk.style.left = `calc(${leftPercent}% - ${width/2}%)`;
+                bk.style.width = `${width}%`;
+                
+                bk.onmousedown = () => playNote(i);
+                bk.onmouseup = () => stopNote(i);
+                bk.onmouseleave = () => stopNote(i);
+                bk.ontouchstart = (e) => { e.preventDefault(); playNote(i); };
+                bk.ontouchend = (e) => { e.preventDefault(); stopNote(i); };
+
+                blackLayer.appendChild(bk);
+                domKeys[i] = bk;
+            }
+        });
+
+        pianoContainer.appendChild(whiteLayer);
+        pianoContainer.appendChild(blackLayer);
+        
+        return domKeys;
+    }
+
+    const keyElements = buildPiano();
+
+    function highlightKey(index, isActive) {
+        const el = keyElements[index];
+        if (el) {
+            if (isActive) el.classList.add('active');
+            else el.classList.remove('active');
+        }
+    }
+
+    // --- Looper System ---
+    const looper = {
+        state: 'idle', // idle, recording, playing
+        startTime: 0,
+        loopDuration: 0,
+        events: [], // { type: 'on'|'off', note: index, time: ms }
+        playbackTime: 0,
+        nextEventIndex: 0,
+        timerId: null
+    };
+
+    const btnRecord = document.getElementById('btn-record');
+    const btnLoop = document.getElementById('btn-loop');
+    const btnClear = document.getElementById('btn-clear');
+    const statusText = document.getElementById('status-text');
+
+    btnRecord.addEventListener('click', toggleRecord);
+    btnLoop.addEventListener('click', toggleLoopPlay);
+    btnClear.addEventListener('click', clearLoop);
+
+    function toggleRecord() {
+        if (!audioCtx) initAudio();
+        
+        if (looper.state === 'recording') {
+            // Stop recording, start looping
+            finishRecording();
+        } else {
+            // Start recording
+            startRecording();
+        }
+    }
+
+    function startRecording() {
+        clearLoop(); // Reset previous
+        looper.state = 'recording';
+        looper.startTime = audioCtx.currentTime;
+        looper.events = [];
+        
+        btnRecord.classList.add('active');
+        btnRecord.innerHTML = '<span class="icon">■</span> STOP';
+        statusText.innerText = "Recording...";
+        btnLoop.disabled = true;
+    }
+
+    function finishRecording() {
+        looper.loopDuration = audioCtx.currentTime - looper.startTime;
+        looper.state = 'playing';
+        
+        btnRecord.classList.remove('active');
+        btnRecord.innerHTML = '<span class="icon">●</span> REC';
+        
+        btnLoop.disabled = false;
+        btnLoop.classList.add('active');
+        statusText.innerText = "Looping";
+        
+        // Start playback loop
+        runLoop();
+    }
+
+    function toggleLoopPlay() {
+        if (looper.state === 'playing') {
+            // Stop
+            looper.state = 'idle';
+            btnLoop.classList.remove('active');
+            statusText.innerText = "Stopped";
+            cancelAnimationFrame(looper.timerId);
+            // Stop all sounds
+            Object.keys(activeOscillators).forEach(k => stopNote(k));
+        } else if (looper.events.length > 0) {
+            // Play
+            looper.state = 'playing';
+            btnLoop.classList.add('active');
+            statusText.innerText = "Looping";
+            runLoop();
+        }
+    }
+
+    function clearLoop() {
+        looper.state = 'idle';
+        looper.events = [];
+        looper.loopDuration = 0;
+        cancelAnimationFrame(looper.timerId);
+        
+        btnRecord.classList.remove('active');
+        btnLoop.classList.remove('active');
+        btnLoop.disabled = true;
+        statusText.innerText = "Cleared";
+        
+        Object.keys(activeOscillators).forEach(k => stopNote(k));
+    }
+
+    function runLoop() {
+        const loopStartContextTime = audioCtx.currentTime;
+        
+        // We need a loop that checks time frequently
+        function tick() {
+            if (looper.state !== 'playing') return;
+
+            const now = audioCtx.currentTime;
+            const timeInLoop = (now - loopStartContextTime) % looper.loopDuration;
+            
+            // Simple approach: Check events that happened "recently" in the loop cycle
+            // Better approach for Web Audio: Schedule ahead? 
+            // Since this is a simple widget, let's use the requestAnimationFrame loop to trigger notes.
+            // It might be slightly jittery but sufficient for a "fun widget".
+            
+            // To avoid double triggering, we can track the last checked time
+            // But handling the wrap-around is tricky.
+            
+            // Let's just schedule the whole buffer of events every loop cycle?
+            // No, that's complex to stop.
+            
+            // Let's use a "Playhead" approach.
+            
+            // Actually, for a simple looper, we can just iterate all events and if their time is within the last frame's delta, play them.
+        }
+        
+        // Alternative: Just schedule the next loop's worth of events
+        // But we want visual feedback (keys lighting up).
+        
+        // Let's stick to a robust frame loop
+        let lastTime = -0.01; // Start before 0
+        
+        function frame() {
+            if (looper.state !== 'playing') return;
+            
+            const now = audioCtx.currentTime;
+            const totalElapsed = now - loopStartContextTime;
+            const currentLoopTime = totalElapsed % looper.loopDuration;
+            
+            // Detect Loop Wrap
+            if (currentLoopTime < lastTime) {
+                // We wrapped
+                lastTime = -0.01;
+                // Kill all notes at end of loop to be clean? 
+                // Or let them ring if they have release?
+                // For simplicity, let's ensure 'off' events fired.
+            }
+            
+            // Find events between lastTime and currentLoopTime
+            looper.events.forEach(e => {
+                if (e.time > lastTime && e.time <= currentLoopTime) {
+                    if (e.type === 'on') {
+                        // Play visually and audio
+                        // We don't want to record these generated events, so temporarily disable recording check inside playNote?
+                        // Actually playNote checks looper.state. If 'playing', it doesn't record.
+                        // Wait, playNote ADDS to events if state is recording.
+                        // Here state is 'playing', so safe.
+                        playNote(e.note);
+                    } else {
+                        stopNote(e.note);
+                    }
+                }
+            });
+            
+            lastTime = currentLoopTime;
+            looper.timerId = requestAnimationFrame(frame);
+        }
+        
+        frame();
+    }
+
+    // --- Visualizer ---
+    const canvas = document.getElementById('visualizer');
+    const ctx = canvas.getContext('2d');
+    let particles = [];
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    function drawVisuals() {
+        requestAnimationFrame(drawVisuals);
+        
+        ctx.fillStyle = 'rgba(10, 11, 16, 0.2)'; // Trails
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (!analyser) return;
+
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteFrequencyData(dataArray);
+
+        // Draw Bars
+        const barWidth = (canvas.width / bufferLength) * 2.5;
+        let barHeight;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+            barHeight = dataArray[i] / 2; // Scale down
+            
+            // Color based on height
+            const r = barHeight + 25 * (i/bufferLength);
+            const g = 250 * (i/bufferLength);
+            const b = 200;
+
+            ctx.fillStyle = `rgba(${r},${g},${b}, ${barHeight/200})`;
+            ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+            x += barWidth + 1;
+            
+            // Spawn particles on loud beats
+            if (barHeight > 100 && Math.random() > 0.95) {
+                particles.push({
+                    x: x,
+                    y: canvas.height - barHeight,
+                    vx: (Math.random() - 0.5) * 2,
+                    vy: (Math.random() - 1) * 3,
+                    life: 1.0,
+                    color: `rgb(${r},${g},${b})`
+                });
+            }
+        }
+        
+        // Draw Particles
+        particles.forEach((p, index) => {
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= 0.02;
+            p.vy += 0.05; // Gravity
+            
+            ctx.fillStyle = p.color;
+            ctx.globalAlpha = p.life;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 2, 0, Math.PI*2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            
+            if (p.life <= 0) particles.splice(index, 1);
+        });
+    }
+
+    // --- Input Handling ---
+    const keyMap = {};
+    NOTES.forEach((n, i) => {
+        keyMap[n.key] = i;
+    });
+
+    window.addEventListener('keydown', (e) => {
+        if (e.repeat) return;
+        const index = keyMap[e.key.toLowerCase()];
+        if (index !== undefined) {
+            playNote(index);
+        }
+    });
+
+    window.addEventListener('keyup', (e) => {
+        const index = keyMap[e.key.toLowerCase()];
+        if (index !== undefined) {
+            stopNote(index);
+        }
+    });
+
+    // Start Overlay
+    document.getElementById('start-overlay').addEventListener('click', function() {
+        initAudio();
+        this.style.opacity = '0';
+        setTimeout(() => this.remove(), 500);
+    });
+
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764390650619-user",
+    "role": "user",
+    "content": "make a github interface that's clean, modern, and has a transparent background but can be modified with inputs. The widget should start the repo level, then allow click through to show PR's, issues, actions, and then you can click into those and see information.. Like for PR's, I should see a list of PR's, and then I can click on A PR to review it in full.",
+    "timestamp": 1764390650619,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764390650619-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"GitHub Glass\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764390650620,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764390650619-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764390650621,
+    "type": "info"
+  }
+]

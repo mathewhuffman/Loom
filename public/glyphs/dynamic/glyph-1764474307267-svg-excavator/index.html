@@ -1,0 +1,535 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Excavator</title>
+    <style>
+        :root {
+            --bg-color: #1a1510;
+            --ui-bg: rgba(0, 0, 0, 0.7);
+            --ui-text: #e0d0b0;
+            --accent: #ffcc00;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none;
+            cursor: none; /* We use a custom shovel cursor */
+        }
+
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        svg#game-world {
+            width: 100%;
+            height: 100%;
+            display: block;
+            touch-action: none;
+        }
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .stat-box {
+            background: var(--ui-bg);
+            color: var(--ui-text);
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: 1px solid #4a3b2a;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .stat-icon {
+            font-size: 20px;
+        }
+
+        /* Inventory at bottom */
+        #inventory {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--ui-bg);
+            padding: 10px;
+            border-radius: 12px;
+            display: flex;
+            gap: 8px;
+            pointer-events: none;
+            border: 1px solid #4a3b2a;
+        }
+
+        .inv-slot {
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            border: 1px solid #333;
+        }
+
+        .inv-slot.found {
+            background: rgba(255, 215, 0, 0.1);
+            border-color: var(--accent);
+            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        @keyframes popIn {
+            0% { transform: scale(0); }
+            100% { transform: scale(1); }
+        }
+
+        /* Custom Cursor */
+        #cursor-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        #shovel {
+            position: absolute;
+            width: 60px;
+            height: 60px;
+            /* Center the pivot on the handle */
+            transform-origin: 20% 80%; 
+            filter: drop-shadow(3px 3px 2px rgba(0,0,0,0.5));
+            transition: transform 0.1s;
+        }
+
+        #shovel.digging {
+            animation: digAction 0.2s ease-in-out;
+        }
+
+        @keyframes digAction {
+            0% { transform: rotate(0deg) translate(0, 0); }
+            50% { transform: rotate(-45deg) translate(-10px, 10px); }
+            100% { transform: rotate(0deg) translate(0, 0); }
+        }
+
+        .particle {
+            pointer-events: none;
+            animation: flyAndFade 0.8s forwards;
+        }
+
+        @keyframes flyAndFade {
+            0% { opacity: 1; transform: translate(0, 0) scale(1); }
+            100% { opacity: 0; transform: translate(var(--vx), var(--vy)) scale(0); }
+        }
+
+        /* SVG Styles */
+        .soil-block {
+            transition: fill 0.2s;
+            stroke: rgba(0,0,0,0.1);
+            stroke-width: 1px;
+        }
+        .soil-block:hover {
+            filter: brightness(1.1);
+        }
+        .cracked {
+            stroke: rgba(0,0,0,0.3);
+        }
+        
+        .treasure-item {
+            animation: float 2s infinite ease-in-out;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-2px); }
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <svg id="game-world" preserveAspectRatio="xMidYMid slice"></svg>
+    
+    <!-- UI -->
+    <div id="ui-layer">
+        <div class="stat-box">
+            <span class="stat-icon">⛏️</span>
+            <span id="score-display">0</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-icon">Depth</span>
+            <span id="depth-display">0m</span>
+        </div>
+    </div>
+
+    <div id="inventory">
+        <!-- Slots generated by JS -->
+    </div>
+
+    <!-- Cursor Layer -->
+    <div id="cursor-layer">
+        <svg id="shovel" viewBox="0 0 100 100" fill="none" stroke="black" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+            <!-- Shovel Handle -->
+            <path d="M20 80 L50 50" stroke="#8B4513" stroke-width="8" />
+            <!-- Shovel Head -->
+            <path d="M50 50 L70 30 C 80 20, 90 30, 80 40 L 60 60 Z" fill="#A9A9A9" stroke="#555" stroke-width="2" />
+            <path d="M55 55 L75 35" stroke="#777" stroke-width="1" />
+        </svg>
+    </div>
+</div>
+
+<script type="module">
+    const inputs = window.GLYPH_INPUTS || {};
+    const GRID_SIZE = parseInt(inputs.gridSize) || 12;
+    const TREASURE_CHANCE = (parseInt(inputs.treasureDensity) || 15) / 100;
+    const SHOW_GRID = inputs.showGrid === true;
+
+    const svg = document.getElementById('game-world');
+    const shovel = document.getElementById('shovel');
+    const scoreDisplay = document.getElementById('score-display');
+    const depthDisplay = document.getElementById('depth-display');
+    const inventoryEl = document.getElementById('inventory');
+
+    // Game State
+    let score = 0;
+    let inventory = [];
+    const treasures = ['🦴', '🪙', '💎', '🏺', '👑', '🐛', '🕰️', '🔑'];
+    const soilColors = ['#5d4037', '#4e342e', '#3e2723', '#795548', '#6d4c41'];
+    const stoneColors = ['#424242', '#616161', '#757575'];
+    
+    let blocks = [];
+    let svgNS = "http://www.w3.org/2000/svg";
+    let width, height, cellW, cellH;
+    
+    // Audio Context for synthesized sounds
+    let audioCtx;
+    
+    function initAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+    }
+
+    function playSound(type) {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        const now = audioCtx.currentTime;
+        
+        if (type === 'dig') {
+            // Thud sound
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(150, now);
+            osc.frequency.exponentialRampToValueAtTime(40, now + 0.1);
+            gain.gain.setValueAtTime(0.5, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+            osc.start(now);
+            osc.stop(now + 0.1);
+        } else if (type === 'break') {
+            // Crackle
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(200, now);
+            osc.frequency.exponentialRampToValueAtTime(50, now + 0.15);
+            gain.gain.setValueAtTime(0.3, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+            osc.start(now);
+            osc.stop(now + 0.15);
+        } else if (type === 'treasure') {
+            // Ding
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(800, now);
+            osc.frequency.exponentialRampToValueAtTime(1200, now + 0.1);
+            gain.gain.setValueAtTime(0.3, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+            osc.start(now);
+            osc.stop(now + 0.5);
+        }
+    }
+
+    // Initialize Inventory UI
+    function initInventory() {
+        inventoryEl.innerHTML = '';
+        for(let i=0; i<6; i++) {
+            const slot = document.createElement('div');
+            slot.className = 'inv-slot';
+            slot.id = `slot-${i}`;
+            inventoryEl.appendChild(slot);
+        }
+    }
+
+    function generateWorld() {
+        svg.innerHTML = '';
+        blocks = [];
+        
+        // Definitions for filters and patterns
+        const defs = document.createElementNS(svgNS, 'defs');
+        
+        // Noise Filter for dirt texture
+        const filter = document.createElementNS(svgNS, 'filter');
+        filter.id = 'dirtNoise';
+        filter.innerHTML = `
+            <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch" result="noise"/>
+            <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.2 0" in="noise" result="coloredNoise"/>
+            <feComposite operator="in" in="coloredNoise" in2="SourceGraphic" result="composite"/>
+            <feBlend mode="multiply" in="composite" in2="SourceGraphic"/>
+        `;
+        defs.appendChild(filter);
+        
+        // Gradient for depth
+        const grad = document.createElementNS(svgNS, 'linearGradient');
+        grad.id = 'deepDark';
+        grad.setAttribute('x1', '0%');
+        grad.setAttribute('y1', '0%');
+        grad.setAttribute('x2', '0%');
+        grad.setAttribute('y2', '100%');
+        grad.innerHTML = `
+            <stop offset="0%" stop-color="rgba(0,0,0,0)" />
+            <stop offset="100%" stop-color="rgba(0,0,0,0.6)" />
+        `;
+        defs.appendChild(grad);
+        
+        svg.appendChild(defs);
+
+        // Calculate cell size
+        const rect = svg.getBoundingClientRect();
+        width = rect.width;
+        height = rect.height;
+        
+        // Adjust grid based on aspect ratio
+        const cols = GRID_SIZE;
+        const rows = Math.ceil(height / (width / cols));
+        
+        cellW = width / cols;
+        cellH = cellW; // Keep square
+
+        // Group for blocks
+        const blockGroup = document.createElementNS(svgNS, 'g');
+        blockGroup.setAttribute('filter', 'url(#dirtNoise)');
+        svg.appendChild(blockGroup);
+        
+        // Group for treasures (behind blocks initially, but revealed when blocks removed)
+        const treasureGroup = document.createElementNS(svgNS, 'g');
+        svg.insertBefore(treasureGroup, blockGroup);
+
+        for (let y = 0; y < rows; y++) {
+            for (let x = 0; x < cols; x++) {
+                const isSurface = y === 0;
+                const isDeep = y > rows * 0.6;
+                
+                // Determine block type
+                let color;
+                let health = 1;
+                
+                if (isSurface) {
+                    color = '#4CAF50'; // Grass
+                    health = 1;
+                } else if (isDeep) {
+                    color = stoneColors[Math.floor(Math.random() * stoneColors.length)];
+                    health = 3;
+                } else {
+                    color = soilColors[Math.floor(Math.random() * soilColors.length)];
+                    health = Math.random() > 0.8 ? 2 : 1;
+                }
+
+                // Create Block
+                const block = document.createElementNS(svgNS, 'rect');
+                block.setAttribute('x', x * cellW);
+                block.setAttribute('y', y * cellH);
+                block.setAttribute('width', cellW + 0.5); // Overlap slightly to prevent gaps
+                block.setAttribute('height', cellH + 0.5);
+                block.setAttribute('fill', color);
+                block.setAttribute('class', 'soil-block');
+                if (SHOW_GRID) block.setAttribute('stroke', 'rgba(0,0,0,0.2)');
+                
+                // Store data
+                const blockData = {
+                    el: block,
+                    x: x,
+                    y: y,
+                    health: health,
+                    maxHealth: health,
+                    hasTreasure: !isSurface && Math.random() < TREASURE_CHANCE,
+                    treasureType: null
+                };
+
+                if (blockData.hasTreasure) {
+                    blockData.treasureType = treasures[Math.floor(Math.random() * treasures.length)];
+                    // Create hidden treasure element
+                    const tText = document.createElementNS(svgNS, 'text');
+                    tText.textContent = blockData.treasureType;
+                    tText.setAttribute('x', x * cellW + cellW/2);
+                    tText.setAttribute('y', y * cellH + cellH/1.5);
+                    tText.setAttribute('font-size', cellH * 0.6);
+                    tText.setAttribute('text-anchor', 'middle');
+                    tText.setAttribute('class', 'treasure-item');
+                    tText.style.display = 'none'; // Hidden initially
+                    treasureGroup.appendChild(tText);
+                    blockData.treasureEl = tText;
+                }
+
+                block.onclick = (e) => handleDig(blockData, e);
+                blockGroup.appendChild(block);
+                blocks.push(blockData);
+            }
+        }
+        
+        // Overlay Gradient for depth atmosphere
+        const overlay = document.createElementNS(svgNS, 'rect');
+        overlay.setAttribute('width', '100%');
+        overlay.setAttribute('height', '100%');
+        overlay.setAttribute('fill', 'url(#deepDark)');
+        overlay.setAttribute('pointer-events', 'none');
+        svg.appendChild(overlay);
+    }
+
+    function handleDig(block, event) {
+        initAudio();
+        
+        if (block.health <= 0) return;
+
+        // Visual feedback
+        shovel.classList.remove('digging');
+        void shovel.offsetWidth; // trigger reflow
+        shovel.classList.add('digging');
+
+        block.health--;
+        
+        // Create particles
+        spawnParticles(event.clientX, event.clientY, block.el.getAttribute('fill'));
+
+        if (block.health <= 0) {
+            // Block Destroyed
+            playSound('break');
+            block.el.style.opacity = '0';
+            block.el.style.pointerEvents = 'none';
+            score += 10;
+            
+            // Check treasure
+            if (block.hasTreasure) {
+                block.treasureEl.style.display = 'block';
+                collectTreasure(block.treasureType);
+            }
+            
+            // Update Depth UI
+            const depth = Math.floor((block.y + 1) * 0.5); // arbitrary meters
+            depthDisplay.textContent = depth + 'm';
+
+        } else {
+            // Damaged
+            playSound('dig');
+            const darkness = 1 - (block.health / block.maxHealth);
+            block.el.style.filter = `brightness(${1 - darkness * 0.3})`;
+            block.el.classList.add('cracked');
+        }
+
+        scoreDisplay.textContent = score;
+    }
+
+    function collectTreasure(type) {
+        playSound('treasure');
+        score += 100;
+        
+        // Add to inventory UI
+        const emptySlot = Array.from(document.querySelectorAll('.inv-slot'))
+            .find(slot => !slot.innerHTML);
+            
+        if (emptySlot) {
+            emptySlot.innerHTML = type;
+            emptySlot.classList.add('found');
+        } else {
+            // Shift inventory
+            const slots = document.querySelectorAll('.inv-slot');
+            for(let i=0; i<slots.length-1; i++) {
+                slots[i].innerHTML = slots[i+1].innerHTML;
+                slots[i].className = slots[i+1].className;
+            }
+            slots[slots.length-1].innerHTML = type;
+            slots[slots.length-1].classList.add('found');
+        }
+    }
+
+    function spawnParticles(x, y, color) {
+        const count = 5 + Math.random() * 5;
+        for (let i = 0; i < count; i++) {
+            const p = document.createElement('div');
+            p.className = 'particle';
+            p.style.position = 'absolute';
+            p.style.left = x + 'px';
+            p.style.top = y + 'px';
+            p.style.width = (4 + Math.random() * 6) + 'px';
+            p.style.height = p.style.width;
+            p.style.backgroundColor = color;
+            p.style.borderRadius = '2px';
+            
+            // Random velocity
+            const angle = Math.random() * Math.PI * 2;
+            const velocity = 50 + Math.random() * 100;
+            const vx = Math.cos(angle) * velocity + 'px';
+            const vy = Math.sin(angle) * velocity + 'px';
+            
+            p.style.setProperty('--vx', vx);
+            p.style.setProperty('--vy', vy);
+            
+            document.body.appendChild(p);
+            
+            setTimeout(() => p.remove(), 800);
+        }
+    }
+
+    // Cursor tracking
+    document.addEventListener('mousemove', (e) => {
+        // Offset so the tip of the shovel is at the mouse
+        const offsetX = -10;
+        const offsetY = -50;
+        shovel.style.left = (e.clientX + offsetX) + 'px';
+        shovel.style.top = (e.clientY + offsetY) + 'px';
+    });
+
+    // Handle Resize
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(generateWorld, 200);
+    });
+
+    // Init
+    initInventory();
+    
+    // Wait for layout
+    setTimeout(generateWorld, 50);
+
+</script>
+</body>
+</html>

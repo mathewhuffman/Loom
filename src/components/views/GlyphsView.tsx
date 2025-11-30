@@ -44,6 +44,14 @@ interface GlyphManifest {
   entry?: string;
   icon?: string;
   inputs?: GlyphInput[];
+  linkedKeys?: string[]; // IDs of linked keys from user's vault
+}
+
+interface LinkedKeyInfo {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
 }
 
 interface GlyphFolder {
@@ -94,6 +102,7 @@ export default function GlyphsView() {
   const [folders, setFolders] = useState<GlyphFolder[]>([]);
   const [unassignedOrder, setUnassignedOrder] = useState<string[]>([]);
   const [selectedGlyph, setSelectedGlyph] = useState<GlyphManifest | null>(null);
+  const glyphMap = useMemo(() => new Map(glyphs.map(g => [g.id, g])), [glyphs]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [previewCode, setPreviewCode] = useState<string | null>(null);
@@ -117,6 +126,42 @@ export default function GlyphsView() {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderIcon, setNewFolderIcon] = useState('📁');
+  
+  // Linked keys state
+  const [linkedKeys, setLinkedKeys] = useState<LinkedKeyInfo[]>([]);
+  const [availableKeys, setAvailableKeys] = useState<LinkedKeyInfo[]>([]);
+  const [isKeyPickerOpen, setIsKeyPickerOpen] = useState(false);
+  const [isLoadingKeys, setIsLoadingKeys] = useState(false);
+  
+  // Bundled glyph state
+  const [isBundled, setIsBundled] = useState(false);
+  const [isBundleLoading, setIsBundleLoading] = useState(false);
+  
+  // Resolved inputs for preview (includes API keys and input values)
+  const [resolvedPreviewInputs, setResolvedPreviewInputs] = useState<Record<string, unknown>>({});
+  
+  // Quick edit panel state
+  const [quickEditGlyphId, setQuickEditGlyphId] = useState<string | null>(null);
+  const [quickEditValues, setQuickEditValues] = useState<Record<string, unknown>>({});
+  const [quickEditAnchor, setQuickEditAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [isQuickSaving, setIsQuickSaving] = useState(false);
+  const quickEditPanelRef = useRef<HTMLDivElement | null>(null);
+  const quickEditSaveTimerRef = useRef<number | null>(null);
+  const quickEditPendingUpdatesRef = useRef<{ glyphId: string; updates: Record<string, unknown> } | null>(null);
+  const quickEditSaveInFlightRef = useRef(0);
+
+const buildInputValueMap = useCallback((glyph?: GlyphManifest | null) => {
+  if (!glyph?.inputs || glyph.inputs.length === 0) return {};
+  const values: Record<string, unknown> = {};
+  for (const input of glyph.inputs) {
+    if ('value' in input && input.value !== undefined) {
+      values[input.id] = input.value;
+    } else if ('defaultValue' in input && input.defaultValue !== undefined) {
+      values[input.id] = input.defaultValue;
+    }
+  }
+  return values;
+}, []);
   
   // Drag and drop state
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -160,6 +205,25 @@ export default function GlyphsView() {
     loadData();
   }, []);
   
+  // Listen for glyph list changes (new glyphs created) and auto-refresh
+  useEffect(() => {
+    const unsubscribe = window.loom?.onGlyphListChanged?.(async (data) => {
+      console.log('[GlyphsView] 🔄 Glyph list changed, refreshing...', data.glyphId);
+      try {
+        // Reload glyphs
+        const loadedGlyphs = await window.loom?.loadGlyphs?.() || [];
+        setGlyphs(loadedGlyphs as GlyphManifest[]);
+        console.log('[GlyphsView] ✅ Glyphs refreshed, count:', loadedGlyphs.length);
+      } catch (error) {
+        console.error('[GlyphsView] Failed to refresh glyphs:', error);
+      }
+    });
+    
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+  
   // Save folders whenever they change
   const saveFolders = useCallback(async (newFolders: GlyphFolder[], newUnassignedOrder: string[]) => {
     try {
@@ -172,6 +236,17 @@ export default function GlyphsView() {
     }
   }, []);
 
+  const quickEditGlyph = quickEditGlyphId ? glyphMap.get(quickEditGlyphId) ?? null : null;
+
+  useEffect(() => {
+    return () => {
+      if (quickEditSaveTimerRef.current) {
+        window.clearTimeout(quickEditSaveTimerRef.current);
+        quickEditSaveTimerRef.current = null;
+      }
+    };
+  }, []);
+
   // Load preview code when selection changes
   useEffect(() => {
     setPreviewCode(null);
@@ -180,6 +255,9 @@ export default function GlyphsView() {
     setIsDetailPromptExpanded(false);
     setIsEditingName(false);
     setIsIconPickerOpen(false);
+    setIsKeyPickerOpen(false);
+    setLinkedKeys([]);
+    setResolvedPreviewInputs({});
 
     if (!selectedGlyph) {
       setIsPreviewLoading(false);
@@ -188,17 +266,10 @@ export default function GlyphsView() {
     }
 
     // Initialize input values from glyph manifest
-    const initialValues: Record<string, unknown> = {};
-    if (selectedGlyph.inputs) {
-      for (const input of selectedGlyph.inputs) {
-        if ('value' in input && input.value !== undefined) {
-          initialValues[input.id] = input.value;
-        } else if ('defaultValue' in input && input.defaultValue !== undefined) {
-          initialValues[input.id] = input.defaultValue;
-        }
-      }
-    }
+    const initialValues = buildInputValueMap(selectedGlyph);
     setInputValues(initialValues);
+    // Also initialize resolved preview inputs with the same values
+    setResolvedPreviewInputs(prev => ({ ...prev, ...initialValues }));
     setEditedName(selectedGlyph.name);
 
     const entryFile = resolveGlyphEntryFile(selectedGlyph);
@@ -237,20 +308,82 @@ export default function GlyphsView() {
       }
     };
 
+    // Load linked keys for this glyph and resolve their values for preview
+    const loadLinkedKeys = async () => {
+      setIsLoadingKeys(true);
+      try {
+        const result = await window.loom?.getGlyphLinkedKeys?.(selectedGlyph.id);
+        if (isCancelled) return;
+        if (result?.success && result.linkedKeys) {
+          setLinkedKeys(result.linkedKeys);
+        }
+        
+        // Also resolve the actual key values for preview
+        const resolvedResult = await window.loom?.getGlyphResolvedKeys?.(selectedGlyph.id);
+        if (isCancelled) return;
+        
+        if (resolvedResult?.success && resolvedResult.keys) {
+          const apiKeyInputs = (selectedGlyph.inputs || []).filter(i => i.type === 'apiKey');
+          const resolvedInputs: Record<string, unknown> = {};
+          
+          for (const [, keyData] of Object.entries(resolvedResult.keys) as [string, { name: string; value: string }][]) {
+            const keyName = keyData.name;
+            const keyNameLower = keyName.toLowerCase().replace(/\s+/g, '');
+            
+            // Try to find a matching apiKey input in the manifest
+            let matchedInputId: string | null = null;
+            
+            for (const apiInput of apiKeyInputs) {
+              const inputIdLower = apiInput.id.toLowerCase();
+              const inputLabelLower = (apiInput.label || '').toLowerCase().replace(/\s+/g, '');
+              const inputService = ((apiInput as any).service || '').toLowerCase();
+              
+              if (inputIdLower.includes(keyNameLower) || 
+                  keyNameLower.includes(inputIdLower) ||
+                  keyNameLower.includes(inputService) ||
+                  (inputService && keyNameLower.includes(inputService)) ||
+                  inputLabelLower.includes(keyNameLower) ||
+                  keyNameLower.includes(inputLabelLower)) {
+                matchedInputId = apiInput.id;
+                break;
+              }
+            }
+            
+            const inputKey = matchedInputId || keyNameLower;
+            resolvedInputs[inputKey] = keyData.value;
+            console.log(`🔐 [GlyphsView] Resolved key: ${keyName} → ${inputKey}`);
+          }
+          
+          setResolvedPreviewInputs(prev => ({ ...prev, ...resolvedInputs }));
+        }
+      } catch (error) {
+        console.error('Failed to load linked keys:', error);
+      } finally {
+        if (!isCancelled) setIsLoadingKeys(false);
+      }
+    };
+
+    // Check if glyph is bundled
+    const checkBundledStatus = async () => {
+      try {
+        const result = await window.loom?.isGlyphBundled?.(selectedGlyph.id);
+        if (isCancelled) return;
+        setIsBundled(result?.isBundled ?? false);
+      } catch (error) {
+        console.error('Failed to check bundled status:', error);
+        setIsBundled(false);
+      }
+    };
+
     loadPreview();
+    loadLinkedKeys();
+    checkBundledStatus();
 
     return () => {
       isCancelled = true;
     };
   }, [selectedGlyph]);
 
-  // Create a lookup map for glyphs
-  const glyphMap = useMemo(() => {
-    const map = new Map<string, GlyphManifest>();
-    glyphs.forEach(g => map.set(g.id, g));
-    return map;
-  }, [glyphs]);
-  
   // Get all glyph IDs that are in folders
   const assignedGlyphIds = useMemo(() => {
     const ids = new Set<string>();
@@ -380,6 +513,38 @@ export default function GlyphsView() {
     }
   }, [selectedGlyph]);
 
+  // Toggle bundle status
+  const handleToggleBundled = useCallback(async () => {
+    if (!selectedGlyph || isBundleLoading) return;
+    
+    setIsBundleLoading(true);
+    try {
+      if (isBundled) {
+        // Unbundle
+        const result = await window.loom?.unbundleGlyph?.(selectedGlyph.id);
+        if (result?.success) {
+          setIsBundled(false);
+          console.log('📦 Glyph unbundled:', selectedGlyph.name);
+        } else {
+          console.error('Failed to unbundle:', result?.error);
+        }
+      } else {
+        // Bundle
+        const result = await window.loom?.bundleGlyph?.(selectedGlyph.id);
+        if (result?.success) {
+          setIsBundled(true);
+          console.log('📦 Glyph bundled:', selectedGlyph.name);
+        } else {
+          console.error('Failed to bundle:', result?.error);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to toggle bundle status:', error);
+    } finally {
+      setIsBundleLoading(false);
+    }
+  }, [selectedGlyph, isBundled, isBundleLoading]);
+
   // Save manifest changes (name, icon, inputs)
   const saveManifestChanges = useCallback(async (updates: Partial<GlyphManifest>) => {
     if (!selectedGlyph) return;
@@ -413,6 +578,103 @@ export default function GlyphsView() {
     }
   }, [selectedGlyph]);
 
+  const saveInputsForGlyph = useCallback(async (glyphId: string, valueUpdates: Record<string, unknown>, options: { replace?: boolean } = {}) => {
+    const { replace = false } = options;
+    try {
+      const manifestContent = await window.loom?.readGlyphFile?.(glyphId, 'manifest.json');
+      if (!manifestContent) {
+        throw new Error('Could not read manifest');
+      }
+
+      const manifest = JSON.parse(manifestContent);
+      if (!Array.isArray(manifest.inputs)) {
+        return;
+      }
+
+      const updatedInputs = manifest.inputs.map((input: GlyphInput) => {
+        const updated = { ...input };
+        const hasValue = Object.prototype.hasOwnProperty.call(valueUpdates, input.id);
+        if (replace) {
+          if (hasValue) {
+            const nextValue = valueUpdates[input.id];
+            if (nextValue === undefined || nextValue === null) {
+              delete (updated as Record<string, unknown>).value;
+            } else {
+              (updated as Record<string, unknown>).value = nextValue;
+            }
+          } else {
+            delete (updated as Record<string, unknown>).value;
+          }
+        } else if (hasValue) {
+          const nextValue = valueUpdates[input.id];
+          if (nextValue === undefined || nextValue === null) {
+            delete (updated as Record<string, unknown>).value;
+          } else {
+            (updated as Record<string, unknown>).value = nextValue;
+          }
+        }
+        return updated;
+      });
+
+      manifest.inputs = updatedInputs;
+
+      await window.loom?.saveGlyphFile?.(
+        glyphId,
+        'manifest.json',
+        JSON.stringify(manifest, null, 2)
+      );
+
+      setGlyphs(prev => prev.map(g => g.id === glyphId ? { ...g, inputs: updatedInputs } : g));
+      if (selectedGlyph?.id === glyphId) {
+        setSelectedGlyph(prev => prev ? { ...prev, inputs: updatedInputs } : prev);
+        if (replace) {
+          setInputValues({ ...valueUpdates });
+        } else {
+          setInputValues(prev => ({ ...prev, ...valueUpdates }));
+        }
+        setResolvedPreviewInputs(prev => ({ ...prev, ...valueUpdates }));
+      }
+    } catch (error) {
+      console.error('Failed to save glyph inputs:', error);
+      throw error;
+    }
+  }, [selectedGlyph]);
+
+  const uploadGlyphInputFile = useCallback((glyphId: string, inputId: string, files: FileList, onValue?: (fileRef: GlyphFileRef) => void) => {
+    if (!files.length) return;
+    const file = files[0];
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const base64 = (reader.result as string).split(',')[1];
+        const result = await window.loom?.uploadGlyphFile?.(
+          glyphId,
+          file.name,
+          base64,
+          file.type
+        );
+        
+        if (result?.success) {
+          const fileRef: GlyphFileRef = {
+            name: file.name,
+            path: result.path || `uploads/${file.name}`,
+            size: result.size || file.size,
+            mimeType: file.type,
+            uploadedAt: new Date().toISOString(),
+          };
+          
+          onValue?.(fileRef);
+          await saveInputsForGlyph(glyphId, { [inputId]: fileRef });
+        } else {
+          console.error('Failed to upload file:', result?.error);
+        }
+      } catch (error) {
+        console.error('Failed to upload file:', error);
+      }
+    };
+    reader.readAsDataURL(file);
+  }, [saveInputsForGlyph]);
+
   // Handle name edit
   const handleNameSave = useCallback(() => {
     if (!editedName.trim() || editedName === selectedGlyph?.name) {
@@ -432,21 +694,22 @@ export default function GlyphsView() {
   // Handle input value change
   const handleInputChange = useCallback((inputId: string, value: unknown) => {
     setInputValues(prev => ({ ...prev, [inputId]: value }));
+    // Also update resolved preview inputs for immediate preview refresh
+    setResolvedPreviewInputs(prev => ({ ...prev, [inputId]: value }));
   }, []);
 
   // Save input values to manifest
-  const saveInputValues = useCallback(() => {
+  const saveInputValues = useCallback(async () => {
     if (!selectedGlyph?.inputs) return;
-    
-    // Type assertion needed because we're dynamically setting values
-    const updatedInputs = selectedGlyph.inputs.map(input => {
-      const updated = { ...input };
-      (updated as Record<string, unknown>).value = inputValues[input.id];
-      return updated;
-    });
-    
-    saveManifestChanges({ inputs: updatedInputs });
-  }, [selectedGlyph, inputValues, saveManifestChanges]);
+    setIsSavingManifest(true);
+    try {
+      await saveInputsForGlyph(selectedGlyph.id, inputValues, { replace: true });
+    } catch (error) {
+      console.error('Failed to save inputs:', error);
+    } finally {
+      setIsSavingManifest(false);
+    }
+  }, [selectedGlyph, inputValues, saveInputsForGlyph]);
 
   // Add new input field
   const handleAddInput = useCallback(() => {
@@ -477,41 +740,195 @@ export default function GlyphsView() {
   }, [selectedGlyph, saveManifestChanges]);
 
   // Handle file upload
-  const handleFileUpload = useCallback(async (inputId: string, files: FileList) => {
-    if (!selectedGlyph || files.length === 0) return;
-    
-    const file = files[0];
-    
-    // Read file as base64 and upload via IPC
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const base64 = (reader.result as string).split(',')[1];
-        const result = await window.loom?.uploadGlyphFile?.(
-          selectedGlyph.id, 
-          file.name, 
-          base64, 
-          file.type
-        );
-        
-        if (result?.success) {
-          const fileRef: GlyphFileRef = {
-            name: file.name,
-            path: result.path || `uploads/${file.name}`,
-            size: result.size || file.size,
-            mimeType: file.type,
-            uploadedAt: new Date().toISOString(),
-          };
-          handleInputChange(inputId, fileRef);
-        } else {
-          console.error('Failed to upload file:', result?.error);
-        }
-      } catch (error) {
-        console.error('Failed to upload file:', error);
+  const handleFileUpload = useCallback((inputId: string, files: FileList) => {
+    if (!selectedGlyph) return;
+    uploadGlyphInputFile(selectedGlyph.id, inputId, files, (fileRef) => {
+      handleInputChange(inputId, fileRef);
+    });
+  }, [selectedGlyph, uploadGlyphInputFile, handleInputChange]);
+
+  const handleQuickFileUpload = useCallback((glyphId: string, inputId: string, files: FileList) => {
+    uploadGlyphInputFile(glyphId, inputId, files, (fileRef) => {
+      setQuickEditValues(prev => ({ ...prev, [inputId]: fileRef }));
+    });
+  }, [uploadGlyphInputFile]);
+
+  const flushQuickEditUpdates = useCallback(async () => {
+    if (!quickEditPendingUpdatesRef.current) {
+      quickEditSaveTimerRef.current = null;
+      return;
+    }
+    const payload = quickEditPendingUpdatesRef.current;
+    quickEditPendingUpdatesRef.current = null;
+    quickEditSaveTimerRef.current = null;
+    try {
+      quickEditSaveInFlightRef.current += 1;
+      setIsQuickSaving(true);
+      await saveInputsForGlyph(payload.glyphId, payload.updates);
+    } catch (error) {
+      console.error('Failed to save quick inputs:', error);
+    } finally {
+      quickEditSaveInFlightRef.current -= 1;
+      if (quickEditSaveInFlightRef.current <= 0) {
+        setIsQuickSaving(false);
+      }
+    }
+  }, [saveInputsForGlyph]);
+
+  const scheduleQuickSave = useCallback((glyphId: string, updates: Record<string, unknown>) => {
+    const previous = quickEditPendingUpdatesRef.current;
+    const mergedUpdates =
+      previous && previous.glyphId === glyphId
+        ? { ...previous.updates, ...updates }
+        : { ...updates };
+
+    quickEditPendingUpdatesRef.current = {
+      glyphId,
+      updates: mergedUpdates,
+    };
+
+    if (quickEditSaveTimerRef.current) {
+      window.clearTimeout(quickEditSaveTimerRef.current);
+    }
+    quickEditSaveTimerRef.current = window.setTimeout(() => {
+      flushQuickEditUpdates();
+    }, 200);
+  }, [flushQuickEditUpdates]);
+
+  const closeQuickEdit = useCallback(() => {
+    if (quickEditSaveTimerRef.current) {
+      window.clearTimeout(quickEditSaveTimerRef.current);
+      quickEditSaveTimerRef.current = null;
+    }
+    if (quickEditPendingUpdatesRef.current) {
+      flushQuickEditUpdates();
+    }
+    setQuickEditGlyphId(null);
+    setQuickEditAnchor(null);
+  }, [flushQuickEditUpdates]);
+
+  const handleQuickInputChange = useCallback((glyphId: string, inputId: string, value: unknown) => {
+    setQuickEditValues(prev => ({ ...prev, [inputId]: value }));
+    scheduleQuickSave(glyphId, { [inputId]: value });
+  }, [scheduleQuickSave]);
+
+  const handleQuickEditToggle = useCallback((glyph: GlyphManifest, anchorRect: DOMRect) => {
+    if (!glyph.inputs || glyph.inputs.length === 0) return;
+    if (quickEditGlyphId === glyph.id) {
+      closeQuickEdit();
+      return;
+    }
+    if (quickEditGlyphId && quickEditGlyphId !== glyph.id) {
+      flushQuickEditUpdates();
+    }
+    const values = buildInputValueMap(glyph);
+    const panelWidth = 300;
+    const estimatedHeight = Math.min(window.innerHeight - 40, 140 + glyph.inputs.length * 90);
+    const left = Math.min(anchorRect.right + 12, window.innerWidth - panelWidth - 12);
+    const top = Math.min(Math.max(anchorRect.top - 20, 20), window.innerHeight - estimatedHeight);
+    setQuickEditValues(values);
+    setQuickEditAnchor({ x: left, y: top });
+    setQuickEditGlyphId(glyph.id);
+  }, [quickEditGlyphId, buildInputValueMap, closeQuickEdit, flushQuickEditUpdates]);
+
+  useEffect(() => {
+    if (!quickEditGlyphId) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeQuickEdit();
       }
     };
-    reader.readAsDataURL(file);
-  }, [selectedGlyph, handleInputChange]);
+    const handleMouseDown = (event: MouseEvent) => {
+      if (!quickEditPanelRef.current) return;
+      if (!quickEditPanelRef.current.contains(event.target as Node)) {
+        closeQuickEdit();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('mousedown', handleMouseDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('mousedown', handleMouseDown);
+    };
+  }, [quickEditGlyphId, closeQuickEdit]);
+
+  useEffect(() => {
+    if (!quickEditGlyphId) return;
+    const glyph = glyphMap.get(quickEditGlyphId);
+    if (!glyph || !glyph.inputs || glyph.inputs.length === 0) {
+      closeQuickEdit();
+    }
+  }, [quickEditGlyphId, glyphMap, closeQuickEdit]);
+
+  // Load available keys from vault (for key picker)
+  const loadAvailableKeys = useCallback(async () => {
+    try {
+      const storedKeys = await window.loom?.getStoredKeys?.();
+      if (Array.isArray(storedKeys)) {
+        setAvailableKeys(storedKeys);
+      }
+    } catch (error) {
+      console.error('Failed to load available keys:', error);
+    }
+  }, []);
+
+  // Open key picker
+  const handleOpenKeyPicker = useCallback(() => {
+    loadAvailableKeys();
+    setIsKeyPickerOpen(true);
+  }, [loadAvailableKeys]);
+
+  // Link a key to the glyph
+  const handleLinkKey = useCallback(async (keyId: string) => {
+    if (!selectedGlyph) return;
+    
+    try {
+      const result = await window.loom?.linkKeyToGlyph?.(selectedGlyph.id, keyId);
+      if (result?.success) {
+        // Add to local state
+        const keyInfo = availableKeys.find(k => k.id === keyId);
+        if (keyInfo) {
+          setLinkedKeys(prev => [...prev, keyInfo]);
+        }
+        setIsKeyPickerOpen(false);
+        
+        // Update the glyph in local state to include the linked key
+        setGlyphs(prev => prev.map(g => {
+          if (g.id === selectedGlyph.id) {
+            return { ...g, linkedKeys: [...(g.linkedKeys || []), keyId] };
+          }
+          return g;
+        }));
+        setSelectedGlyph(prev => prev ? { ...prev, linkedKeys: [...(prev.linkedKeys || []), keyId] } : null);
+      }
+    } catch (error) {
+      console.error('Failed to link key:', error);
+    }
+  }, [selectedGlyph, availableKeys]);
+
+  // Unlink a key from the glyph
+  const handleUnlinkKey = useCallback(async (keyId: string) => {
+    if (!selectedGlyph) return;
+    
+    try {
+      const result = await window.loom?.unlinkKeyFromGlyph?.(selectedGlyph.id, keyId);
+      if (result?.success) {
+        // Remove from local state
+        setLinkedKeys(prev => prev.filter(k => k.id !== keyId));
+        
+        // Update the glyph in local state
+        setGlyphs(prev => prev.map(g => {
+          if (g.id === selectedGlyph.id) {
+            return { ...g, linkedKeys: (g.linkedKeys || []).filter(id => id !== keyId) };
+          }
+          return g;
+        }));
+        setSelectedGlyph(prev => prev ? { ...prev, linkedKeys: (prev.linkedKeys || []).filter(id => id !== keyId) } : null);
+      }
+    } catch (error) {
+      console.error('Failed to unlink key:', error);
+    }
+  }, [selectedGlyph]);
 
   const handleGlyphSelection = useCallback((glyph: GlyphManifest) => {
     setSelectedGlyph((current) => (current?.id === glyph.id ? null : glyph));
@@ -995,6 +1412,8 @@ export default function GlyphsView() {
                     onGlyphSelect={handleGlyphSelection}
                     onInvokeBackground={handleInvokeAsBackground}
                     onInvokeWidget={handleInvokeAsWidget}
+                    onQuickEditToggle={handleQuickEditToggle}
+                    quickEditGlyphId={quickEditGlyphId}
                     isEditing={editingFolderId === folder.id}
                     editingName={editingFolderName}
                     onStartEdit={(name) => {
@@ -1023,6 +1442,8 @@ export default function GlyphsView() {
                 onGlyphSelect={handleGlyphSelection}
                 onInvokeBackground={handleInvokeAsBackground}
                 onInvokeWidget={handleInvokeAsWidget}
+                onQuickEditToggle={handleQuickEditToggle}
+                quickEditGlyphId={quickEditGlyphId}
                 isOver={overId === 'unassigned-drop-zone'}
               />
 
@@ -1042,6 +1463,9 @@ export default function GlyphsView() {
                       onClick={() => {}}
                       onInvokeBackground={() => {}}
                       onInvokeWidget={() => {}}
+                      onQuickEditToggle={undefined}
+                      hasInputs={Boolean(activeGlyph.inputs?.length)}
+                      isQuickEditing={false}
                       delay={0}
                       isDragOverlay
                     />
@@ -1185,6 +1609,7 @@ export default function GlyphsView() {
                       glyphType={selectedGlyph.type}
                       allowPointerEvents={false}
                       style={styles.previewIframe}
+                      inputs={{ ...inputValues, ...resolvedPreviewInputs }}
                     />
                   </div>
                 )}
@@ -1211,6 +1636,38 @@ export default function GlyphsView() {
             {selectedGlyph.savedAt && (
               <div style={styles.detailMeta}>
                 Created: {new Date(selectedGlyph.savedAt).toLocaleString()}
+              </div>
+            )}
+
+            {/* Bundle Toggle - Only shown in dev mode */}
+            {window.loom?.isDev && (
+              <div style={styles.detailSection}>
+                <div style={styles.bundleToggleRow}>
+                  <div style={styles.bundleInfo}>
+                    <span style={styles.bundleIcon}>📦</span>
+                    <div>
+                      <span style={styles.bundleLabel}>Include in App Bundle</span>
+                      <span style={styles.bundleDescription}>
+                        {isBundled 
+                          ? 'This glyph will be included when you build the app' 
+                          : 'Toggle to include this glyph in all builds'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    style={{
+                      ...styles.bundleToggle,
+                      ...(isBundled ? styles.bundleToggleOn : styles.bundleToggleOff),
+                      opacity: isBundleLoading ? 0.6 : 1,
+                      cursor: isBundleLoading ? 'wait' : 'pointer',
+                    }}
+                    onClick={handleToggleBundled}
+                    disabled={isBundleLoading}
+                    title={isBundled ? 'Remove from app bundle' : 'Add to app bundle'}
+                  >
+                    {isBundleLoading ? '...' : isBundled ? 'BUNDLED' : 'NOT BUNDLED'}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1260,6 +1717,95 @@ export default function GlyphsView() {
                 </div>
               )}
             </div>
+
+            {/* Linked Keys Section */}
+            <div style={styles.detailSection}>
+              <div style={styles.inputsHeader}>
+                <h3 style={styles.sectionTitle}>🔐 Linked Keys</h3>
+                <button
+                  style={styles.addInputBtn}
+                  onClick={handleOpenKeyPicker}
+                  title="Link a key from your vault"
+                >
+                  + Link Key
+                </button>
+              </div>
+              
+              {isLoadingKeys ? (
+                <div style={styles.noInputs}>Loading keys...</div>
+              ) : linkedKeys.length === 0 ? (
+                <div style={styles.noInputs}>
+                  No keys linked to this glyph.
+                  <br />
+                  <span style={styles.noInputsHint}>
+                    Link keys from your vault to provide API access.
+                  </span>
+                </div>
+              ) : (
+                <div style={styles.inputsList}>
+                  {linkedKeys.map(key => (
+                    <div key={key.id} style={linkedKeyStyles.keyItem}>
+                      <div style={linkedKeyStyles.keyInfo}>
+                        <span style={linkedKeyStyles.keyIcon}>🔑</span>
+                        <div style={linkedKeyStyles.keyDetails}>
+                          <span style={linkedKeyStyles.keyName}>{key.name}</span>
+                          {key.description && (
+                            <span style={linkedKeyStyles.keyDescription}>{key.description}</span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        style={linkedKeyStyles.unlinkBtn}
+                        onClick={() => handleUnlinkKey(key.id)}
+                        title="Unlink this key"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Key Picker Dropdown */}
+              {isKeyPickerOpen && (
+                <div style={linkedKeyStyles.keyPicker}>
+                  <div style={linkedKeyStyles.keyPickerHeader}>
+                    <span>Select a key to link</span>
+                    <button
+                      style={linkedKeyStyles.keyPickerClose}
+                      onClick={() => setIsKeyPickerOpen(false)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div style={linkedKeyStyles.keyPickerList}>
+                    {availableKeys.filter(k => !linkedKeys.some(lk => lk.id === k.id)).length === 0 ? (
+                      <div style={linkedKeyStyles.noKeysAvailable}>
+                        {availableKeys.length === 0 
+                          ? 'No keys in vault. Add keys in Settings → Keys.'
+                          : 'All keys are already linked.'}
+                      </div>
+                    ) : (
+                      availableKeys
+                        .filter(k => !linkedKeys.some(lk => lk.id === k.id))
+                        .map(key => (
+                          <button
+                            key={key.id}
+                            style={linkedKeyStyles.keyOption}
+                            onClick={() => handleLinkKey(key.id)}
+                          >
+                            <span style={linkedKeyStyles.keyIcon}>🔑</span>
+                            <span style={linkedKeyStyles.keyName}>{key.name}</span>
+                            {key.category && (
+                              <span style={linkedKeyStyles.keyCategory}>{key.category}</span>
+                            )}
+                          </button>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             
             <div style={styles.detailActions}>
               <div style={styles.invokeButtons}>
@@ -1295,6 +1841,41 @@ export default function GlyphsView() {
         )}
       </div>
 
+      {quickEditGlyph && quickEditGlyph.inputs?.length && quickEditAnchor && (
+        <div
+          ref={quickEditPanelRef}
+          style={{
+            ...quickEditStyles.panel,
+            left: quickEditAnchor.x,
+            top: quickEditAnchor.y,
+          }}
+        >
+          <div style={quickEditStyles.header}>
+            <div style={quickEditStyles.headerText}>
+              <span style={quickEditStyles.headerTitle}>⚙️ {quickEditGlyph.name}</span>
+              <span style={quickEditStyles.headerSubtitle}>Live configuration</span>
+            </div>
+            <button style={quickEditStyles.closeBtn} onClick={closeQuickEdit}>
+              ×
+            </button>
+          </div>
+          <div>
+            {quickEditGlyph.inputs.map(input => (
+              <GlyphInputField
+                key={input.id}
+                input={input}
+                value={quickEditValues[input.id]}
+                onChange={(val) => handleQuickInputChange(quickEditGlyph.id, input.id, val)}
+                onFileUpload={(files) => handleQuickFileUpload(quickEditGlyph.id, input.id, files)}
+              />
+            ))}
+          </div>
+          <div style={quickEditStyles.footer}>
+            {isQuickSaving ? 'Saving…' : 'Changes synced'}
+          </div>
+        </div>
+      )}
+
       <style>{`
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(10px); }
@@ -1323,8 +1904,8 @@ interface GlyphInputFieldProps {
   input: GlyphInput;
   value: unknown;
   onChange: (value: unknown) => void;
-  onRemove: () => void;
-  onFileUpload: (files: FileList) => void;
+  onRemove?: () => void;
+  onFileUpload?: (files: FileList) => void;
 }
 
 function GlyphInputField({ input, value, onChange, onRemove, onFileUpload }: GlyphInputFieldProps) {
@@ -1449,6 +2030,13 @@ function GlyphInputField({ input, value, onChange, onRemove, onFileUpload }: Gly
         );
 
       case 'file':
+        if (!onFileUpload) {
+          return (
+            <div style={inputFieldStyles.fileUnavailable}>
+              File uploads are only available in the detailed inspector.
+            </div>
+          );
+        }
         const fileRef = value as GlyphFileRef | undefined;
         return (
           <div style={inputFieldStyles.fileWrapper}>
@@ -1486,13 +2074,15 @@ function GlyphInputField({ input, value, onChange, onRemove, onFileUpload }: Gly
           {input.label}
           {input.required && <span style={inputFieldStyles.required}>*</span>}
         </label>
-        <button
-          style={inputFieldStyles.removeBtn}
-          onClick={onRemove}
-          title="Remove input"
-        >
-          ×
-        </button>
+        {onRemove && (
+          <button
+            style={inputFieldStyles.removeBtn}
+            onClick={onRemove}
+            title="Remove input"
+          >
+            ×
+          </button>
+        )}
       </div>
       {input.description && (
         <p style={inputFieldStyles.description}>{input.description}</p>
@@ -1655,6 +2245,11 @@ const inputFieldStyles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '12px',
   },
+  fileUnavailable: {
+    fontSize: '12px',
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontStyle: 'italic',
+  },
   fileBtn: {
     padding: '10px 16px',
     background: 'rgba(255, 255, 255, 0.05)',
@@ -1672,6 +2267,115 @@ const inputFieldStyles: Record<string, React.CSSProperties> = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 🔐 LINKED KEY STYLES
+// ═══════════════════════════════════════════════════════════════════════════
+
+const linkedKeyStyles: Record<string, React.CSSProperties> = {
+  keyItem: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '10px 12px',
+    background: 'rgba(0, 255, 255, 0.03)',
+    borderRadius: '8px',
+    border: '1px solid rgba(0, 255, 255, 0.1)',
+    marginBottom: '8px',
+  },
+  keyInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    flex: 1,
+  },
+  keyIcon: {
+    fontSize: '16px',
+    opacity: 0.8,
+  },
+  keyDetails: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '2px',
+  },
+  keyName: {
+    fontSize: '13px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.9)',
+  },
+  keyDescription: {
+    fontSize: '11px',
+    color: 'rgba(255, 255, 255, 0.4)',
+  },
+  keyCategory: {
+    fontSize: '10px',
+    padding: '2px 6px',
+    background: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: '4px',
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginLeft: 'auto',
+  },
+  unlinkBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: 'rgba(255, 100, 100, 0.6)',
+    fontSize: '14px',
+    cursor: 'pointer',
+    padding: '4px 8px',
+    borderRadius: '4px',
+    transition: 'all 0.2s',
+  },
+  keyPicker: {
+    marginTop: '12px',
+    background: 'rgba(0, 0, 0, 0.4)',
+    borderRadius: '10px',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    overflow: 'hidden',
+  },
+  keyPickerHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '10px 12px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+    fontSize: '12px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  keyPickerClose: {
+    background: 'transparent',
+    border: 'none',
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: '14px',
+    cursor: 'pointer',
+    padding: '2px 6px',
+  },
+  keyPickerList: {
+    maxHeight: '200px',
+    overflowY: 'auto' as const,
+  },
+  keyOption: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    width: '100%',
+    padding: '10px 12px',
+    background: 'transparent',
+    border: 'none',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: '13px',
+    cursor: 'pointer',
+    transition: 'background 0.2s',
+    textAlign: 'left' as const,
+  },
+  noKeysAvailable: {
+    padding: '16px',
+    fontSize: '12px',
+    color: 'rgba(255, 255, 255, 0.4)',
+    textAlign: 'center' as const,
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 🃏 GLYPH CARD COMPONENT (with drag support)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1681,11 +2385,26 @@ interface GlyphCardProps {
   onClick: () => void;
   onInvokeBackground: () => void;
   onInvokeWidget: () => void;
+  onQuickEditToggle?: (glyph: GlyphManifest, anchorRect: DOMRect) => void;
+  hasInputs: boolean;
+  isQuickEditing: boolean;
   delay: number;
   isDragOverlay?: boolean;
 }
 
-function GlyphCard({ glyph, isSelected, onClick, onInvokeBackground, onInvokeWidget, delay: _delay, isDragOverlay }: GlyphCardProps) {
+function GlyphCard({
+  glyph,
+  isSelected,
+  onClick,
+  onInvokeBackground,
+  onInvokeWidget,
+  onQuickEditToggle,
+  hasInputs,
+  isQuickEditing,
+  delay: _delay,
+  isDragOverlay,
+}: GlyphCardProps) {
+  const [isHovered, setIsHovered] = useState(false);
   const {
     attributes,
     listeners,
@@ -1708,6 +2427,7 @@ function GlyphCard({ glyph, isSelected, onClick, onInvokeBackground, onInvokeWid
   } : {
     ...cardStyles.card,
     ...(isSelected ? cardStyles.cardSelected : {}),
+    ...(isQuickEditing ? cardStyles.cardQuickEditing : {}),
     borderColor: isSelected ? '#00ffff' : 'rgba(255, 255, 255, 0.08)',
     transform: CSS.Translate.toString(transform),
     transition: transition || 'transform 200ms ease',
@@ -1743,6 +2463,8 @@ function GlyphCard({ glyph, isSelected, onClick, onInvokeBackground, onInvokeWid
       {...(isDragOverlay ? {} : attributes)}
       {...(isDragOverlay ? {} : listeners)}
       onClick={isDragOverlay ? undefined : onClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
     >
       <div style={cardStyles.cardHeader}>
         <span style={cardStyles.cardIcon}>{glyph.icon || '🔮'}</span>
@@ -1775,6 +2497,23 @@ function GlyphCard({ glyph, isSelected, onClick, onInvokeBackground, onInvokeWid
           >
             🔮
           </button>
+            {hasInputs && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                  onQuickEditToggle?.(glyph, rect);
+                }}
+                style={{
+                  ...cardStyles.quickEditBtn,
+                  opacity: isHovered || isQuickEditing ? 1 : 0,
+                  transform: isQuickEditing ? 'scale(1.05)' : undefined,
+                }}
+                title="Live edit inputs"
+              >
+                ⚙️
+              </button>
+            )}
         </div>
       )}
     </div>
@@ -1831,6 +2570,8 @@ interface FolderSectionProps {
   onGlyphSelect: (glyph: GlyphManifest) => void;
   onInvokeBackground: (glyph: GlyphManifest) => void;
   onInvokeWidget: (glyph: GlyphManifest) => void;
+  onQuickEditToggle: (glyph: GlyphManifest, anchorRect: DOMRect) => void;
+  quickEditGlyphId?: string | null;
   isEditing: boolean;
   editingName: string;
   onStartEdit: (name: string) => void;
@@ -1852,6 +2593,8 @@ function FolderSection({
   onGlyphSelect,
   onInvokeBackground,
   onInvokeWidget,
+  onQuickEditToggle,
+  quickEditGlyphId,
   isEditing,
   editingName,
   onStartEdit,
@@ -2014,6 +2757,9 @@ function FolderSection({
                   onClick={() => onGlyphSelect(glyph)}
                   onInvokeBackground={() => onInvokeBackground(glyph)}
                   onInvokeWidget={() => onInvokeWidget(glyph)}
+                onQuickEditToggle={onQuickEditToggle}
+                hasInputs={Boolean(glyph.inputs?.length)}
+                isQuickEditing={quickEditGlyphId === glyph.id}
                   delay={index * 30}
                 />
               ))
@@ -2035,6 +2781,8 @@ interface UnassignedSectionProps {
   onGlyphSelect: (glyph: GlyphManifest) => void;
   onInvokeBackground: (glyph: GlyphManifest) => void;
   onInvokeWidget: (glyph: GlyphManifest) => void;
+  onQuickEditToggle: (glyph: GlyphManifest, anchorRect: DOMRect) => void;
+  quickEditGlyphId?: string | null;
   isOver: boolean;
 }
 
@@ -2044,6 +2792,8 @@ function UnassignedSection({
   onGlyphSelect,
   onInvokeBackground,
   onInvokeWidget,
+  onQuickEditToggle,
+  quickEditGlyphId,
   isOver,
 }: UnassignedSectionProps) {
   // Use droppable for the unassigned header
@@ -2109,6 +2859,9 @@ function UnassignedSection({
                   onClick={() => onGlyphSelect(glyph)}
                   onInvokeBackground={() => onInvokeBackground(glyph)}
                   onInvokeWidget={() => onInvokeWidget(glyph)}
+                  onQuickEditToggle={onQuickEditToggle}
+                  hasInputs={Boolean(glyph.inputs?.length)}
+                  isQuickEditing={quickEditGlyphId === glyph.id}
                   delay={index * 30}
                 />
               ))
@@ -2281,6 +3034,10 @@ const cardStyles: Record<string, React.CSSProperties> = {
     background: 'rgba(0, 255, 255, 0.05)',
     boxShadow: '0 0 20px rgba(0, 255, 255, 0.1)',
   },
+  cardQuickEditing: {
+    boxShadow: '0 0 20px rgba(255, 255, 255, 0.3)',
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
   cardHeader: {
     display: 'flex',
     alignItems: 'center',
@@ -2336,6 +3093,71 @@ const cardStyles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     transition: 'all 0.2s ease',
     fontFamily: 'inherit',
+  },
+  quickEditBtn: {
+    width: '42px',
+    height: '38px',
+    borderRadius: '8px',
+    border: '1px solid rgba(255, 255, 255, 0.15)',
+    background: 'rgba(255, 255, 255, 0.05)',
+    color: '#ffffff',
+    fontSize: '16px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+};
+
+const quickEditStyles: Record<string, React.CSSProperties> = {
+  panel: {
+    position: 'fixed',
+    width: 300,
+    maxHeight: 420,
+    overflowY: 'auto',
+    background: 'rgba(10, 10, 20, 0.95)',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    borderRadius: '16px',
+    padding: '16px',
+    boxShadow: '0 20px 40px rgba(0, 0, 0, 0.45)',
+    backdropFilter: 'blur(12px)',
+    zIndex: 9999,
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: '12px',
+    gap: '12px',
+  },
+  headerText: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  headerTitle: {
+    fontSize: '13px',
+    fontWeight: 600,
+    color: '#ffffff',
+  },
+  headerSubtitle: {
+    fontSize: '11px',
+    color: 'rgba(255, 255, 255, 0.6)',
+  },
+  closeBtn: {
+    border: 'none',
+    background: 'rgba(255, 255, 255, 0.08)',
+    color: '#ffffff',
+    width: '28px',
+    height: '28px',
+    borderRadius: '50%',
+    cursor: 'pointer',
+    fontSize: '14px',
+    lineHeight: 1,
+  },
+  footer: {
+    marginTop: '8px',
+    fontSize: '11px',
+    color: 'rgba(255, 255, 255, 0.5)',
+    textAlign: 'right' as const,
   },
 };
 
@@ -2749,6 +3571,58 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '11px',
     color: 'rgba(255, 255, 255, 0.35)',
     marginBottom: '20px',
+  },
+  bundleToggleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '12px 14px',
+    background: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: '10px',
+    border: '1px solid rgba(255, 255, 255, 0.06)',
+  },
+  bundleInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  bundleIcon: {
+    fontSize: '20px',
+    filter: 'drop-shadow(0 0 4px rgba(255, 200, 0, 0.3))',
+  },
+  bundleLabel: {
+    display: 'block',
+    fontSize: '13px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginBottom: '2px',
+  },
+  bundleDescription: {
+    display: 'block',
+    fontSize: '10px',
+    color: 'rgba(255, 255, 255, 0.4)',
+  },
+  bundleToggle: {
+    padding: '8px 14px',
+    borderRadius: '6px',
+    border: 'none',
+    fontSize: '10px',
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    letterSpacing: '0.5px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+  bundleToggleOn: {
+    background: 'rgba(0, 255, 136, 0.2)',
+    color: '#00ff88',
+    border: '1px solid rgba(0, 255, 136, 0.4)',
+    boxShadow: '0 0 12px rgba(0, 255, 136, 0.2)',
+  },
+  bundleToggleOff: {
+    background: 'rgba(255, 255, 255, 0.05)',
+    color: 'rgba(255, 255, 255, 0.4)',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
   },
   inputsHeader: {
     display: 'flex',

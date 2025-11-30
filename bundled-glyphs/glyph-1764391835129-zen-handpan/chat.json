@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764391888763-user",
+    "role": "user",
+    "content": "make a super intuitive and fun handpan music widget, capable of looping, etc",
+    "timestamp": 1764391888763,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764391888763-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Zen Handpan\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764391888764,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764391888763-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764391888765,
+    "type": "info"
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764467459682-user",
+    "role": "user",
+    "content": "now make a SVG wolf",
+    "timestamp": 1764467459682,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764467459682-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Geometric Wolf\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764467459683,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764467459682-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764467459684,
+    "type": "info"
+  }
+]

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Fractal Flow</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+
+        // Scene Setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        // Shader Uniforms
+        const uniforms = {
+            iTime: { value: 0 },
+            iResolution: { value: new THREE.Vector3(window.innerWidth, window.innerHeight, 1) }
+        };
+
+        // Fragment Shader (The core logic from the prompt)
+        const fragmentShader = `
+            uniform vec3 iResolution;
+            uniform float iTime;
+
+            // Palette function: https://iquilezles.org/articles/palettes/
+            vec3 palette( float t ) {
+                vec3 a = vec3(0.5, 0.5, 0.5);
+                vec3 b = vec3(0.5, 0.5, 0.5);
+                vec3 c = vec3(1.0, 1.0, 1.0);
+                vec3 d = vec3(0.263,0.416,0.557);
+                return a + b*cos( 6.28318*(c*t+d) );
+            }
+
+            void main() {
+                // Normalized pixel coordinates (from 0 to 1)
+                // Adjusted to center (0,0) and correct aspect ratio
+                vec2 uv = (gl_FragCoord.xy * 2.0 - iResolution.xy) / iResolution.y;
+                vec2 uv0 = uv;
+                vec3 finalColor = vec3(0.0);
+
+                for (float i = 0.0; i < 4.0; i++) {
+                    uv = fract(uv * 1.5) - 0.5;
+
+                    float d = length(uv) * exp(-length(uv0));
+
+                    vec3 col = palette(length(uv0) + i*.4 + iTime*.4);
+
+                    d = sin(d*8. + iTime)/8.;
+                    d = abs(d);
+
+                    d = pow(0.01 / d, 1.2);
+
+                    finalColor += col * d;
+                }
+
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        `;
+
+        // Vertex Shader (Simple Pass-through)
+        const vertexShader = `
+            void main() {
+                gl_Position = vec4( position, 1.0 );
+            }
+        `;
+
+        // Create Mesh
+        const geometry = new THREE.PlaneGeometry(2, 2);
+        const material = new THREE.ShaderMaterial({
+            uniforms: uniforms,
+            vertexShader: vertexShader,
+            fragmentShader: fragmentShader,
+            depthWrite: false,
+            depthTest: false
+        });
+
+        const plane = new THREE.Mesh(geometry, material);
+        scene.add(plane);
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            renderer.setSize(width, height);
+            uniforms.iResolution.value.set(width, height, 1);
+        });
+
+        // Animation Loop
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            uniforms.iTime.value = clock.getElapsedTime();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

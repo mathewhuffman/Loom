@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764474903864-user",
+    "role": "user",
+    "content": "make an svg dinosaur",
+    "timestamp": 1764474903864,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764474903864-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"SVG Dino\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764474903865,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764474903864-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764474903866,
+    "type": "info"
+  }
+]

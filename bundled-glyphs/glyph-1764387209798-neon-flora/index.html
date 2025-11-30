@@ -1,0 +1,356 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Flora</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ffff;
+            font-family: monospace;
+            pointer-events: none;
+            transition: opacity 0.5s;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">GENERATING FLORA...</div>
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+
+        // --- CONFIGURATION ---
+        const inputs = window.GLYPH_INPUTS || {};
+        const CONFIG = {
+            count: parseInt(inputs.flowerCount) || 4000,
+            windSpeed: parseFloat(inputs.windSpeed) !== undefined ? parseFloat(inputs.windSpeed) : 1.5,
+            flowerColor: new THREE.Color(inputs.flowerColor || '#ff00ff'),
+            stemColor: new THREE.Color(inputs.stemColor || '#00ff88'),
+            skyColor: new THREE.Color(inputs.skyColor || '#050510')
+        };
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = CONFIG.skyColor;
+        scene.fog = new THREE.FogExp2(CONFIG.skyColor, 0.035);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 2, 8);
+        camera.lookAt(0, 1, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        // --- GEOMETRY GENERATION ---
+        // Create a simple flower shape manually to keep it efficient
+        // Stem: Cylinder, Petals: Cone inverted or simple planes
+        
+        const createFlowerGeometry = () => {
+            const geometry = new THREE.BufferGeometry();
+            
+            // Define vertices for a low-poly stylized flower
+            // Stem (thin box) + Head (pyramid/cone)
+            const stemHeight = 1.0;
+            const stemWidth = 0.04;
+            const headSize = 0.3;
+
+            // Simple mesh construction
+            const stemGeo = new THREE.BoxGeometry(stemWidth, stemHeight, stemWidth);
+            stemGeo.translate(0, stemHeight / 2, 0);
+            
+            const headGeo = new THREE.ConeGeometry(headSize, headSize, 4);
+            headGeo.translate(0, stemHeight + headSize / 2, 0);
+            // Rotate head slightly for variation
+            headGeo.rotateY(Math.PI / 4);
+
+            // Merge
+            // We need to identify which vertices belong to stem (for color) vs head
+            // We'll use a custom attribute 'aType' -> 0.0 for stem, 1.0 for head
+            
+            const stemPos = stemGeo.attributes.position;
+            const headPos = headGeo.attributes.position;
+            
+            const positionArray = new Float32Array(stemPos.count * 3 + headPos.count * 3);
+            const normalArray = new Float32Array(stemPos.count * 3 + headPos.count * 3);
+            const typeArray = new Float32Array(stemPos.count + headPos.count);
+
+            // Copy Stem
+            positionArray.set(stemPos.array);
+            normalArray.set(stemGeo.attributes.normal.array);
+            typeArray.fill(0.0, 0, stemPos.count); // 0 = stem
+
+            // Copy Head
+            positionArray.set(headPos.array, stemPos.count * 3);
+            normalArray.set(headGeo.attributes.normal.array, stemPos.count * 3);
+            typeArray.fill(1.0, stemPos.count); // 1 = head
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positionArray, 3));
+            geometry.setAttribute('normal', new THREE.BufferAttribute(normalArray, 3));
+            geometry.setAttribute('aType', new THREE.BufferAttribute(typeArray, 1));
+
+            return geometry;
+        };
+
+        const baseGeometry = createFlowerGeometry();
+
+        // --- SHADER MATERIAL ---
+        // Custom shader to handle instancing, wind animation, and coloring
+        const flowerMaterial = new THREE.ShaderMaterial({
+            vertexShader: `
+                uniform float uTime;
+                uniform float uWindSpeed;
+                
+                attribute vec3 aOffset;
+                attribute float aScale;
+                attribute float aRotation;
+                attribute float aType; // 0=stem, 1=head
+                attribute vec3 aColorVariation;
+
+                varying vec3 vColor;
+                varying vec3 vNormal;
+                varying float vType;
+                
+                // Rotation matrix helper
+                mat4 rotationY( in float angle ) {
+                    return mat4(	cos(angle),		0,		sin(angle),	0,
+                                    0,		1.0,	0,	0,
+                                    -sin(angle),	0,		cos(angle),	0,
+                                    0, 		0,		0,	1);
+                }
+
+                // Simplex noise function for wind variation
+                vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+                vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+                vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
+                float snoise(vec2 v) {
+                    const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+                    vec2 i  = floor(v + dot(v, C.yy) );
+                    vec2 x0 = v -   i + dot(i, C.xx);
+                    vec2 i1;
+                    i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+                    vec4 x12 = x0.xyxy + C.xxzz;
+                    x12.xy -= i1;
+                    i = mod289(i);
+                    vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 )) + i.x + vec3(0.0, i1.x, 1.0 ));
+                    vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
+                    m = m*m ;
+                    m = m*m ;
+                    vec3 x = 2.0 * fract(p * C.www) - 1.0;
+                    vec3 h = abs(x) - 0.5;
+                    vec3 ox = floor(x + 0.5);
+                    vec3 a0 = x - ox;
+                    m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h );
+                    vec3 g;
+                    g.x  = a0.x  * x0.x  + h.x  * x0.y;
+                    g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+                    return 130.0 * dot(m, g);
+                }
+
+                void main() {
+                    vType = aType;
+                    vNormal = normal;
+                    vColor = aColorVariation;
+
+                    // 1. Initial Position
+                    vec3 pos = position;
+                    
+                    // 2. Scale
+                    pos *= aScale;
+
+                    // 3. Instance Rotation
+                    pos = (rotationY(aRotation) * vec4(pos, 1.0)).xyz;
+
+                    // 4. Wind Animation
+                    // Calculate noise based on world position (aOffset) and time
+                    float noiseVal = snoise(aOffset.xz * 0.1 + uTime * 0.5 * uWindSpeed);
+                    
+                    // Bend factor increases with height (y)
+                    float bendFactor = pos.y * pos.y * 0.15; // quadratic bend
+                    
+                    // Apply bend
+                    pos.x += sin(uTime * uWindSpeed + aOffset.x) * bendFactor * (1.0 + noiseVal);
+                    pos.z += cos(uTime * uWindSpeed * 0.8 + aOffset.z) * bendFactor * (1.0 + noiseVal);
+
+                    // 5. World Translation
+                    vec4 worldPos = modelMatrix * vec4(pos + aOffset, 1.0);
+                    
+                    gl_Position = projectionMatrix * viewMatrix * worldPos;
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uFlowerColor;
+                uniform vec3 uStemColor;
+                uniform vec3 uFogColor;
+                
+                varying vec3 vColor;
+                varying vec3 vNormal;
+                varying float vType;
+
+                void main() {
+                    // Base color selection
+                    vec3 base = mix(uStemColor, uFlowerColor, vType);
+                    
+                    // Add per-instance variation
+                    base += vColor * 0.2;
+
+                    // Simple lighting
+                    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
+                    float diff = max(dot(normalize(vNormal), lightDir), 0.0);
+                    
+                    // Ambient + Diffuse
+                    vec3 finalColor = base * (0.4 + diff * 0.6);
+
+                    // Self-illumination/glow for neon look
+                    if (vType > 0.5) {
+                        finalColor += base * 0.4; 
+                    }
+
+                    // Fog logic (manual since we used ShaderMaterial)
+                    float depth = gl_FragCoord.z / gl_FragCoord.w;
+                    float fogFactor = smoothstep(5.0, 40.0, depth);
+                    
+                    gl_FragColor = vec4(mix(finalColor, uFogColor, fogFactor), 1.0);
+                }
+            `,
+            uniforms: {
+                uTime: { value: 0 },
+                uWindSpeed: { value: CONFIG.windSpeed },
+                uFlowerColor: { value: CONFIG.flowerColor },
+                uStemColor: { value: CONFIG.stemColor },
+                uFogColor: { value: CONFIG.skyColor }
+            },
+            side: THREE.DoubleSide
+        });
+
+        // --- INSTANCING ---
+        const instancedMesh = new THREE.InstancedMesh(baseGeometry, flowerMaterial, CONFIG.count);
+        
+        const dummy = new THREE.Object3D();
+        const offsets = new Float32Array(CONFIG.count * 3);
+        const scales = new Float32Array(CONFIG.count);
+        const rotations = new Float32Array(CONFIG.count);
+        const colorVars = new Float32Array(CONFIG.count * 3);
+
+        for (let i = 0; i < CONFIG.count; i++) {
+            // Random position in a circle/disk
+            const r = Math.sqrt(Math.random()) * 40; // Radius spread
+            const theta = Math.random() * Math.PI * 2;
+            
+            const x = Math.cos(theta) * r;
+            const z = Math.sin(theta) * r;
+            const y = 0; // Ground level
+
+            offsets[i * 3] = x;
+            offsets[i * 3 + 1] = y;
+            offsets[i * 3 + 2] = z;
+
+            // Random scale
+            scales[i] = 0.5 + Math.random() * 1.0;
+
+            // Random rotation
+            rotations[i] = Math.random() * Math.PI * 2;
+
+            // Color variation
+            colorVars[i * 3] = (Math.random() - 0.5) * 0.5;     // R
+            colorVars[i * 3 + 1] = (Math.random() - 0.5) * 0.5; // G
+            colorVars[i * 3 + 2] = (Math.random() - 0.5) * 0.5; // B
+
+            dummy.position.set(x, y, z);
+            dummy.updateMatrix();
+            instancedMesh.setMatrixAt(i, dummy.matrix);
+        }
+
+        instancedMesh.instanceMatrix.needsUpdate = true;
+        
+        // Add custom attributes to geometry for the shader to use
+        baseGeometry.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets, 3));
+        baseGeometry.setAttribute('aScale', new THREE.InstancedBufferAttribute(scales, 1));
+        baseGeometry.setAttribute('aRotation', new THREE.InstancedBufferAttribute(rotations, 1));
+        baseGeometry.setAttribute('aColorVariation', new THREE.InstancedBufferAttribute(colorVars, 3));
+
+        scene.add(instancedMesh);
+
+        // --- GROUND PLANE ---
+        const groundGeo = new THREE.PlaneGeometry(100, 100, 32, 32);
+        const groundMat = new THREE.MeshBasicMaterial({ 
+            color: new THREE.Color(CONFIG.skyColor).multiplyScalar(0.8),
+            side: THREE.DoubleSide
+        });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -0.01; // Slightly below flowers
+        scene.add(ground);
+
+        // Grid for Cyberpunk feel
+        const gridHelper = new THREE.GridHelper(100, 50, CONFIG.flowerColor, 0x222222);
+        gridHelper.position.y = 0.01;
+        scene.add(gridHelper);
+
+        // --- ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        // Mouse interaction
+        let mouseX = 0;
+        let targetCamX = 0;
+        let targetCamZ = 8;
+
+        window.addEventListener('mousemove', (e) => {
+            mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+        });
+
+        const animate = () => {
+            requestAnimationFrame(animate);
+
+            const time = clock.getElapsedTime();
+            flowerMaterial.uniforms.uTime.value = time;
+
+            // Gentle camera movement
+            targetCamX = Math.sin(time * 0.1) * 5 + mouseX * 2;
+            targetCamZ = Math.cos(time * 0.1) * 5 + 8;
+            
+            camera.position.x += (targetCamX - camera.position.x) * 0.05;
+            camera.position.z += (targetCamZ - camera.position.z) * 0.05;
+            camera.lookAt(0, 1, 0);
+
+            renderer.render(scene, camera);
+        };
+
+        // Remove loading text
+        document.getElementById('loading').style.opacity = 0;
+        
+        animate();
+
+        // --- RESIZE HANDLER ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- INPUT UPDATES ---
+        // Simple polling for config changes if the environment supports hot reloading inputs
+        // In a real scenario, we might listen to an event, but here we just set initial values.
+        // If inputs change, the iframe usually reloads.
+        
+    </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "id": "glyph-1764190947312-neon-tie-fighter",
+  "name": "Neon Tie Fighter",
+  "type": "background",
+  "prompt": "generate an interactive tie fighter game where I can shoot astroid and gain points, and if I run into a astroid I die and the game restarts",
+  "entry": "index.html",
+  "files": [
+    "index.html"
+  ],
+  "savedAt": "2025-11-26T21:02:27.312Z",
+  "bundled": true,
+  "version": "1.0.0"
+}

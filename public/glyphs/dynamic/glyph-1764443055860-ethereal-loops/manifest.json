@@ -1,0 +1,130 @@
+{
+  "id": "glyph-1764443055860-ethereal-loops",
+  "name": "Ethereal Loops",
+  "prompt": "make a super intuitive and fun etheral music widget, capable of looping, etc and modifying a ton about the widget.",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-29T19:05:13.991Z",
+  "inputs": [
+    {
+      "id": "rootNote",
+      "type": "select",
+      "label": "Root Key",
+      "options": [
+        {
+          "value": "C",
+          "label": "C"
+        },
+        {
+          "value": "C#",
+          "label": "C#"
+        },
+        {
+          "value": "D",
+          "label": "D"
+        },
+        {
+          "value": "D#",
+          "label": "D#"
+        },
+        {
+          "value": "E",
+          "label": "E"
+        },
+        {
+          "value": "F",
+          "label": "F"
+        },
+        {
+          "value": "F#",
+          "label": "F#"
+        },
+        {
+          "value": "G",
+          "label": "G"
+        },
+        {
+          "value": "G#",
+          "label": "G#"
+        },
+        {
+          "value": "A",
+          "label": "A"
+        },
+        {
+          "value": "A#",
+          "label": "A#"
+        },
+        {
+          "value": "B",
+          "label": "B"
+        }
+      ],
+      "defaultValue": "D",
+      "value": "F"
+    },
+    {
+      "id": "scaleType",
+      "type": "select",
+      "label": "Musical Scale",
+      "options": [
+        {
+          "value": "majorPentatonic",
+          "label": "Major Pentatonic"
+        },
+        {
+          "value": "minorPentatonic",
+          "label": "Minor Pentatonic"
+        },
+        {
+          "value": "dorian",
+          "label": "Dorian Mode"
+        },
+        {
+          "value": "lydian",
+          "label": "Lydian Mode"
+        },
+        {
+          "value": "hirajoshi",
+          "label": "Hirajoshi (Japanese)"
+        },
+        {
+          "value": "chromatic",
+          "label": "Chromatic"
+        }
+      ],
+      "defaultValue": "minorPentatonic",
+      "value": "chromatic"
+    },
+    {
+      "id": "baseOctave",
+      "type": "range",
+      "label": "Base Octave",
+      "min": 2,
+      "max": 5,
+      "defaultValue": 3,
+      "value": 4
+    },
+    {
+      "id": "reverbWet",
+      "type": "range",
+      "label": "Reverb Amount",
+      "min": 0,
+      "max": 100,
+      "defaultValue": 60,
+      "value": 40
+    },
+    {
+      "id": "accentColor",
+      "type": "color",
+      "label": "Accent Color",
+      "defaultValue": "#00ffee",
+      "value": "#ff007b"
+    }
+  ],
+  "icon": "✨"
+}

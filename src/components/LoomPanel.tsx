@@ -4,11 +4,28 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { CodeEditorState, LoomPanelState, ChatMode } from '../types/ui-state';
 import ChatView from './views/ChatView';
 import GlyphsView from './views/GlyphsView';
 import CodeEditorView from './views/CodeEditorView';
+import SettingsView from './views/SettingsView';
+import MonitorsView from './views/MonitorsView';
 
-type NavSection = 'chat' | 'glyphs' | 'editor';
+type NavSection = 'chat' | 'glyphs' | 'editor' | 'monitors' | 'settings';
+
+interface AIModel {
+  id: string;
+  name: string;
+  provider: string;
+  available: boolean;
+  icon: string;
+}
+
+// Track glyph created from chat for editor transition
+interface ChatGlyphCreation {
+  glyphId: string;
+  streamingCode: string;
+}
 
 interface NavItem {
   id: NavSection;
@@ -23,12 +40,19 @@ interface LoomPanelProps {
   streamingCode?: string;
   isStreaming?: boolean;
   transitionFromSummonBar?: boolean; // For goopy morph animation
+  zIndex?: number;
+  onRequestFront?: () => void;
+  initialState?: LoomPanelState;
+  onStateChange?: (state: LoomPanelState) => void;
+  editorState?: CodeEditorState;
+  onEditorStateChange?: (state: CodeEditorState) => void;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'chat', icon: '💬', label: 'Chat' },
   { id: 'glyphs', icon: '✨', label: 'Glyphs' },
   { id: 'editor', icon: '⌨️', label: 'Editor' },
+  { id: 'monitors', icon: '🖥️', label: 'Monitors' },
 ];
 
 export default function LoomPanel({ 
@@ -38,19 +62,48 @@ export default function LoomPanel({
   streamingCode,
   isStreaming,
   transitionFromSummonBar = false,
+  zIndex,
+  onRequestFront,
+  initialState,
+  onStateChange,
+  editorState,
+  onEditorStateChange,
 }: LoomPanelProps) {
-  const [activeSection, setActiveSection] = useState<NavSection>(initialSection);
+  const derivedInitialSection: NavSection =
+    initialSection !== 'chat' ? initialSection : initialState?.activeSection ?? initialSection;
+  const [activeSection, setActiveSection] = useState<NavSection>(derivedInitialSection);
+  const [previousSection, setPreviousSection] = useState<NavSection>('chat'); // Track section before settings
+  const [mountedSections, setMountedSections] = useState<NavSection[]>(() => [derivedInitialSection]);
   const [isVisible, setIsVisible] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [navCollapsed, setNavCollapsed] = useState(false); // Nav collapsed state (open by default)
+  const [navCollapsed, setNavCollapsed] = useState(initialState?.navCollapsed ?? false); // Nav collapsed state (open by default)
   const hasAutoSwitchedToEditor = useRef(false); // Track if we've auto-switched to editor
   
+  // Window controls state
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [hoveredControl, setHoveredControl] = useState<'close' | 'minimize' | 'maximize' | null>(null);
+  
+  // LLM selector state
+  const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
+  const [chatLLM, setChatLLM] = useState<string>(initialState?.chatLLM ?? 'grok');
+  const [generationLLM, setGenerationLLM] = useState<string>(initialState?.generationLLM ?? 'grok');
+  const [chatModeState, setChatModeState] = useState<ChatMode>(initialState?.chatMode ?? 'summon');
+  const [showChatLLMMenu, setShowChatLLMMenu] = useState(false);
+  const [showGenerationLLMMenu, setShowGenerationLLMMenu] = useState(false);
+  const chatLLMMenuRef = useRef<HTMLDivElement>(null);
+  const generationLLMMenuRef = useRef<HTMLDivElement>(null);
+  
+  // Track glyph created from chat view for seamless editor transition
+  const [chatGlyphCreation, setChatGlyphCreation] = useState<ChatGlyphCreation | null>(null);
+  
   // Panel position (absolute top-left coordinates)
-  const [panelPosition, setPanelPosition] = useState<{ top: number; left: number } | null>(null);
+  const [panelPosition, setPanelPosition] = useState<{ top: number; left: number } | null>(
+    initialState?.position ?? null
+  );
   
   // Resize state
-  const [size, setSize] = useState({ width: 1400, height: 900 }); // Default size
+  const [size, setSize] = useState(initialState?.size ?? { width: 1400, height: 900 }); // Default size
   const [isResizing, setIsResizing] = useState(false);
   const [resizeDir, setResizeDir] = useState<string | null>(null);
   const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0 });
@@ -58,6 +111,64 @@ export default function LoomPanel({
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   
+  const initialStateAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (initialStateAppliedRef.current) return;
+    if (!initialState) return;
+    if (initialSection === 'chat' && initialState.activeSection) {
+      setActiveSection(initialState.activeSection);
+    }
+    if (typeof initialState.navCollapsed === 'boolean') {
+      setNavCollapsed(initialState.navCollapsed);
+    }
+    if (initialState.position) {
+      setPanelPosition(initialState.position);
+    }
+    if (initialState.size) {
+      setSize(initialState.size);
+    }
+    if (initialState.chatLLM) {
+      setChatLLM(initialState.chatLLM);
+    }
+    if (initialState.generationLLM) {
+      setGenerationLLM(initialState.generationLLM);
+    }
+    if (initialState.chatMode) {
+      setChatModeState(initialState.chatMode);
+    }
+    initialStateAppliedRef.current = true;
+  }, [initialState, initialSection]);
+
+  useEffect(() => {
+    setMountedSections(prev =>
+      prev.includes(activeSection) ? prev : [...prev, activeSection]
+    );
+  }, [activeSection]);
+
+  // Load available AI models
+  useEffect(() => {
+    if (window.loom?.getAvailableModels) {
+      window.loom.getAvailableModels().then((models) => {
+        setAvailableModels(models);
+      }).catch(console.error);
+    }
+  }, []);
+
+  // Close LLM menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (chatLLMMenuRef.current && !chatLLMMenuRef.current.contains(e.target as Node)) {
+        setShowChatLLMMenu(false);
+      }
+      if (generationLLMMenuRef.current && !generationLLMMenuRef.current.contains(e.target as Node)) {
+        setShowGenerationLLMMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Initialize panel position to center it
   useEffect(() => {
     if (panelPosition === null) {
@@ -78,37 +189,89 @@ export default function LoomPanel({
   // Track the last glyph ID we auto-switched for
   const lastAutoSwitchGlyphId = useRef<string | null>(null);
   
-  // Switch to editor view when streaming starts (only once per streaming session)
-  useEffect(() => {
-    if (isStreaming && !hasAutoSwitchedToEditor.current) {
-      console.log('[LoomPanel] 🔄 Switching to editor for streaming');
-      setActiveSection('editor');
-      hasAutoSwitchedToEditor.current = true;
-    }
-  }, [isStreaming]);
+  // NOTE: We no longer auto-switch to editor when streaming starts.
+  // The user should stay in chat and see the preview there.
+  // Only switch to editor when user explicitly clicks "Open Editor"
   
-  // Switch to editor when initial glyph ID changes (only for NEW glyph IDs)
+  // Reset tracking refs when glyph ID is cleared (for next generation)
   useEffect(() => {
-    if (initialGlyphId && initialGlyphId !== lastAutoSwitchGlyphId.current) {
-      console.log('[LoomPanel] 🔄 Switching to editor for glyph:', initialGlyphId);
-      setActiveSection('editor');
-      lastAutoSwitchGlyphId.current = initialGlyphId;
-      hasAutoSwitchedToEditor.current = true;
-    }
-    // Reset auto-switch flag when glyph ID is cleared (for next generation)
     if (!initialGlyphId) {
       hasAutoSwitchedToEditor.current = false;
       lastAutoSwitchGlyphId.current = null;
     }
   }, [initialGlyphId]);
 
-  // Handle window close with exit animation
-  const handleClose = useCallback(() => {
-    setIsExiting(true);
-    setTimeout(() => {
-      onClose?.();
-    }, 400);
-  }, [onClose]);
+  // Clear chat glyph creation when switching away from editor
+  // Use a ref to track current section for timeout callback
+  const activeSectionRef = useRef(activeSection);
+  activeSectionRef.current = activeSection;
+  
+  useEffect(() => {
+    if (activeSection !== 'editor' && chatGlyphCreation) {
+      // Keep it for a moment in case user accidentally switched
+      const timer = setTimeout(() => {
+        if (activeSectionRef.current !== 'editor') {
+          setChatGlyphCreation(null);
+        }
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [activeSection, chatGlyphCreation]);
+
+  // Handle glyph created from ChatView - NOW ONLY switches to editor when user explicitly clicks
+  // This is called when user clicks "Open Editor" button on the chat embed preview
+  const handleChatGlyphCreated = useCallback((glyphId: string, streamingCode: string) => {
+    console.log('[LoomPanel] 🎉 User requested editor for glyph:', glyphId);
+    setChatGlyphCreation({ glyphId, streamingCode });
+    setActiveSection('editor'); // Only switch because user explicitly clicked
+    hasAutoSwitchedToEditor.current = true;
+  }, []);
+
+  // Handle switching to settings - remember the previous section
+  const handleOpenSettings = useCallback(() => {
+    if (activeSection !== 'settings') {
+      setPreviousSection(activeSection);
+    }
+    setActiveSection('settings');
+  }, [activeSection]);
+
+  // Handle closing settings - return to the previous section
+  const handleCloseSettings = useCallback(() => {
+    setActiveSection(previousSection);
+  }, [previousSection]);
+
+  const renderSectionContent = (section: NavSection) => {
+    switch (section) {
+      case 'chat':
+        return (
+          <ChatView
+            onGlyphCreated={handleChatGlyphCreated}
+            chatLLM={chatLLM}
+            generationLLM={generationLLM}
+            chatMode={chatModeState}
+            onChatModeChange={setChatModeState}
+          />
+        );
+      case 'glyphs':
+        return <GlyphsView />;
+      case 'editor':
+        return (
+          <CodeEditorView
+            initialGlyphId={chatGlyphCreation?.glyphId || initialGlyphId}
+            streamingCode={chatGlyphCreation?.streamingCode || streamingCode}
+            isStreaming={isStreaming}
+            persistedState={editorState}
+            onStateChange={onEditorStateChange}
+          />
+        );
+      case 'monitors':
+        return <MonitorsView />;
+      case 'settings':
+        return <SettingsView onClose={handleCloseSettings} />;
+      default:
+        return null;
+    }
+  };
 
   // Dragging functionality
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -235,7 +398,7 @@ export default function LoomPanel({
 
   // Handle mouse enter/leave to enable clicking only when hovering over panel
   const handleMouseEnter = useCallback(() => {
-    window.loom?.mouseEnterUI();
+    (window as any).loom?.mouseEnterUI?.();
   }, []);
 
   const handleMouseLeave = useCallback((event: React.MouseEvent) => {
@@ -253,9 +416,51 @@ export default function LoomPanel({
     }
     // Only restore click-through if not dragging
     if (!isDragging) {
-      window.loom?.mouseLeaveUI();
+      (window as any).loom?.mouseLeaveUI?.();
     }
   }, [isDragging]);
+
+  useEffect(() => {
+    if (!onStateChange) return;
+    const nextState: LoomPanelState = {
+      size,
+      position: panelPosition ?? undefined,
+      navCollapsed,
+      activeSection,
+      chatLLM,
+      generationLLM,
+      chatMode: chatModeState,
+    };
+    onStateChange(nextState);
+  }, [size, panelPosition, navCollapsed, activeSection, chatLLM, generationLLM, chatModeState, onStateChange]);
+  
+  // Window control handlers
+  const handleWindowClose = useCallback(() => {
+    setIsExiting(true);
+    setTimeout(() => {
+      onClose?.();
+    }, 400);
+  }, [onClose]);
+  
+  const handleWindowMinimize = useCallback(async () => {
+    if (window.loom?.windowControl) {
+      await window.loom.windowControl('minimize');
+    }
+  }, []);
+  
+  const handleWindowMaximize = useCallback(async () => {
+    if (window.loom?.windowControl) {
+      const result = await window.loom.windowControl('maximize');
+      if (result.success && typeof result.isMaximized === 'boolean') {
+        setIsMaximized(result.isMaximized);
+      }
+    }
+  }, []);
+  
+  // Get model by ID
+  const getModelById = useCallback((modelId: string) => {
+    return availableModels.find(m => m.id === modelId);
+  }, [availableModels]);
 
   return (
     <div 
@@ -263,14 +468,11 @@ export default function LoomPanel({
       className="loom-panel ui-interactive"
       style={{
         ...styles.container,
+        zIndex,
         opacity: isExiting ? 0 : 1,
         transform: isExiting ? 'scale(0.9) translateY(20px)' : 'none',
       }}
     >
-      {/* Animated background layers for depth */}
-      <div style={styles.bgLayer1} />
-      <div style={styles.bgLayer2} />
-      
       {/* Main panel with goopy animation - enhanced for summon bar transition */}
       <div 
         style={{
@@ -292,9 +494,11 @@ export default function LoomPanel({
           cursor: isDragging ? 'grabbing' : isResizing ? 'default' : 'default',
           // Enhanced goopy transition from summon bar
           animation: transitionFromSummonBar && isVisible ? 'goopyMorphIn 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) forwards' : undefined,
+          pointerEvents: 'auto',
         }}
         ref={panelRef}
         onMouseDown={handleDragStart}
+        onMouseDownCapture={onRequestFront}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
@@ -336,20 +540,205 @@ export default function LoomPanel({
         {/* Window chrome / title bar - DRAGGABLE */}
         <div style={styles.titleBar} data-drag-handle>
           <div style={styles.titleBarLeft}>
-            <span style={styles.titleIcon}>🔮</span>
-            <span style={styles.titleText}>L O O M</span>
+            {/* Mac-style window controls */}
+            <div style={styles.macControls} onMouseDown={(e) => e.stopPropagation()}>
+              {/* Close button - Red */}
+              <button
+                style={{
+                  ...styles.macBtn,
+                  background: hoveredControl === 'close' 
+                    ? 'linear-gradient(135deg, #ff6b6b 0%, #ff5f5f 100%)' 
+                    : 'linear-gradient(135deg, #ff5f5f 0%, #ee4d4d 100%)',
+                  boxShadow: hoveredControl === 'close'
+                    ? '0 0 12px rgba(255, 95, 95, 0.6), inset 0 1px 0 rgba(255,255,255,0.3)'
+                    : '0 2px 6px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255,255,255,0.2)',
+                  transform: hoveredControl === 'close' ? 'scale(1.15)' : 'scale(1)',
+                }}
+                onClick={handleWindowClose}
+                onMouseEnter={() => setHoveredControl('close')}
+                onMouseLeave={() => setHoveredControl(null)}
+                title="Close"
+              >
+                {hoveredControl === 'close' && <span style={styles.macBtnIcon}>×</span>}
+              </button>
+              
+              {/* Minimize button - Yellow */}
+              <button
+                style={{
+                  ...styles.macBtn,
+                  background: hoveredControl === 'minimize'
+                    ? 'linear-gradient(135deg, #ffda6b 0%, #ffc107 100%)'
+                    : 'linear-gradient(135deg, #ffc107 0%, #e6ac00 100%)',
+                  boxShadow: hoveredControl === 'minimize'
+                    ? '0 0 12px rgba(255, 193, 7, 0.6), inset 0 1px 0 rgba(255,255,255,0.3)'
+                    : '0 2px 6px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255,255,255,0.2)',
+                  transform: hoveredControl === 'minimize' ? 'scale(1.15)' : 'scale(1)',
+                }}
+                onClick={handleWindowMinimize}
+                onMouseEnter={() => setHoveredControl('minimize')}
+                onMouseLeave={() => setHoveredControl(null)}
+                title="Minimize"
+              >
+                {hoveredControl === 'minimize' && <span style={styles.macBtnIcon}>−</span>}
+              </button>
+              
+              {/* Maximize button - Green */}
+              <button
+                style={{
+                  ...styles.macBtn,
+                  background: hoveredControl === 'maximize'
+                    ? 'linear-gradient(135deg, #6bff8e 0%, #28c940 100%)'
+                    : 'linear-gradient(135deg, #28c940 0%, #1db636 100%)',
+                  boxShadow: hoveredControl === 'maximize'
+                    ? '0 0 12px rgba(40, 201, 64, 0.6), inset 0 1px 0 rgba(255,255,255,0.3)'
+                    : '0 2px 6px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255,255,255,0.2)',
+                  transform: hoveredControl === 'maximize' ? 'scale(1.15)' : 'scale(1)',
+                }}
+                onClick={handleWindowMaximize}
+                onMouseEnter={() => setHoveredControl('maximize')}
+                onMouseLeave={() => setHoveredControl(null)}
+                title={isMaximized ? 'Restore' : 'Maximize'}
+              >
+                {hoveredControl === 'maximize' && (
+                  <span style={styles.macBtnIcon}>{isMaximized ? '⊖' : '+'}</span>
+                )}
+              </button>
+            </div>
+            
+            {/* LOOM Title */}
+            <div style={styles.titleGroup}>
+              <span style={styles.titleIcon}>🔮</span>
+              <span style={styles.titleText}>L O O M</span>
+            </div>
           </div>
-          <div style={styles.titleBarRight}>
-            <span style={styles.shortcutHint}>Drag to move • ESC to close</span>
-            <button 
-              style={{...styles.windowBtn, ...styles.closeBtn}} 
-              onClick={handleClose}
-              onMouseDown={(e) => e.stopPropagation()} // Don't trigger drag
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 50, 50, 0.3)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-            >
-              ✕
-            </button>
+          
+          {/* LLM Selectors - Far right */}
+          <div style={styles.titleBarRight} onMouseDown={(e) => e.stopPropagation()}>
+            {/* Chat LLM Selector */}
+            <div style={styles.llmSelectorWrapper} ref={chatLLMMenuRef}>
+              <button
+                onClick={() => {
+                  setShowChatLLMMenu(!showChatLLMMenu);
+                  setShowGenerationLLMMenu(false);
+                }}
+                style={{
+                  ...styles.llmBtnCompact,
+                  borderColor: showChatLLMMenu ? 'rgba(0, 255, 255, 0.5)' : 'rgba(255, 255, 255, 0.12)',
+                  background: showChatLLMMenu ? 'rgba(0, 255, 255, 0.08)' : 'transparent',
+                }}
+                title={`Chat LLM: ${getModelById(chatLLM)?.name || 'Auto'}`}
+              >
+                <span style={styles.llmBtnIconSmall}>💬</span>
+                <span style={styles.llmBtnLabelDark}>{getModelById(chatLLM)?.name || 'Chat'}</span>
+                <span style={styles.llmBtnArrowDark}>▾</span>
+              </button>
+              
+              {showChatLLMMenu && (
+                <div style={styles.llmMenuRight}>
+                  <div style={styles.llmMenuTitle}>CHAT LLM</div>
+                  <div style={styles.llmMenuScroll}>
+                    {['grok', 'gemini', 'openai'].map(provider => {
+                      const providerModels = availableModels.filter(m => m.provider === provider);
+                      if (providerModels.length === 0) return null;
+                      const providerLabels: Record<string, string> = {
+                        grok: '🤖 xAI GROK',
+                        gemini: '✨ GOOGLE GEMINI',
+                        openai: '🧠 OPENAI',
+                      };
+                      return (
+                        <div key={provider}>
+                          <div style={styles.llmProviderLabel}>{providerLabels[provider]}</div>
+                          {providerModels.map((model) => (
+                            <button
+                              key={model.id}
+                              onClick={() => {
+                                setChatLLM(model.id);
+                                setShowChatLLMMenu(false);
+                              }}
+                              disabled={!model.available}
+                              style={{
+                                ...styles.llmMenuItem,
+                                opacity: model.available ? 1 : 0.4,
+                                background: chatLLM === model.id ? 'rgba(0, 255, 255, 0.15)' : 'transparent',
+                                borderColor: chatLLM === model.id ? 'rgba(0, 255, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                              }}
+                            >
+                              <span style={styles.llmItemIcon}>{model.icon}</span>
+                              <span style={styles.llmItemName}>{model.name}</span>
+                              {chatLLM === model.id && <span style={styles.llmCheck}>✓</span>}
+                              {!model.available && <span style={styles.llmUnavailable}>No key</span>}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {/* Generation LLM Selector */}
+            <div style={styles.llmSelectorWrapper} ref={generationLLMMenuRef}>
+              <button
+                onClick={() => {
+                  setShowGenerationLLMMenu(!showGenerationLLMMenu);
+                  setShowChatLLMMenu(false);
+                }}
+                style={{
+                  ...styles.llmBtnCompact,
+                  borderColor: showGenerationLLMMenu ? 'rgba(255, 0, 255, 0.5)' : 'rgba(255, 255, 255, 0.12)',
+                  background: showGenerationLLMMenu ? 'rgba(255, 0, 255, 0.08)' : 'transparent',
+                }}
+                title={`Generation LLM: ${getModelById(generationLLM)?.name || 'Auto'}`}
+              >
+                <span style={styles.llmBtnIconSmall}>✨</span>
+                <span style={styles.llmBtnLabelDark}>{getModelById(generationLLM)?.name || 'Generate'}</span>
+                <span style={styles.llmBtnArrowDark}>▾</span>
+              </button>
+              
+              {showGenerationLLMMenu && (
+                <div style={styles.llmMenuRight}>
+                  <div style={styles.llmMenuTitle}>GENERATION LLM</div>
+                  <div style={styles.llmMenuScroll}>
+                    {['grok', 'gemini', 'openai'].map(provider => {
+                      const providerModels = availableModels.filter(m => m.provider === provider);
+                      if (providerModels.length === 0) return null;
+                      const providerLabels: Record<string, string> = {
+                        grok: '🤖 xAI GROK',
+                        gemini: '✨ GOOGLE GEMINI',
+                        openai: '🧠 OPENAI',
+                      };
+                      return (
+                        <div key={provider}>
+                          <div style={styles.llmProviderLabel}>{providerLabels[provider]}</div>
+                          {providerModels.map((model) => (
+                            <button
+                              key={model.id}
+                              onClick={() => {
+                                setGenerationLLM(model.id);
+                                setShowGenerationLLMMenu(false);
+                              }}
+                              disabled={!model.available}
+                              style={{
+                                ...styles.llmMenuItem,
+                                opacity: model.available ? 1 : 0.4,
+                                background: generationLLM === model.id ? 'rgba(255, 0, 255, 0.15)' : 'transparent',
+                                borderColor: generationLLM === model.id ? 'rgba(255, 0, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                              }}
+                            >
+                              <span style={styles.llmItemIcon}>{model.icon}</span>
+                              <span style={styles.llmItemName}>{model.name}</span>
+                              {generationLLM === model.id && <span style={{...styles.llmCheck, color: '#ff66ff'}}>✓</span>}
+                              {!model.available && <span style={styles.llmUnavailable}>No key</span>}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -404,34 +793,42 @@ export default function LoomPanel({
             
             {/* Settings button at bottom */}
             <button
+              onClick={handleOpenSettings}
               style={{
                 ...styles.navItem,
-                opacity: isVisible ? 0.6 : 0,
+                ...(activeSection === 'settings' ? styles.navItemActive : {}),
+                opacity: isVisible ? (activeSection === 'settings' ? 1 : 0.6) : 0,
                 transform: isVisible ? 'translateX(0)' : 'translateX(-20px)',
                 animationDelay: '400ms',
                 width: navCollapsed ? '40px' : '64px',
                 padding: navCollapsed ? '14px 4px' : '14px 8px',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-              onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
+              onMouseEnter={(e) => { if (activeSection !== 'settings') e.currentTarget.style.opacity = '1'; }}
+              onMouseLeave={(e) => { if (activeSection !== 'settings') e.currentTarget.style.opacity = '0.6'; }}
               title={navCollapsed ? 'Settings' : undefined}
             >
               <span style={styles.navIcon}>⚙️</span>
               {!navCollapsed && <span style={styles.navLabel}>Settings</span>}
+              {activeSection === 'settings' && (
+                <div style={styles.navIndicator} />
+              )}
             </button>
           </nav>
 
           {/* Main view area */}
           <div style={styles.viewContainer}>
-            {activeSection === 'chat' && <ChatView />}
-            {activeSection === 'glyphs' && <GlyphsView />}
-            {activeSection === 'editor' && (
-              <CodeEditorView 
-                initialGlyphId={initialGlyphId}
-                streamingCode={streamingCode}
-                isStreaming={isStreaming}
-              />
-            )}
+            {mountedSections.map(section => (
+              <div
+                key={section}
+                style={{
+                  ...styles.sectionWrapper,
+                  display: section === activeSection ? 'flex' : 'none',
+                }}
+                aria-hidden={section === activeSection ? undefined : true}
+              >
+                {renderSectionContent(section)}
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -547,6 +944,17 @@ export default function LoomPanel({
           0%, 100% { opacity: 0.6; }
           50% { opacity: 1; }
         }
+        
+        @keyframes fadeInDown {
+          from {
+            opacity: 0;
+            transform: translateY(-10px) scale(0.95);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
       `}</style>
     </div>
   );
@@ -568,34 +976,12 @@ const styles: Record<string, LoomStyle> = {
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace",
     transition: 'opacity 0.4s ease, transform 0.4s ease',
     // No flex centering - we'll position the panel absolutely
-  },
-  
-  // Animated background layers
-  bgLayer1: {
-    position: 'absolute',
-    top: '-20%',
-    left: '-20%',
-    right: '-20%',
-    bottom: '-20%',
-    background: 'radial-gradient(ellipse at 30% 20%, rgba(0, 255, 255, 0.08) 0%, transparent 50%)',
-    animation: 'bgShift1 20s ease-in-out infinite',
-    pointerEvents: 'none',
-  },
-  bgLayer2: {
-    position: 'absolute',
-    top: '-20%',
-    left: '-20%',
-    right: '-20%',
-    bottom: '-20%',
-    background: 'radial-gradient(ellipse at 70% 80%, rgba(255, 0, 255, 0.06) 0%, transparent 50%)',
-    animation: 'bgShift2 25s ease-in-out infinite',
     pointerEvents: 'none',
   },
   
   panel: {
     position: 'absolute',
-    background: 'linear-gradient(135deg, rgba(10, 10, 25, 0.95) 0%, rgba(15, 15, 35, 0.92) 100%)',
-    backdropFilter: 'blur(40px)',
+    background: 'linear-gradient(135deg, #0a0a19 0%, #0f0f23 100%)',
     borderRadius: '24px',
     border: '1px solid rgba(0, 255, 255, 0.15)',
     overflow: 'hidden',
@@ -603,6 +989,7 @@ const styles: Record<string, LoomStyle> = {
     flexDirection: 'column',
     transition: 'opacity 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.4s ease',
     animation: 'floatGlow 4s ease-in-out infinite',
+    boxShadow: '0 25px 80px rgba(0, 0, 0, 0.8), 0 0 60px rgba(0, 255, 255, 0.08)',
   },
   
   // Resize handles
@@ -652,7 +1039,7 @@ const styles: Record<string, LoomStyle> = {
   titleBarRight: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
+    gap: '8px',
     WebkitAppRegion: 'no-drag',
   },
   shortcutHint: {
@@ -676,6 +1063,202 @@ const styles: Record<string, LoomStyle> = {
   },
   closeBtn: {
     color: 'rgba(255, 100, 100, 0.8)',
+  },
+  
+  // Mac-style window controls
+  macControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginRight: '20px',
+  },
+  macBtn: {
+    width: '14px',
+    height: '14px',
+    borderRadius: '50%',
+    border: 'none',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)',
+    position: 'relative' as const,
+  },
+  macBtnIcon: {
+    fontSize: '10px',
+    fontWeight: 'bold',
+    color: 'rgba(0, 0, 0, 0.5)',
+    lineHeight: 1,
+  },
+  
+  // Title group (icon + text)
+  titleGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginRight: '20px',
+  },
+  
+  // LLM Selectors
+  llmSelectors: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+  },
+  llmSelectorWrapper: {
+    position: 'relative' as const,
+    zIndex: 200,
+  },
+  llmBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '7px 14px',
+    background: 'rgba(0, 255, 255, 0.05)',
+    border: '1px solid rgba(0, 255, 255, 0.25)',
+    borderRadius: '10px',
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: '12px',
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+    fontFamily: "'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif",
+    letterSpacing: '0.01em',
+  },
+  // Compact LLM button style for header bar (darker, matches history title font)
+  llmBtnCompact: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '6px 12px',
+    background: 'transparent',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+    fontFamily: "'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif",
+  },
+  llmBtnIconSmall: {
+    fontSize: '12px',
+    opacity: 0.7,
+  },
+  llmBtnLabelDark: {
+    maxWidth: '90px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    fontWeight: 500,
+    fontSize: '12px',
+    color: 'rgba(255, 255, 255, 0.5)', // Darker font color
+    fontFamily: "'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif",
+    letterSpacing: '0.01em',
+  },
+  llmBtnArrowDark: {
+    fontSize: '8px',
+    opacity: 0.4,
+    marginLeft: '2px',
+    color: 'rgba(255, 255, 255, 0.4)',
+  },
+  llmBtnIcon: {
+    fontSize: '13px',
+  },
+  llmBtnLabel: {
+    maxWidth: '100px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    fontWeight: 500,
+  },
+  llmBtnArrow: {
+    fontSize: '9px',
+    opacity: 0.5,
+    marginLeft: '2px',
+  },
+  llmMenu: {
+    position: 'absolute' as const,
+    top: '100%',
+    left: 0,
+    marginTop: '8px',
+    background: 'rgba(12, 12, 24, 0.98)',
+    backdropFilter: 'blur(24px)',
+    borderRadius: '12px',
+    border: '1px solid rgba(0, 255, 255, 0.3)',
+    boxShadow: '0 12px 40px rgba(0, 0, 0, 0.6), 0 0 60px rgba(0, 255, 255, 0.1)',
+    padding: '8px',
+    minWidth: '200px',
+    animation: 'fadeInDown 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)',
+  },
+  // Right-aligned dropdown menu (opens downward to the left)
+  llmMenuRight: {
+    position: 'absolute' as const,
+    top: '100%',
+    right: 0,
+    marginTop: '8px',
+    background: 'rgba(12, 12, 24, 0.98)',
+    backdropFilter: 'blur(24px)',
+    borderRadius: '12px',
+    border: '1px solid rgba(255, 255, 255, 0.15)',
+    boxShadow: '0 12px 40px rgba(0, 0, 0, 0.6)',
+    padding: '8px',
+    minWidth: '200px',
+    animation: 'fadeInDown 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)',
+    zIndex: 300,
+  },
+  llmMenuTitle: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: '9px',
+    fontWeight: 700,
+    letterSpacing: '1px',
+    padding: '6px 10px 4px',
+    textTransform: 'uppercase' as const,
+  },
+  llmMenuScroll: {
+    maxHeight: '280px',
+    overflowY: 'auto' as const,
+    overflowX: 'hidden' as const,
+  },
+  llmProviderLabel: {
+    color: 'rgba(255, 255, 255, 0.4)',
+    fontSize: '8px',
+    fontWeight: 700,
+    letterSpacing: '1px',
+    padding: '8px 10px 4px',
+    textTransform: 'uppercase' as const,
+    borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+    marginTop: '4px',
+  },
+  llmMenuItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    width: '100%',
+    padding: '8px 10px',
+    background: 'transparent',
+    border: '1px solid transparent',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    fontFamily: 'inherit',
+    textAlign: 'left' as const,
+  },
+  llmItemIcon: {
+    fontSize: '13px',
+  },
+  llmItemName: {
+    color: '#ffffff',
+    fontSize: '12px',
+    fontWeight: 500,
+    flex: 1,
+  },
+  llmCheck: {
+    color: '#00ffff',
+    fontSize: '12px',
+    fontWeight: 'bold',
+  },
+  llmUnavailable: {
+    color: 'rgba(255, 100, 100, 0.7)',
+    fontSize: '9px',
+    fontStyle: 'italic' as const,
   },
   
   content: {
@@ -758,6 +1341,11 @@ const styles: Record<string, LoomStyle> = {
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+  },
+  sectionWrapper: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
   },
 };
 

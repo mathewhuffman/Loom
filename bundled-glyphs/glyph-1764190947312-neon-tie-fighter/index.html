@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Neon Tie Fighter</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; user-select: none; }
+    canvas { display: block; width: 100%; height: 100%; }
+    
+    #hud {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      box-sizing: border-box;
+      padding: 20px;
+    }
+
+    .hud-text {
+      color: #00ff00;
+      text-shadow: 0 0 5px #00ff00, 0 0 10px #00ff00;
+      font-weight: bold;
+      letter-spacing: 2px;
+    }
+
+    #score-board {
+      font-size: 24px;
+      position: absolute;
+      top: 30px;
+      left: 30px;
+    }
+
+    #controls-hint {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 14px;
+      color: rgba(0, 255, 255, 0.7);
+      text-shadow: 0 0 5px cyan;
+    }
+
+    #game-over {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      display: none;
+      background: rgba(0, 0, 0, 0.85);
+      padding: 40px;
+      border: 2px solid #ff0066;
+      box-shadow: 0 0 20px #ff0066;
+    }
+
+    #game-over h1 {
+      color: #ff0066;
+      font-size: 48px;
+      margin: 0 0 20px 0;
+      text-shadow: 0 0 10px #ff0066;
+      text-transform: uppercase;
+    }
+
+    #game-over p {
+      color: #fff;
+      font-size: 18px;
+      animation: blink 1s infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div id="score-board" class="hud-text">SCORE: 0000</div>
+    <div id="controls-hint">MOUSE to Fly &bull; CLICK to Shoot</div>
+  </div>
+
+  <div id="game-over">
+    <h1>SYSTEM FAILURE</h1>
+    <p>[ CLICK TO REBOOT SYSTEM ]</p>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://esm.sh/three@0.168.0';
+    import { EffectComposer } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'https://esm.sh/three@0.168.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+
+    // --- CONFIGURATION ---
+    const COLORS = {
+      player: 0x00ff00,
+      laser: 0xff0066,
+      asteroid: 0x00ffff,
+      star: 0xffffff
+    };
+    
+    // --- STATE ---
+    const state = {
+      score: 0,
+      isPlaying: true,
+      mouse: new THREE.Vector2(),
+      targetPos: new THREE.Vector2(),
+      lasers: [],
+      asteroids: [],
+      lastShot: 0,
+      lastSpawn: 0,
+      difficulty: 1.0
+    };
+
+    // --- SCENE SETUP ---
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x050510, 0.02);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
+    camera.position.set(0, 2, 8);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    // --- POST PROCESSING (BLOOM) ---
+    const renderScene = new RenderPass(scene, camera);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.1;
+    bloomPass.strength = 1.2;
+    bloomPass.radius = 0.5;
+
+    const composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+
+    // --- ASSETS ---
+    // 1. Starfield
+    const starGeo = new THREE.BufferGeometry();
+    const starCount = 2000;
+    const starPos = new Float32Array(starCount * 3);
+    for(let i=0; i<starCount*3; i++) {
+      starPos[i] = (Math.random() - 0.5) * 400;
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    const starMat = new THREE.PointsMaterial({ color: COLORS.star, size: 0.5, transparent: true, opacity: 0.8 });
+    const stars = new THREE.Points(starGeo, starMat);
+    scene.add(stars);
+
+    // 2. Player Ship (Procedural Geometry)
+    const shipGroup = new THREE.Group();
+    
+    // Cockpit
+    const cockpitGeo = new THREE.IcosahedronGeometry(0.8, 1);
+    const cockpitMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const cockpitWire = new THREE.MeshBasicMaterial({ color: COLORS.player, wireframe: true });
+    const cockpit = new THREE.Mesh(cockpitGeo, cockpitMat);
+    cockpit.add(new THREE.Mesh(cockpitGeo, cockpitWire));
+    shipGroup.add(cockpit);
+
+    // Wings
+    const wingGeo = new THREE.CylinderGeometry(1.5, 1.5, 0.1, 6);
+    wingGeo.rotateX(Math.PI / 2);
+    const wingMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const wingWire = new THREE.MeshBasicMaterial({ color: COLORS.player, wireframe: true });
+    
+    const leftWing = new THREE.Mesh(wingGeo, wingMat);
+    leftWing.add(new THREE.Mesh(wingGeo, wingWire));
+    leftWing.position.set(-1.8, 0, 0);
+    
+    const rightWing = new THREE.Mesh(wingGeo, wingMat);
+    rightWing.add(new THREE.Mesh(wingGeo, wingWire));
+    rightWing.position.set(1.8, 0, 0);
+
+    // Struts
+    const strutGeo = new THREE.CylinderGeometry(0.2, 0.2, 3.6, 8);
+    strutGeo.rotateZ(Math.PI / 2);
+    const strut = new THREE.Mesh(strutGeo, new THREE.MeshBasicMaterial({ color: 0x111111 }));
+    
+    shipGroup.add(leftWing, rightWing, strut);
+    scene.add(shipGroup);
+
+    // --- GAMEPLAY FUNCTIONS ---
+
+    function spawnAsteroid() {
+      if (!state.isPlaying) return;
+      
+      const geo = new THREE.IcosahedronGeometry(Math.random() * 1.5 + 0.5, 0);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+      const wire = new THREE.MeshBasicMaterial({ color: COLORS.asteroid, wireframe: true });
+      
+      const asteroid = new THREE.Mesh(geo, mat);
+      asteroid.add(new THREE.Mesh(geo, wire));
+      
+      // Spawn in distance
+      asteroid.position.z = -100;
+      asteroid.position.x = (Math.random() - 0.5) * 40;
+      asteroid.position.y = (Math.random() - 0.5) * 25;
+      
+      // Metadata for animation
+      asteroid.userData = {
+        rotSpeed: { x: Math.random() * 0.05, y: Math.random() * 0.05 },
+        speed: 0.5 + (Math.random() * 0.5) + (state.difficulty * 0.1)
+      };
+
+      scene.add(asteroid);
+      state.asteroids.push(asteroid);
+    }
+
+    function shoot() {
+      if (!state.isPlaying) return;
+
+      const laserGeo = new THREE.CylinderGeometry(0.08, 0.08, 4, 8);
+      laserGeo.rotateX(Math.PI / 2);
+      const laserMat = new THREE.MeshBasicMaterial({ color: COLORS.laser });
+      
+      // Create two lasers
+      const l1 = new THREE.Mesh(laserGeo, laserMat);
+      const l2 = new THREE.Mesh(laserGeo, laserMat);
+      
+      l1.position.copy(shipGroup.position);
+      l1.position.x -= 1.7;
+      l2.position.copy(shipGroup.position);
+      l2.position.x += 1.7;
+      
+      scene.add(l1, l2);
+      state.lasers.push(l1, l2);
+    }
+
+    function updateScore(points) {
+      state.score += points;
+      document.getElementById('score-board').innerText = 'SCORE: ' + state.score.toString().padStart(4, '0');
+      
+      // Increase difficulty slightly
+      if (state.score % 500 === 0) state.difficulty += 0.5;
+    }
+
+    function gameOver() {
+      state.isPlaying = false;
+      document.getElementById('game-over').style.display = 'block';
+      document.getElementById('hud').style.opacity = '0.2';
+    }
+
+    function resetGame() {
+      state.score = 0;
+      state.difficulty = 1.0;
+      state.isPlaying = true;
+      updateScore(0);
+      
+      document.getElementById('game-over').style.display = 'none';
+      document.getElementById('hud').style.opacity = '1';
+
+      // Clear entities
+      state.asteroids.forEach(a => scene.remove(a));
+      state.asteroids = [];
+      state.lasers.forEach(l => scene.remove(l));
+      state.lasers = [];
+      
+      shipGroup.position.set(0,0,0);
+      shipGroup.rotation.set(0,0,0);
+    }
+
+    // --- INPUT HANDLING ---
+    window.addEventListener('mousemove', (e) => {
+      state.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      state.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    });
+
+    window.addEventListener('mousedown', () => {
+      if (!state.isPlaying) {
+        resetGame();
+      } else {
+        shoot();
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // --- MAIN LOOP ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      
+      const delta = clock.getDelta();
+      const now = clock.getElapsedTime();
+
+      if (state.isPlaying) {
+        // 1. Ship Movement (Smooth Lerp)
+        const limitX = 12;
+        const limitY = 6;
+        state.targetPos.x = state.mouse.x * limitX;
+        state.targetPos.y = state.mouse.y * limitY;
+        
+        shipGroup.position.x += (state.targetPos.x - shipGroup.position.x) * 5 * delta;
+        shipGroup.position.y += (state.targetPos.y - shipGroup.position.y) * 5 * delta;
+        
+        // Banking effect
+        shipGroup.rotation.z = (shipGroup.position.x - state.targetPos.x) * 0.15;
+        shipGroup.rotation.x = (shipGroup.position.y - state.targetPos.y) * 0.1;
+
+        // 2. Spawn Asteroids
+        if (now - state.lastSpawn > Math.max(0.2, 1.0 - (state.difficulty * 0.1))) {
+          spawnAsteroid();
+          state.lastSpawn = now;
+        }
+
+        // 3. Move Lasers
+        for (let i = state.lasers.length - 1; i >= 0; i--) {
+          const l = state.lasers[i];
+          l.position.z -= 60 * delta;
+          if (l.position.z < -150) {
+            scene.remove(l);
+            state.lasers.splice(i, 1);
+          }
+        }
+
+        // 4. Move Asteroids & Collisions
+        const playerHitBox = 1.5;
+        
+        for (let i = state.asteroids.length - 1; i >= 0; i--) {
+          const a = state.asteroids[i];
+          a.position.z += (20 + (state.difficulty * 2)) * delta;
+          a.rotation.x += a.userData.rotSpeed.x;
+          a.rotation.y += a.userData.rotSpeed.y;
+
+          // Collision: Player vs Asteroid
+          if (a.position.distanceTo(shipGroup.position) < playerHitBox) {
+            gameOver();
+          }
+
+          // Collision: Laser vs Asteroid
+          let hit = false;
+          for (let j = state.lasers.length - 1; j >= 0; j--) {
+            const l = state.lasers[j];
+            if (l.position.distanceTo(a.position) < 2.0) {
+              // Destroy
+              scene.remove(a);
+              state.asteroids.splice(i, 1);
+              scene.remove(l);
+              state.lasers.splice(j, 1);
+              updateScore(100);
+              hit = true;
+              break;
+            }
+          }
+
+          if (!hit && a.position.z > 10) {
+            scene.remove(a);
+            state.asteroids.splice(i, 1);
+          }
+        }
+      } else {
+        // Game Over Animation (Spin)
+        shipGroup.rotation.z += 1 * delta;
+        shipGroup.rotation.y += 1 * delta;
+      }
+
+      // Move Stars for speed effect
+      const speed = state.isPlaying ? 1 : 0.1;
+      const positions = stars.geometry.attributes.position.array;
+      for(let i=2; i<positions.length; i+=3) {
+        positions[i] += 20 * speed * delta;
+        if (positions[i] > 50) positions[i] = -350;
+      }
+      stars.geometry.attributes.position.needsUpdate = true;
+
+      composer.render();
+    }
+
+    animate();
+  </script>
+</body>
+</html>

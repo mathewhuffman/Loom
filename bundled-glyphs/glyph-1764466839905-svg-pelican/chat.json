@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764466859415-user",
+    "role": "user",
+    "content": "create a SVG pelican",
+    "timestamp": 1764466859415,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764466859415-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"SVG Pelican\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764466859416,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764466859415-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764466859417,
+    "type": "info"
+  }
+]

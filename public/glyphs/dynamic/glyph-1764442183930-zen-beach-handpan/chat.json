@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764442233414-user",
+    "role": "user",
+    "content": "generate a beach scene that is beautiful and has hand pans playing the background",
+    "timestamp": 1764442233414,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764442233414-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Zen Beach & Handpan\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764442233415,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764442233414-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764442233416,
+    "type": "info"
+  }
+]

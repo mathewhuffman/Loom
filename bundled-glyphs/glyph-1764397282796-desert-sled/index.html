@@ -1,0 +1,264 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Desert Sled</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glCanvas"></canvas>
+
+    <script>
+        // --- WebGL 2.0 Boilerplate & Shader Setup ---
+        const canvas = document.getElementById('glCanvas');
+        const gl = canvas.getContext('webgl2');
+
+        if (!gl) {
+            document.body.innerHTML = '<div style="color:white; padding:20px;">WebGL 2 is required for this glyph but is not supported by your browser.</div>';
+            throw new Error('WebGL 2 not supported');
+        }
+
+        // --- Shader Sources ---
+
+        const vsSource = `#version 300 es
+        in vec4 position;
+        void main() {
+            gl_Position = position;
+        }`;
+
+        const fsSource = `#version 300 es
+        precision highp float;
+
+        uniform vec2 uResolution;
+        uniform float uTime;
+        uniform float uSpeed;
+        uniform float uCinemaScope;
+        uniform vec3 uColor;
+        uniform float uIntensity;
+
+        out vec4 fragColor;
+
+        // --- User Shader Logic Transpiled ---
+        
+        // Configurable Time
+        #define T (uTime * uSpeed)
+        
+        // Path function: Winding path using tanh/cos
+        #define P(z) (vec3(tanh(cos((z)*.003)*2.)*164.+cos((z) * .005)  *32., cos((z)*.01)*14., (z)))
+        
+        // 2D Rotation Matrix
+        #define R(a) mat2(cos(a), -sin(a), sin(a), cos(a))
+        
+        // Normalize shorthand
+        #define N normalize
+
+        // Map function defining the world geometry
+        float map(vec3 p) {
+            vec3 q = P(p.z);
+            float n, s;
+            
+            // Terrain generation loop
+            // s starts as plane equation (y = 47)
+            // n starts at 0.01, grows by 3x each step (n += n+n)
+            for(n = .01, s = 47. - p.y; n < 8.; n *= 3.) {
+                s -= abs(dot(sin(.04 * p / n), vec3(n * 6.)));
+            }
+            
+            // Combine tunnel geometry with terrain
+            // 8e1 = 80.0
+            s = max(80.0 - length(p.xy - q.xy) + s, s);
+            return s;
+        }
+
+        void main() {
+            vec2 u = gl_FragCoord.xy;
+            vec2 r = uResolution.xy;
+            
+            // Normalize UVs to -0.5 to 0.5, aspect corrected
+            vec2 uv = (u - r.xy * 0.5) / r.y;
+            
+            // Cinema Scope (Black Bars)
+            if (abs(uv.y) > uCinemaScope) { 
+                fragColor = vec4(0.0, 0.0, 0.0, 1.0); 
+                return; 
+            }
+            
+            vec4 o = vec4(0.0);
+            
+            // Raymarching Setup
+            float s = 0.002;
+            float d = 0.0;
+            
+            // Camera setup
+            vec3 p = P(T);          // Current position on path
+            vec3 ro = p;            // Ray Origin
+            vec3 target = P(T + 2.0); // Look ahead on path
+            
+            // Camera Basis Vectors
+            vec3 Z = N(target - p);             // Forward
+            vec3 X = N(vec3(Z.z, 0.0, -Z.x));   // Right (Cross product approx for Y-up)
+            
+            // Camera rotation matrix
+            mat3 cam = mat3(-X, cross(X, Z), Z);
+            
+            // Ray Direction with slight roll based on time
+            vec3 D = vec3(R(sin(T * 0.005) * 0.3) * uv, 1.0) * cam;
+            
+            // Raymarch Loop
+            // i++ < 1e2 (100 iterations), d < 1e3 (max distance 1000)
+            for(int i = 0; i < 100; i++) {
+                if (d >= 1000.0) break;
+                
+                p = ro + D * d;
+                s = map(p) * 0.5; // Distance field step
+                d += s;
+                
+                // Accumulate volumetric glow
+                o += 1.0 / max(s, 0.001);
+            }
+
+            if (d < 1000.0) {
+                // Hit something - Apply color
+                // Original: vec4(2, 1.5, 1.1, 0)
+                // We use user color * intensity
+                o *= 0.1 * vec4(uColor * uIntensity * 2.0, 0.0);
+            } else {
+                // Sky / Miss
+                // Original: 1e3 * vec4(5,3,1,0) / max(length(u-.8), .1)
+                // Note: 'u' in original was normalized coords, here it is 'uv'
+                o = 1000.0 * vec4(5.0, 3.0, 1.0, 0.0) / max(length(uv - 0.8), 0.1);
+            }
+            
+            // Tone Mapping
+            // tanh(o*o / 3e8) -> 3e8 = 300,000,000
+            o = tanh(o * o / 300000000.0);
+            
+            fragColor = vec4(o.rgb, 1.0);
+        }`;
+
+        // --- WebGL Helpers ---
+
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error(gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        function createProgram(gl, vs, fs) {
+            const program = gl.createProgram();
+            const vShader = createShader(gl, gl.VERTEX_SHADER, vs);
+            const fShader = createShader(gl, gl.FRAGMENT_SHADER, fs);
+            gl.attachShader(program, vShader);
+            gl.attachShader(program, fShader);
+            gl.linkProgram(program);
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error(gl.getProgramInfoLog(program));
+                return null;
+            }
+            return program;
+        }
+
+        // --- Initialization ---
+
+        const program = createProgram(gl, vsSource, fsSource);
+        const positionAttributeLocation = gl.getAttribLocation(program, "position");
+        const positionBuffer = gl.createBuffer();
+        
+        // Full screen quad
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+            -1, -1,
+             1, -1,
+            -1,  1,
+            -1,  1,
+             1, -1,
+             1,  1,
+        ]), gl.STATIC_DRAW);
+
+        const vao = gl.createVertexArray();
+        gl.bindVertexArray(vao);
+        gl.enableVertexAttribArray(positionAttributeLocation);
+        gl.vertexAttribPointer(positionAttributeLocation, 2, gl.FLOAT, false, 0, 0);
+
+        // Uniform Locations
+        const uResolutionLoc = gl.getUniformLocation(program, "uResolution");
+        const uTimeLoc = gl.getUniformLocation(program, "uTime");
+        const uSpeedLoc = gl.getUniformLocation(program, "uSpeed");
+        const uCinemaScopeLoc = gl.getUniformLocation(program, "uCinemaScope");
+        const uColorLoc = gl.getUniformLocation(program, "uColor");
+        const uIntensityLoc = gl.getUniformLocation(program, "uIntensity");
+
+        // Helper: Hex to RGB
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? [
+                parseInt(result[1], 16) / 255,
+                parseInt(result[2], 16) / 255,
+                parseInt(result[3], 16) / 255
+            ] : [1, 1, 1];
+        }
+
+        // --- Rendering Loop ---
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function render(time) {
+            const t = time * 0.001; // Convert to seconds
+            
+            // Get Inputs
+            const inputs = window.GLYPH_INPUTS || {};
+            const speed = inputs.speed !== undefined ? inputs.speed : 200;
+            const cinemaScope = inputs.cinemaScope !== undefined ? inputs.cinemaScope : 0.35;
+            const colorHex = inputs.baseColor || "#ffbf8c";
+            const intensity = inputs.intensity !== undefined ? inputs.intensity : 1.0;
+            const rgb = hexToRgb(colorHex);
+
+            gl.useProgram(program);
+            gl.bindVertexArray(vao);
+
+            // Update Uniforms
+            gl.uniform2f(uResolutionLoc, canvas.width, canvas.height);
+            gl.uniform1f(uTimeLoc, t);
+            gl.uniform1f(uSpeedLoc, speed);
+            gl.uniform1f(uCinemaScopeLoc, cinemaScope);
+            gl.uniform3f(uColorLoc, rgb[0], rgb[1], rgb[2]);
+            gl.uniform1f(uIntensityLoc, intensity);
+
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+            requestAnimationFrame(render);
+        }
+
+        requestAnimationFrame(render);
+
+    </script>
+</body>
+</html>

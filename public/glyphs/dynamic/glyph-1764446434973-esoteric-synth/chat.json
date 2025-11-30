@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764446470165-user",
+    "role": "user",
+    "content": "generate an esoteric coded music generator glyph that has tons of functionality, and is highly customizable with my input system",
+    "timestamp": 1764446470165,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764446470165-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Esoteric Synth\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764446470166,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764446470165-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764446470167,
+    "type": "info"
+  }
+]

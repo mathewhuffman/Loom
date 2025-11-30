@@ -1,0 +1,598 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zen Handpan</title>
+    <style>
+        :root {
+            --bg-color: #1a202c;
+            --pan-color: #4a5568;
+            --note-color: #2d3748;
+            --highlight: #63b3ed;
+            --glow: rgba(99, 179, 237, 0.5);
+            --text-color: #e2e8f0;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+
+        #app {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* The Handpan Instrument */
+        .handpan-container {
+            position: relative;
+            width: 80vmin;
+            height: 80vmin;
+            max-width: 600px;
+            max-height: 600px;
+            border-radius: 50%;
+            background: radial-gradient(130% 130% at 30% 30%, rgba(255,255,255,0.1) 0%, rgba(0,0,0,0.4) 100%),
+                        var(--pan-color);
+            box-shadow: 
+                0 20px 50px rgba(0,0,0,0.5),
+                inset 0 0 60px rgba(0,0,0,0.5);
+            transition: transform 0.1s;
+            cursor: pointer;
+        }
+
+        /* The Central Ding (Bass Note) */
+        .note {
+            position: absolute;
+            border-radius: 50%;
+            background: radial-gradient(140% 140% at 30% 30%, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0.3) 100%),
+                        var(--note-color);
+            box-shadow: 
+                inset 2px 2px 5px rgba(255,255,255,0.1),
+                inset -2px -2px 5px rgba(0,0,0,0.3),
+                0 5px 10px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            color: rgba(255,255,255,0.3);
+            transition: all 0.1s ease-out;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+
+        .note:active, .note.active {
+            transform: scale(0.95);
+            background-color: var(--highlight);
+            box-shadow: 0 0 20px var(--glow);
+            color: white;
+        }
+
+        /* Central Note */
+        .note.ding {
+            width: 25%;
+            height: 25%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+        .note.ding:active, .note.ding.active {
+            transform: translate(-50%, -50%) scale(0.95);
+        }
+
+        /* Outer Notes */
+        .note.tone {
+            width: 18%;
+            height: 18%;
+            font-size: 1rem;
+        }
+
+        /* Controls UI */
+        .controls {
+            position: absolute;
+            bottom: 2rem;
+            display: flex;
+            gap: 1rem;
+            background: rgba(0,0,0,0.3);
+            padding: 0.8rem 1.5rem;
+            border-radius: 50px;
+            backdrop-filter: blur(10px);
+            z-index: 100;
+        }
+
+        button {
+            background: transparent;
+            border: 2px solid rgba(255,255,255,0.2);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            outline: none;
+        }
+
+        button:hover {
+            border-color: var(--highlight);
+            background: rgba(255,255,255,0.05);
+        }
+
+        button.active {
+            background: var(--highlight);
+            border-color: var(--highlight);
+            color: #1a202c;
+            box-shadow: 0 0 15px var(--glow);
+        }
+
+        button.delete {
+            border-color: #fc8181;
+            color: #fc8181;
+        }
+        button.delete:hover {
+            background: rgba(252, 129, 129, 0.1);
+        }
+
+        /* Loop Indicator */
+        .loop-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 4px;
+            background: var(--highlight);
+            width: 0%;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .loop-bar.playing {
+            opacity: 1;
+        }
+
+        .hint {
+            position: absolute;
+            top: 2rem;
+            font-size: 0.9rem;
+            opacity: 0.6;
+            letter-spacing: 1px;
+            text-align: center;
+        }
+
+        /* Keyboard Hints */
+        .key-hint {
+            position: absolute;
+            bottom: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.7rem;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div class="loop-bar" id="loopBar"></div>
+    
+    <div class="hint">TAP OR USE KEYBOARD (SPACE + 1-8)</div>
+
+    <div class="handpan-container" id="handpan">
+        <!-- Notes will be generated by JS -->
+    </div>
+
+    <div class="controls">
+        <button id="btnRecord">● REC</button>
+        <button id="btnPlay" disabled>▶ PLAY</button>
+        <button id="btnClear" class="delete">CLEAR</button>
+    </div>
+</div>
+
+<script>
+    // --- CONFIGURATION & STATE ---
+    const inputs = window.GLYPH_INPUTS || {};
+    const SCALE_TYPE = inputs.scaleType || 'kurd';
+    const REVERB_AMT = (inputs.reverbAmt || 50) / 100;
+    const THEME_COLOR = inputs.colorTheme || '#4a5568';
+
+    // Update CSS variables based on inputs
+    document.documentElement.style.setProperty('--pan-color', THEME_COLOR);
+
+    // Scale Definitions (Frequency in Hz)
+    const SCALES = {
+        kurd: [
+            { note: 'D3', freq: 146.83, key: 'SPACE', label: 'Ding' },
+            { note: 'A3', freq: 220.00, key: '1', label: 'A' },
+            { note: 'Bb3', freq: 233.08, key: '2', label: 'Bb' },
+            { note: 'C4', freq: 261.63, key: '3', label: 'C' },
+            { note: 'D4', freq: 293.66, key: '4', label: 'D' },
+            { note: 'E4', freq: 329.63, key: '5', label: 'E' },
+            { note: 'F4', freq: 349.23, key: '6', label: 'F' },
+            { note: 'G4', freq: 392.00, key: '7', label: 'G' },
+            { note: 'A4', freq: 440.00, key: '8', label: 'A' }
+        ],
+        celtic: [
+            { note: 'D3', freq: 146.83, key: 'SPACE', label: 'Ding' },
+            { note: 'A3', freq: 220.00, key: '1', label: 'A' },
+            { note: 'C4', freq: 261.63, key: '2', label: 'C' },
+            { note: 'D4', freq: 293.66, key: '3', label: 'D' },
+            { note: 'E4', freq: 329.63, key: '4', label: 'E' },
+            { note: 'F4', freq: 349.23, key: '5', label: 'F' },
+            { note: 'G4', freq: 392.00, key: '6', label: 'G' },
+            { note: 'A4', freq: 440.00, key: '7', label: 'A' },
+            { note: 'C5', freq: 523.25, key: '8', label: 'C' }
+        ],
+        hijaz: [
+            { note: 'C#3', freq: 138.59, key: 'SPACE', label: 'Ding' },
+            { note: 'G#3', freq: 207.65, key: '1', label: 'G#' },
+            { note: 'A3', freq: 220.00, key: '2', label: 'A' },
+            { note: 'C#4', freq: 277.18, key: '3', label: 'C#' },
+            { note: 'D4', freq: 293.66, key: '4', label: 'D' },
+            { note: 'E4', freq: 329.63, key: '5', label: 'E' },
+            { note: 'F#4', freq: 369.99, key: '6', label: 'F#' },
+            { note: 'G#4', freq: 415.30, key: '7', label: 'G#' },
+            { note: 'A4', freq: 440.00, key: '8', label: 'A' }
+        ],
+        akebono: [
+            { note: 'G3', freq: 196.00, key: 'SPACE', label: 'Ding' },
+            { note: 'C4', freq: 261.63, key: '1', label: 'C' },
+            { note: 'D4', freq: 293.66, key: '2', label: 'D' },
+            { note: 'Eb4', freq: 311.13, key: '3', label: 'Eb' },
+            { note: 'G4', freq: 392.00, key: '4', label: 'G' },
+            { note: 'Ab4', freq: 415.30, key: '5', label: 'Ab' },
+            { note: 'C5', freq: 523.25, key: '6', label: 'C' },
+            { note: 'D5', freq: 587.33, key: '7', label: 'D' },
+            { note: 'Eb5', freq: 622.25, key: '8', label: 'Eb' }
+        ]
+    };
+
+    const activeScale = SCALES[SCALE_TYPE] || SCALES.kurd;
+
+    // --- AUDIO ENGINE ---
+    let audioCtx;
+    let masterGain;
+    let reverbNode;
+
+    function initAudio() {
+        if (audioCtx) return;
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+        
+        // Master Chain
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0.8;
+        
+        // Reverb (Convolution)
+        reverbNode = audioCtx.createConvolver();
+        reverbNode.buffer = createReverbImpulse(2.0); // 2 seconds decay
+        
+        // Wet/Dry Mix
+        const dryNode = audioCtx.createGain();
+        const wetNode = audioCtx.createGain();
+        dryNode.gain.value = 1 - (REVERB_AMT * 0.5);
+        wetNode.gain.value = REVERB_AMT;
+
+        masterGain.connect(dryNode);
+        masterGain.connect(wetNode);
+        wetNode.connect(reverbNode);
+        
+        dryNode.connect(audioCtx.destination);
+        reverbNode.connect(audioCtx.destination);
+    }
+
+    function createReverbImpulse(duration) {
+        const rate = audioCtx.sampleRate;
+        const length = rate * duration;
+        const impulse = audioCtx.createBuffer(2, length, rate);
+        const left = impulse.getChannelData(0);
+        const right = impulse.getChannelData(1);
+
+        for (let i = 0; i < length; i++) {
+            const decay = Math.pow(1 - i / length, 2); // Quadratic decay
+            left[i] = (Math.random() * 2 - 1) * decay;
+            right[i] = (Math.random() * 2 - 1) * decay;
+        }
+        return impulse;
+    }
+
+    // Synthesis of a Handpan Note
+    function triggerNote(freq) {
+        if (!audioCtx) initAudio();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        const now = audioCtx.currentTime;
+        const duration = 2.5; // Note ring time
+
+        // 1. Fundamental
+        const osc1 = audioCtx.createOscillator();
+        const gain1 = audioCtx.createGain();
+        osc1.frequency.value = freq;
+        osc1.type = 'sine';
+        
+        // Envelope
+        gain1.gain.setValueAtTime(0, now);
+        gain1.gain.linearRampToValueAtTime(0.4, now + 0.01); // Attack
+        gain1.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+        // 2. Octave (2nd Harmonic)
+        const osc2 = audioCtx.createOscillator();
+        const gain2 = audioCtx.createGain();
+        osc2.frequency.value = freq * 2;
+        osc2.type = 'sine';
+        
+        gain2.gain.setValueAtTime(0, now);
+        gain2.gain.linearRampToValueAtTime(0.15, now + 0.01);
+        gain2.gain.exponentialRampToValueAtTime(0.001, now + (duration * 0.6));
+
+        // 3. Compound Fifth (3rd Harmonic - gives the "steel" sound)
+        const osc3 = audioCtx.createOscillator();
+        const gain3 = audioCtx.createGain();
+        osc3.frequency.value = freq * 3;
+        osc3.type = 'sine';
+
+        gain3.gain.setValueAtTime(0, now);
+        gain3.gain.linearRampToValueAtTime(0.08, now + 0.005);
+        gain3.gain.exponentialRampToValueAtTime(0.001, now + (duration * 0.4));
+
+        // 4. Attack "Thud" / Transient
+        const oscNoise = audioCtx.createOscillator();
+        const gainNoise = audioCtx.createGain();
+        oscNoise.frequency.value = 100; // Low thud
+        oscNoise.type = 'triangle';
+        
+        gainNoise.gain.setValueAtTime(0, now);
+        gainNoise.gain.linearRampToValueAtTime(0.2, now + 0.001);
+        gainNoise.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+
+        // Connect graph
+        osc1.connect(gain1).connect(masterGain);
+        osc2.connect(gain2).connect(masterGain);
+        osc3.connect(gain3).connect(masterGain);
+        oscNoise.connect(gainNoise).connect(masterGain);
+
+        // Start/Stop
+        [osc1, osc2, osc3, oscNoise].forEach(o => {
+            o.start(now);
+            o.stop(now + duration + 0.1);
+        });
+    }
+
+    // --- UI GENERATION ---
+    const container = document.getElementById('handpan');
+    const noteElements = [];
+
+    // Create Ding (Center)
+    const dingData = activeScale[0];
+    const dingEl = document.createElement('div');
+    dingEl.className = 'note ding';
+    dingEl.innerHTML = `${dingData.label}<div class="key-hint">SPC</div>`;
+    dingEl.dataset.index = 0;
+    container.appendChild(dingEl);
+    noteElements.push(dingEl);
+
+    // Create Tone Circle (Rest of the notes)
+    const tones = activeScale.slice(1);
+    const angleStep = (2 * Math.PI) / tones.length;
+    // Rotate slightly so first note is at bottom or top nicely
+    const startAngle = Math.PI / 2; 
+
+    tones.forEach((note, i) => {
+        const el = document.createElement('div');
+        el.className = 'note tone';
+        el.dataset.index = i + 1;
+        
+        // Calculate position
+        const angle = startAngle + (i * angleStep);
+        const radius = 36; // percent from center
+        
+        const left = 50 + radius * Math.cos(angle);
+        const top = 50 + radius * Math.sin(angle);
+        
+        el.style.left = `${left}%`;
+        el.style.top = `${top}%`;
+        // Correct centering
+        el.style.transform = 'translate(-50%, -50%)';
+        
+        el.innerHTML = `${note.label}<div class="key-hint">${note.key}</div>`;
+        container.appendChild(el);
+        noteElements.push(el);
+    });
+
+    // --- INTERACTION ---
+    function playNoteAtIndex(index) {
+        if (index < 0 || index >= activeScale.length) return;
+        
+        const noteData = activeScale[index];
+        const el = noteElements[index];
+        
+        // Audio
+        triggerNote(noteData.freq);
+        
+        // Visual
+        el.classList.remove('active');
+        void el.offsetWidth; // trigger reflow
+        el.classList.add('active');
+        setTimeout(() => el.classList.remove('active'), 150);
+
+        // Recording Logic
+        if (loopState === 'recording') {
+            const timeOffset = Date.now() - recordingStartTime;
+            recordedEvents.push({ index, time: timeOffset });
+        }
+    }
+
+    // Mouse/Touch
+    container.addEventListener('mousedown', (e) => {
+        const note = e.target.closest('.note');
+        if (note) playNoteAtIndex(parseInt(note.dataset.index));
+    });
+    
+    // Keyboard
+    const keyMap = {
+        ' ': 0,
+        'Space': 0,
+        '1': 1, '2': 2, '3': 3, '4': 4,
+        '5': 5, '6': 6, '7': 7, '8': 8
+    };
+
+    window.addEventListener('keydown', (e) => {
+        if (e.repeat) return;
+        if (keyMap.hasOwnProperty(e.key)) {
+            playNoteAtIndex(keyMap[e.key]);
+        }
+    });
+
+    // --- LOOPING ENGINE ---
+    let loopState = 'idle'; // idle, recording, playing
+    let recordingStartTime = 0;
+    let loopDuration = 0;
+    let recordedEvents = []; // { index, time }
+    let loopInterval = null;
+    let playbackCursor = 0; // ms
+    let lastFrameTime = 0;
+
+    const btnRecord = document.getElementById('btnRecord');
+    const btnPlay = document.getElementById('btnPlay');
+    const btnClear = document.getElementById('btnClear');
+    const loopBar = document.getElementById('loopBar');
+
+    btnRecord.addEventListener('click', toggleRecord);
+    btnPlay.addEventListener('click', togglePlay);
+    btnClear.addEventListener('click', clearLoop);
+
+    function toggleRecord() {
+        if (loopState === 'recording') {
+            // Stop Recording -> Start Playing
+            finishRecording();
+        } else {
+            // Start Recording
+            startRecording();
+        }
+    }
+
+    function startRecording() {
+        // Reset
+        clearLoop();
+        if (!audioCtx) initAudio();
+        
+        loopState = 'recording';
+        recordingStartTime = Date.now();
+        btnRecord.classList.add('active');
+        btnRecord.textContent = '■ STOP';
+        btnPlay.disabled = true;
+    }
+
+    function finishRecording() {
+        loopState = 'playing';
+        loopDuration = Date.now() - recordingStartTime;
+        
+        btnRecord.classList.remove('active');
+        btnRecord.textContent = '● REC';
+        
+        btnPlay.disabled = false;
+        btnPlay.classList.add('active');
+        btnPlay.textContent = '|| PAUSE';
+        
+        loopBar.classList.add('playing');
+        
+        // Start Loop Animation
+        playbackCursor = 0;
+        lastFrameTime = performance.now();
+        requestAnimationFrame(loopTick);
+    }
+
+    function togglePlay() {
+        if (recordedEvents.length === 0) return;
+
+        if (loopState === 'playing') {
+            loopState = 'idle';
+            btnPlay.classList.remove('active');
+            btnPlay.textContent = '▶ PLAY';
+            loopBar.classList.remove('playing');
+        } else {
+            loopState = 'playing';
+            btnPlay.classList.add('active');
+            btnPlay.textContent = '|| PAUSE';
+            loopBar.classList.add('playing');
+            lastFrameTime = performance.now();
+            requestAnimationFrame(loopTick);
+        }
+    }
+
+    function clearLoop() {
+        loopState = 'idle';
+        recordedEvents = [];
+        loopDuration = 0;
+        
+        btnRecord.classList.remove('active');
+        btnRecord.textContent = '● REC';
+        
+        btnPlay.classList.remove('active');
+        btnPlay.textContent = '▶ PLAY';
+        btnPlay.disabled = true;
+        
+        loopBar.style.width = '0%';
+        loopBar.classList.remove('playing');
+    }
+
+    function loopTick(now) {
+        if (loopState !== 'playing') return;
+
+        const delta = now - lastFrameTime;
+        lastFrameTime = now;
+        
+        const prevCursor = playbackCursor;
+        playbackCursor = (playbackCursor + delta) % loopDuration;
+        
+        // Update UI Bar
+        const progress = (playbackCursor / loopDuration) * 100;
+        loopBar.style.width = `${progress}%`;
+
+        // Check for events to trigger
+        // Handle wrap-around case
+        if (playbackCursor < prevCursor) {
+            // Loop wrapped
+            // Play events from prevCursor -> End AND 0 -> playbackCursor
+            playEventsInRange(prevCursor, loopDuration);
+            playEventsInRange(0, playbackCursor);
+        } else {
+            // Normal segment
+            playEventsInRange(prevCursor, playbackCursor);
+        }
+
+        requestAnimationFrame(loopTick);
+    }
+
+    function playEventsInRange(start, end) {
+        recordedEvents.forEach(evt => {
+            if (evt.time >= start && evt.time < end) {
+                // Trigger visual only (audio is triggered by playNoteAtIndex inside but we need to decouple if we want pure playback)
+                // Actually, let's just call playNoteAtIndex but we need to ensure we don't double-record if we were recording (but we are in playing state so it's fine)
+                playNoteAtIndex(evt.index);
+            }
+        });
+    }
+
+</script>
+</body>
+</html>

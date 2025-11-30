@@ -1,0 +1,693 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Esoteric Synth</title>
+    <style>
+        :root {
+            --bg: #050505;
+            --panel: #111;
+            --accent: #00ffcc;
+            --accent-dim: rgba(0, 255, 204, 0.2);
+            --text: #aaffee;
+            --font: 'Courier New', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* CRT Scanline Effect */
+        body::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 100;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+
+        #app {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: 20px;
+            gap: 10px;
+            z-index: 1;
+        }
+
+        /* Top Section: Visualizer & Info */
+        #display-area {
+            flex: 1;
+            display: flex;
+            gap: 10px;
+            min-height: 0;
+        }
+
+        #scope {
+            flex: 2;
+            background: var(--panel);
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            position: relative;
+            box-shadow: 0 0 10px var(--accent-dim);
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        #readout {
+            flex: 1;
+            background: var(--panel);
+            border: 1px solid var(--accent);
+            padding: 10px;
+            font-size: 12px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            overflow: hidden;
+            white-space: pre;
+            opacity: 0.8;
+        }
+
+        /* Middle Section: Controls */
+        #controls {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            min-height: 120px;
+        }
+
+        .module {
+            border: 1px solid var(--accent-dim);
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            background: rgba(255,255,255,0.02);
+        }
+
+        .module-title {
+            font-size: 10px;
+            letter-spacing: 2px;
+            border-bottom: 1px solid var(--accent-dim);
+            padding-bottom: 4px;
+            margin-bottom: 4px;
+            color: var(--accent);
+            text-transform: uppercase;
+        }
+
+        .knob-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex: 1;
+        }
+
+        .control-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10px;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 60%;
+            background: transparent;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 12px;
+            width: 6px;
+            background: var(--accent);
+            cursor: pointer;
+            margin-top: -5px;
+            box-shadow: 0 0 5px var(--accent);
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 2px;
+            background: var(--accent-dim);
+        }
+
+        /* Bottom Section: Keyboard */
+        #keyboard {
+            flex: 0 0 120px;
+            display: flex;
+            gap: 4px;
+            position: relative;
+            perspective: 500px;
+        }
+
+        .key {
+            flex: 1;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--accent-dim);
+            border-bottom: 4px solid var(--accent-dim);
+            border-radius: 0 0 4px 4px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.1s;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            padding-bottom: 10px;
+            font-size: 10px;
+            color: rgba(255,255,255,0.3);
+            z-index: 1;
+        }
+
+        .key.black {
+            background: #000;
+            border-color: var(--accent-dim);
+            height: 60%;
+            width: 6%;
+            position: absolute;
+            z-index: 2;
+            border-radius: 0 0 2px 2px;
+            margin-left: -3%; /* Center over gap */
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+        }
+
+        /* Specific positioning for black keys based on white key index */
+        /* W W W W W W W W (8 white keys C to C) */
+        /*  B B   B B B    (5 black keys) */
+        
+        .key[data-note="C#"] { left: 14.28%; }
+        .key[data-note="D#"] { left: 28.57%; }
+        .key[data-note="F#"] { left: 57.14%; }
+        .key[data-note="G#"] { left: 71.42%; }
+        .key[data-note="A#"] { left: 85.71%; }
+
+        .key.active {
+            background: var(--accent);
+            color: #000;
+            box-shadow: 0 0 15px var(--accent);
+            border-color: var(--accent);
+            transform: translateY(2px);
+        }
+        
+        .key.black.active {
+            background: var(--accent);
+            box-shadow: 0 0 10px var(--accent);
+        }
+
+        /* Overlay for "Click to Start" */
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 200;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+        }
+        
+        #overlay h1 {
+            font-weight: normal;
+            border: 1px solid var(--accent);
+            padding: 20px;
+            box-shadow: 0 0 20px var(--accent-dim);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.5; text-shadow: 0 0 5px var(--accent); }
+            50% { opacity: 1; text-shadow: 0 0 20px var(--accent); }
+            100% { opacity: 0.5; text-shadow: 0 0 5px var(--accent); }
+        }
+
+        @media (max-width: 600px) {
+            #controls {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div id="overlay">
+    <h1>INITIALIZE SYSTEM</h1>
+</div>
+
+<div id="app">
+    <!-- Top: Scope & Data -->
+    <div id="display-area">
+        <div id="scope">
+            <canvas id="visualizer"></canvas>
+        </div>
+        <div id="readout">
+            <div>SYS.STATUS: ONLINE</div>
+            <div id="debug-freq">FREQ: ---</div>
+            <div id="debug-wave">WAVE: SAW</div>
+            <div id="debug-filter">FLTR: 2000Hz</div>
+            <div style="margin-top:auto; color: var(--accent)">> READY_</div>
+        </div>
+    </div>
+
+    <!-- Middle: Controls -->
+    <div id="controls">
+        <!-- ENVELOPE -->
+        <div class="module">
+            <div class="module-title">ENVELOPE_GEN</div>
+            <div class="knob-row">
+                <div class="control-group">
+                    <span>ATK</span>
+                    <input type="range" id="atk" min="0.01" max="2" step="0.01" value="0.1">
+                </div>
+                <div class="control-group">
+                    <span>DEC</span>
+                    <input type="range" id="dec" min="0.01" max="2" step="0.01" value="0.3">
+                </div>
+                <div class="control-group">
+                    <span>SUS</span>
+                    <input type="range" id="sus" min="0" max="1" step="0.01" value="0.5">
+                </div>
+                <div class="control-group">
+                    <span>REL</span>
+                    <input type="range" id="rel" min="0.1" max="3" step="0.01" value="0.8">
+                </div>
+            </div>
+        </div>
+
+        <!-- FILTER -->
+        <div class="module">
+            <div class="module-title">VCF_MATRIX</div>
+            <div class="knob-row">
+                <div class="control-group">
+                    <span>CUTOFF</span>
+                    <input type="range" id="cutoff" min="50" max="5000" step="10" value="2000">
+                </div>
+                <div class="control-group">
+                    <span>RES</span>
+                    <input type="range" id="res" min="0" max="20" step="0.1" value="5">
+                </div>
+                <div class="control-group">
+                    <span>MOD</span>
+                    <input type="range" id="filterMod" min="0" max="1000" step="10" value="200">
+                </div>
+            </div>
+        </div>
+
+        <!-- EFFECTS -->
+        <div class="module">
+            <div class="module-title">FX_PROCESSOR</div>
+            <div class="knob-row">
+                <div class="control-group">
+                    <span>DLY_TIME</span>
+                    <input type="range" id="delayTime" min="0" max="1" step="0.01" value="0.3">
+                </div>
+                <div class="control-group">
+                    <span>FEEDBACK</span>
+                    <input type="range" id="feedback" min="0" max="0.9" step="0.01" value="0.4">
+                </div>
+                <div class="control-group">
+                    <span>DISTORT</span>
+                    <input type="range" id="drive" min="0" max="100" step="1" value="0">
+                </div>
+            </div>
+        </div>
+
+        <!-- LFO / MASTER -->
+        <div class="module">
+            <div class="module-title">GLOBAL_OPS</div>
+            <div class="knob-row">
+                <div class="control-group">
+                    <span>LFO_RATE</span>
+                    <input type="range" id="lfoRate" min="0.1" max="20" step="0.1" value="2">
+                </div>
+                <div class="control-group">
+                    <span>LFO_AMT</span>
+                    <input type="range" id="lfoAmt" min="0" max="500" step="10" value="50">
+                </div>
+                <div class="control-group">
+                    <span>VOL</span>
+                    <input type="range" id="masterVol" min="0" max="1" step="0.01" value="0.7">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom: Keyboard -->
+    <div id="keyboard">
+        <!-- White Keys -->
+        <div class="key" data-note="C" data-key="a">A</div>
+        <div class="key" data-note="D" data-key="s">S</div>
+        <div class="key" data-note="E" data-key="d">D</div>
+        <div class="key" data-note="F" data-key="f">F</div>
+        <div class="key" data-note="G" data-key="g">G</div>
+        <div class="key" data-note="A" data-key="h">H</div>
+        <div class="key" data-note="B" data-key="j">J</div>
+        <div class="key" data-note="C2" data-key="k">K</div>
+
+        <!-- Black Keys (Absolute positioned) -->
+        <div class="key black" data-note="C#" data-key="w">W</div>
+        <div class="key black" data-note="D#" data-key="e">E</div>
+        <div class="key black" data-note="F#" data-key="t">T</div>
+        <div class="key black" data-note="G#" data-key="y">Y</div>
+        <div class="key black" data-note="A#" data-key="u">U</div>
+    </div>
+</div>
+
+<script>
+    // --- 1. CONFIGURATION & STATE ---
+    const inputs = window.GLYPH_INPUTS || {};
+    const BASE_OCTAVE = parseInt(inputs.baseOctave) || 3;
+    const THEME_COLOR = inputs.themeColor || '#00ffcc';
+    const WAVEFORM = inputs.waveform || 'sawtooth';
+
+    // Apply Theme Color
+    document.documentElement.style.setProperty('--accent', THEME_COLOR);
+    const rgb = hexToRgb(THEME_COLOR);
+    document.documentElement.style.setProperty('--accent-dim', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.2)`);
+
+    function hexToRgb(hex) {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+        } : { r: 0, g: 255, b: 204 };
+    }
+
+    // --- 2. AUDIO ENGINE ---
+    let audioCtx;
+    let masterGain;
+    let filter;
+    let delay;
+    let feedback;
+    let compressor;
+    let analyser;
+    let lfo;
+    let lfoGain;
+
+    let activeVoices = {};
+
+    const NOTE_FREQS = {
+        'C': 261.63, 'C#': 277.18, 'D': 293.66, 'D#': 311.13, 'E': 329.63,
+        'F': 349.23, 'F#': 369.99, 'G': 392.00, 'G#': 415.30, 'A': 440.00,
+        'A#': 466.16, 'B': 493.88, 'C2': 523.25
+    };
+
+    // Calculate actual freq based on octave
+    function getFreq(note) {
+        const base = NOTE_FREQS[note];
+        // NOTE_FREQS are C4 (approx). Adjust based on input octave relative to 4.
+        const multiplier = Math.pow(2, BASE_OCTAVE - 4);
+        return base * multiplier;
+    }
+
+    // Initialize Audio
+    async function initAudio() {
+        if (audioCtx) return;
+        
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+
+        // Master Chain
+        compressor = audioCtx.createDynamicsCompressor();
+        masterGain = audioCtx.createGain();
+        analyser = audioCtx.createAnalyser();
+        
+        // Effects Chain
+        delay = audioCtx.createDelay(2.0);
+        feedback = audioCtx.createGain();
+        filter = audioCtx.createBiquadFilter(); // Master Filter
+        
+        // LFO
+        lfo = audioCtx.createOscillator();
+        lfoGain = audioCtx.createGain();
+        
+        // Wiring
+        // Voices connect to Filter
+        // Filter -> Compressor -> Analyser -> MasterGain -> Destination
+        //        -> Delay -> Feedback -> Delay
+        //        -> Delay -> Compressor (Mix)
+        
+        filter.type = 'lowpass';
+        filter.frequency.value = 2000;
+        filter.Q.value = 5;
+
+        delay.delayTime.value = 0.3;
+        feedback.gain.value = 0.4;
+
+        lfo.type = 'sine';
+        lfo.frequency.value = 2;
+        lfo.connect(lfoGain);
+        lfoGain.connect(filter.frequency); // Modulate filter cutoff
+        lfo.start();
+
+        // Connect graph
+        filter.connect(compressor);
+        filter.connect(delay);
+        
+        delay.connect(feedback);
+        feedback.connect(delay);
+        delay.connect(compressor); // Wet signal
+
+        compressor.connect(analyser);
+        analyser.connect(masterGain);
+        masterGain.connect(audioCtx.destination);
+
+        masterGain.gain.value = 0.5;
+        
+        // Start Visualizer
+        drawVisualizer();
+        
+        // Remove overlay
+        document.getElementById('overlay').style.display = 'none';
+        updateReadout("SYSTEM INITIALIZED");
+    }
+
+    // Synth Voice Class
+    class Voice {
+        constructor(freq) {
+            this.osc = audioCtx.createOscillator();
+            this.vca = audioCtx.createGain();
+            
+            this.osc.type = WAVEFORM;
+            this.osc.frequency.value = freq;
+            
+            // Envelope params
+            const atk = parseFloat(document.getElementById('atk').value);
+            const dec = parseFloat(document.getElementById('dec').value);
+            const sus = parseFloat(document.getElementById('sus').value);
+            const rel = parseFloat(document.getElementById('rel').value);
+
+            const now = audioCtx.currentTime;
+
+            // VCA Envelope
+            this.vca.gain.setValueAtTime(0, now);
+            this.vca.gain.linearRampToValueAtTime(1, now + atk);
+            this.vca.gain.exponentialRampToValueAtTime(sus || 0.01, now + atk + dec);
+
+            this.osc.connect(this.vca);
+            this.vca.connect(filter); // Connect to master filter
+            
+            this.osc.start(now);
+        }
+
+        stop() {
+            const rel = parseFloat(document.getElementById('rel').value);
+            const now = audioCtx.currentTime;
+            
+            // Release phase
+            this.vca.gain.cancelScheduledValues(now);
+            this.vca.gain.setValueAtTime(this.vca.gain.value, now);
+            this.vca.gain.exponentialRampToValueAtTime(0.001, now + rel);
+            
+            this.osc.stop(now + rel + 0.1);
+            
+            setTimeout(() => {
+                this.osc.disconnect();
+                this.vca.disconnect();
+            }, (rel + 0.2) * 1000);
+        }
+    }
+
+    // --- 3. INPUT HANDLING ---
+
+    function playNote(note) {
+        if (!audioCtx) initAudio();
+        if (activeVoices[note]) return; // Already playing
+
+        const freq = getFreq(note);
+        const voice = new Voice(freq);
+        activeVoices[note] = voice;
+
+        // Visual feedback
+        const keyEl = document.querySelector(`.key[data-note="${note}"]`);
+        if (keyEl) keyEl.classList.add('active');
+        
+        updateReadout(`OSC_INIT: ${note}\nFREQ: ${freq.toFixed(2)}Hz`);
+    }
+
+    function stopNote(note) {
+        if (activeVoices[note]) {
+            activeVoices[note].stop();
+            delete activeVoices[note];
+            
+            const keyEl = document.querySelector(`.key[data-note="${note}"]`);
+            if (keyEl) keyEl.classList.remove('active');
+        }
+    }
+
+    // Keyboard Map
+    const KEY_MAP = {
+        'a': 'C', 'w': 'C#', 's': 'D', 'e': 'D#', 'd': 'E',
+        'f': 'F', 't': 'F#', 'g': 'G', 'y': 'G#', 'h': 'A',
+        'u': 'A#', 'j': 'B', 'k': 'C2'
+    };
+
+    window.addEventListener('keydown', (e) => {
+        if (e.repeat) return;
+        const note = KEY_MAP[e.key.toLowerCase()];
+        if (note) playNote(note);
+    });
+
+    window.addEventListener('keyup', (e) => {
+        const note = KEY_MAP[e.key.toLowerCase()];
+        if (note) stopNote(note);
+    });
+
+    // Mouse/Touch Interaction
+    document.querySelectorAll('.key').forEach(key => {
+        const note = key.dataset.note;
+        
+        const start = (e) => {
+            e.preventDefault();
+            playNote(note);
+        };
+        const end = (e) => {
+            e.preventDefault();
+            stopNote(note);
+        };
+
+        key.addEventListener('mousedown', start);
+        key.addEventListener('mouseup', end);
+        key.addEventListener('mouseleave', end);
+        
+        key.addEventListener('touchstart', start);
+        key.addEventListener('touchend', end);
+    });
+
+    document.getElementById('overlay').addEventListener('click', initAudio);
+
+    // --- 4. PARAMETER UPDATES ---
+
+    function updateParams() {
+        if (!audioCtx) return;
+
+        // Filter
+        const cutoff = document.getElementById('cutoff').value;
+        const res = document.getElementById('res').value;
+        filter.frequency.setTargetAtTime(cutoff, audioCtx.currentTime, 0.1);
+        filter.Q.setTargetAtTime(res, audioCtx.currentTime, 0.1);
+        document.getElementById('debug-filter').innerText = `FLTR: ${cutoff}Hz Q:${res}`;
+
+        // Delay
+        delay.delayTime.setTargetAtTime(document.getElementById('delayTime').value, audioCtx.currentTime, 0.1);
+        feedback.gain.setTargetAtTime(document.getElementById('feedback').value, audioCtx.currentTime, 0.1);
+
+        // LFO
+        lfo.frequency.setTargetAtTime(document.getElementById('lfoRate').value, audioCtx.currentTime, 0.1);
+        lfoGain.gain.setTargetAtTime(document.getElementById('lfoAmt').value, audioCtx.currentTime, 0.1);
+
+        // Master Vol
+        masterGain.gain.setTargetAtTime(document.getElementById('masterVol').value, audioCtx.currentTime, 0.1);
+    }
+
+    document.querySelectorAll('input[type=range]').forEach(input => {
+        input.addEventListener('input', updateParams);
+    });
+
+    // --- 5. VISUALIZER ---
+    const canvas = document.getElementById('visualizer');
+    const ctx = canvas.getContext('2d');
+    
+    function resizeCanvas() {
+        canvas.width = canvas.parentElement.clientWidth;
+        canvas.height = canvas.parentElement.clientHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function drawVisualizer() {
+        requestAnimationFrame(drawVisualizer);
+        if (!analyser) return;
+
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteTimeDomainData(dataArray);
+
+        ctx.fillStyle = 'rgba(17, 17, 17, 0.2)'; // Fade effect
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = THEME_COLOR;
+        ctx.beginPath();
+
+        const sliceWidth = canvas.width * 1.0 / bufferLength;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i] / 128.0;
+            const y = v * canvas.height / 2;
+
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+
+            x += sliceWidth;
+        }
+
+        ctx.lineTo(canvas.width, canvas.height / 2);
+        ctx.stroke();
+    }
+
+    function updateReadout(msg) {
+        const r = document.getElementById('readout');
+        // Keep last few lines
+        const lines = r.innerText.split('\n');
+        if (lines.length > 6) lines.shift();
+        lines.push(`> ${msg}`);
+        // Reset simple structure
+        r.innerHTML = `
+            <div>SYS.STATUS: ONLINE</div>
+            <div>WAVE: ${WAVEFORM.toUpperCase()}</div>
+            <div style="margin-top:10px; color:var(--text)">${msg}</div>
+        `;
+    }
+
+</script>
+</body>
+</html>

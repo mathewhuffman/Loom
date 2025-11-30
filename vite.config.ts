@@ -8,6 +8,8 @@ const normalizedDynamicPath = dynamicGlyphDir.replace(/\\/g, '/');
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  // IMPORTANT: Use relative paths for Electron file:// protocol
+  base: './',
   server: {
     port: 5173,
     strictPort: true,

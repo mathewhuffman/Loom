@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764399581334-user",
+    "role": "user",
+    "content": "recreate this:\nvec2 grad(vec2 p)\n{\n    float l = TEX0(p + vec2(-1,0)).x;\n    float r = TEX0(p + vec2(1,0)).x;\n    float b = TEX0(p + vec2(0,-1)).x;\n    float t = TEX0(p + vec2(0,1)).x;\n    \n    float dx = 0.5*(r - l);\n    float dy = 0.5*(t - b);\n    \n    return vec2(dx, dy);    \n}\n\nfloat butterworth(float x, float p)\n{\n    x = pow(max(x,0.),p);\n    return x/(1. + x);\n}\n\nvoid mainImage( out vec4 fragColor, in vec2 fragCoord )\n{\n    vec4 tex = TEX0(fragCoord);\n    \n    float f = tex.x;\n    \n   \n    vec2 p = fragCoord;\n    \n    float fl = TEX0(p + vec2(-1,0)).x;\n    float fr = TEX0(p + vec2(1,0)).x;\n    float fb = TEX0(p + vec2(0,-1)).x;\n    float ft = TEX0(p + vec2(0,1)).x;\n    \n    float dfdx = 0.5*(fr - fl);\n    float dfdy = 0.5*(ft - fb);\n    \n    float lap = fl + fr + fb + ft - 4.*f;\n\n    vec2 df = vec2(dfdx, dfdy);\n    \n    vec3 n = normalize(vec3(-df.x,-df.y,1.));\n    vec3 L = normalize(vec3(1,1,1));\n      \n    float val = tanh(tex.x);\n    \n    float f_light = clamp(dot(n,L),0.,1.);\n    float f_vel = 0.1 + butterworth(0.008*length(tex.zw),9.);\n    float f_grad = length(df);\n    \n    f_vel*= 0.5;\n    \n    vec3 col = mix(f_light*(0.4*vec3(0.7,0.75,1)*val + vec3(0.7,0.7,0.3)*f_vel), vec3(0.4,0.2,1),f_grad);\n    \n    // uncomment to view noise\n    //col = vec3(TEX1(fragCoord).x);\n  \n    //col = vec3(length(df));\n    //col = 0.01*vec3(TEX0(fragCoord).zw,0);\n    \n    // uncomment to view normals\n    //col = vec3(n.xy,0);\n\n    // Output to screen\n    fragColor = vec4(col,1.0);\n}",
+    "timestamp": 1764399581334,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764399581334-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Hydro Shader\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764399581335,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764399581334-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764399581336,
+    "type": "info"
+  }
+]

@@ -10,24 +10,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import LoomPanel from './components/LoomPanel';
 import GlyphIframe from './components/GlyphIframe';
+import UpdaterView from './components/views/UpdaterView';
+import type { CodeEditorState, LoomPanelState, OverlayUiState, PersistedWidgetState, WidgetLayer } from './types/ui-state';
+import { loadUiState, queueUiStatePatch } from './utils/uiState';
 
-
-// Widget layer - foreground (above icons) or background (behind icons)
-type WidgetLayer = 'foreground' | 'background';
 
 // Widget glyph for desktop placement
-interface WidgetGlyph {
-  id: string;
-  glyphId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  prompt: string;
-  code: string;
-  createdAt: number;
-  layer: WidgetLayer; // New: which layer the widget is on
-}
+type WidgetGlyph = PersistedWidgetState;
 
 interface SummonState {
   phase: 'idle' | 'streaming' | 'compiling' | 'injecting' | 'complete' | 'error' | 'refining';
@@ -65,25 +54,52 @@ interface WidgetContainerProps {
   onUpdate: (id: string, updates: Partial<WidgetGlyph>) => void;
   onRemove: (id: string) => void;
   onLayerToggle: (id: string) => void; // Toggle between foreground/background
+  onFocus: (id: string) => void;
 }
 
-function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetContainerProps) {
+function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle, onFocus }: WidgetContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [editMode, setEditMode] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [resizeDir, setResizeDir] = useState<ResizeDirection>(null);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, w: 0, h: 0, wx: 0, wy: 0 });
+  const [showEditButton, setShowEditButton] = useState(false);
+  const [isHovering, setIsHovering] = useState(false);
   
   // Check if widget is in foreground (interactive, above icons)
   const isInForeground = widget.layer === 'foreground';
 
+  // Show edit button immediately on hover (no delay)
+  useEffect(() => {
+    if (isHovering && !editMode) {
+      setShowEditButton(true);
+    } else if (!isHovering && !editMode) {
+      setShowEditButton(false);
+    }
+  }, [isHovering, editMode]);
+
+  // Handle F4 key to toggle edit mode when hovering
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F4' && isHovering) {
+        e.preventDefault();
+        setEditMode(prev => !prev);
+        setShowEditButton(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isHovering]);
+
   // Notify overlay that mouse is over interactive widget (disables click-through)
   const handleWidgetMouseEnter = useCallback(() => {
+    setIsHovering(true);
     window.loom?.mouseEnterUI();
   }, []);
 
   const handleWidgetMouseLeave = useCallback(() => {
+    setIsHovering(false);
     window.loom?.mouseLeaveUI();
   }, []);
 
@@ -182,7 +198,7 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
   return (
     <div
       ref={containerRef}
-      onMouseDown={handleDragStart}
+      onMouseDownCapture={() => onFocus(widget.id)}
       onMouseEnter={handleWidgetMouseEnter}
       onMouseLeave={handleWidgetMouseLeave}
       className="ui-interactive"
@@ -192,11 +208,12 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
         top: widget.y,
         width: widget.width,
         height: widget.height,
+        // Transparent background - let glyph content show through
         background: 'transparent',
         borderRadius: '12px',
         overflow: 'visible',
         cursor: editMode ? (isDragging ? 'grabbing' : 'grab') : 'default',
-        zIndex: 1000,
+        zIndex: widget.zIndex ?? 1000,
       }}
     >
       {/* Main content container */}
@@ -207,10 +224,8 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
             height: '100%',
             borderRadius: '12px',
             overflow: 'hidden',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-            boxShadow: '0 4px 24px rgba(0, 0, 0, 0.5)',
-            background: '#050510',
-            pointerEvents: 'auto',
+            position: 'relative',
+            zIndex: 1,
           }}
         >
           <GlyphIframe
@@ -218,7 +233,9 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
             glyphId={widget.glyphId}
             glyphType="widget"
             title={widget.prompt}
+            allowPointerEvents={!editMode}
             allowExternalUrls={widget.code.includes('iframe') || widget.code.includes('src=')}
+            inputs={widget.inputs}
           />
         </div>
       ) : (
@@ -229,9 +246,29 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
           height: '100%',
           borderRadius: '12px',
           border: editMode ? '2px dashed rgba(180, 100, 255, 0.4)' : 'none',
-          background: 'transparent', // ← No pink, no ghost, just transparent
+          background: 'transparent',
           pointerEvents: 'auto',
+          position: 'relative',
+          zIndex: 1,
         }} />
+      )}
+
+      {editMode && (
+        <div
+          onMouseDown={handleDragStart}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            borderRadius: '12px',
+            cursor: isDragging ? 'grabbing' : 'grab',
+            pointerEvents: 'auto',
+            zIndex: 10,
+            background: 'transparent',
+          }}
+        />
       )}
 
       {/* Edit mode controls - layer toggle and close button */}
@@ -247,17 +284,19 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
             onMouseDown={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
-              top: 8,
+              bottom: 8,
               right: 44, // Positioned left of close button
               width: 28,
               height: 28,
-              background: isInForeground ? 'rgba(0, 200, 255, 0.2)' : 'rgba(100, 50, 150, 0.3)',
+              background: isInForeground 
+                ? 'linear-gradient(135deg, rgba(0, 200, 255, 0.15), rgba(0, 150, 200, 0.25))' 
+                : 'linear-gradient(135deg, rgba(180, 100, 255, 0.15), rgba(150, 80, 200, 0.25))',
               border: isInForeground 
-                ? '1px solid rgba(0, 200, 255, 0.6)' 
-                : '1px solid rgba(150, 100, 200, 0.5)',
+                ? '1px solid rgba(0, 200, 255, 0.5)' 
+                : '1px solid rgba(180, 100, 255, 0.5)',
               borderRadius: '6px',
               color: isInForeground ? '#00d4ff' : '#c088ff',
-              fontSize: '12px',
+              fontSize: '13px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -265,15 +304,25 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
               zIndex: 100,
               pointerEvents: 'auto',
               boxShadow: isInForeground 
-                ? '0 0 12px rgba(0, 200, 255, 0.3)' 
-                : '0 0 12px rgba(150, 100, 200, 0.3)',
-              transition: 'all 0.2s',
+                ? '0 0 14px rgba(0, 200, 255, 0.35), inset 0 1px 0 rgba(255,255,255,0.1)' 
+                : '0 0 14px rgba(180, 100, 255, 0.35), inset 0 1px 0 rgba(255,255,255,0.1)',
+              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+              backdropFilter: 'blur(8px)',
             }}
             title={isInForeground 
-              ? 'Send to background (behind desktop icons)' 
-              : 'Bring to foreground (above desktop icons)'}
+              ? '◈ Send to background layer (behind desktop)' 
+              : '◇ Bring to overlay layer (interactive)'}
           >
-            {isInForeground ? '⬇' : '⬆'}
+            {/* Layer indicator icons - filled for foreground, hollow for background */}
+            <span style={{ 
+              fontFamily: 'system-ui', 
+              fontWeight: 600,
+              textShadow: isInForeground 
+                ? '0 0 8px rgba(0, 200, 255, 0.6)' 
+                : '0 0 8px rgba(180, 100, 255, 0.6)',
+            }}>
+              {isInForeground ? '◈' : '◇'}
+            </span>
           </button>
           
           {/* Close button */}
@@ -286,23 +335,24 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
             onMouseDown={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
-              top: 8,
+              bottom: 8,
               right: 8,
               width: 28,
               height: 28,
-              background: 'rgba(20, 0, 30, 0.9)',
-              border: '1px solid rgba(255, 0, 100, 0.5)',
+              background: 'linear-gradient(135deg, rgba(255, 50, 100, 0.15), rgba(200, 30, 80, 0.25))',
+              border: '1px solid rgba(255, 50, 100, 0.5)',
               borderRadius: '6px',
-              color: '#ff0066',
-              fontSize: '14px',
+              color: '#ff3366',
+              fontSize: '13px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               zIndex: 100,
               pointerEvents: 'auto',
-              boxShadow: '0 0 12px rgba(255, 0, 100, 0.3)',
-              transition: 'all 0.2s',
+              boxShadow: '0 0 14px rgba(255, 50, 100, 0.35), inset 0 1px 0 rgba(255,255,255,0.1)',
+              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+              backdropFilter: 'blur(8px)',
             }}
             title="Close widget"
           >
@@ -311,41 +361,45 @@ function WidgetContainer({ widget, onUpdate, onRemove, onLayerToggle }: WidgetCo
         </>
       )}
 
-      {/* Magic wand toggle button - always visible in top left */}
-      <button
-        className="widget-controls"
-        onClick={(e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          setEditMode(!editMode);
-        }}
-        onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          top: 8,
-          left: 8,
-          width: 28,
-          height: 28,
-          background: editMode ? 'rgba(255, 0, 100, 0.3)' : 'rgba(20, 0, 30, 0.8)',
-          border: editMode ? '1px solid rgba(255, 0, 100, 0.7)' : '1px solid rgba(255, 255, 255, 0.15)',
-          borderRadius: '6px',
-          color: editMode ? '#ff0066' : 'rgba(255, 255, 255, 0.5)',
-          fontSize: '14px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          transition: 'all 0.2s',
-          zIndex: 100,
-          pointerEvents: 'auto',
-          boxShadow: editMode 
-            ? '0 0 12px rgba(255, 0, 100, 0.4)' 
-            : '0 2px 6px rgba(0, 0, 0, 0.4)',
-        }}
-        title={editMode ? 'Exit edit mode' : 'Edit mode - drag & resize'}
-      >
-        ✨
-      </button>
+      {/* Magic wand toggle button - bottom left, shows after 3s hover or F1 */}
+      {(showEditButton || editMode) && (
+        <button
+          className="widget-controls"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            setEditMode(!editMode);
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            bottom: 8,
+            left: 8,
+            width: 28,
+            height: 28,
+            background: editMode ? 'rgba(255, 0, 100, 0.3)' : 'rgba(20, 0, 30, 0.85)',
+            border: editMode ? '1px solid rgba(255, 0, 100, 0.7)' : '1px solid rgba(180, 100, 255, 0.4)',
+            borderRadius: '6px',
+            color: editMode ? '#ff0066' : '#c088ff',
+            fontSize: '14px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            zIndex: 100,
+            pointerEvents: 'auto',
+            boxShadow: editMode 
+              ? '0 0 16px rgba(255, 0, 100, 0.5)' 
+              : '0 4px 12px rgba(0, 0, 0, 0.5), 0 0 8px rgba(180, 100, 255, 0.2)',
+            opacity: editMode ? 1 : 0.9,
+            transform: editMode ? 'scale(1.05)' : 'scale(1)',
+          }}
+          title={editMode ? 'Exit edit mode (F4)' : 'Edit mode - drag & resize (F4)'}
+        >
+          {editMode ? '✕' : '✎'}
+        </button>
+      )}
 
       {/* Resize edges - only active in edit mode */}
       {/* Top edge */}
@@ -407,6 +461,9 @@ export default function OverlayUI() {
   const [selectedModel, setSelectedModel] = useState<string>('grok');
   const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showKeysMenu, setShowKeysMenu] = useState(false); // Key selector visibility
+  const [availableKeys, setAvailableKeys] = useState<Array<{ id: string; name: string; category?: string }>>([]);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]); // Selected key IDs to include in prompt
   const [lastError, setLastError] = useState<string | null>(null);
   const [canCancel, setCanCancel] = useState(false);
   const [showLoomPanel, setShowLoomPanel] = useState(false); // Loom Panel visibility
@@ -418,10 +475,11 @@ export default function OverlayUI() {
   const widgetCountRef = useRef(0);
   const lastWidgetInjectRef = useRef({ glyphId: '', time: 0 }); // Deduplication tracker
   const widgetListenerRegistered = useRef(false); // Prevent duplicate listener registration
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const promptRef = useRef(''); // Ref to capture prompt for async callbacks
   const originalPromptRef = useRef(''); // PRESERVED prompt for entire summon session (survives errors/refinements)
   const modelMenuRef = useRef<HTMLDivElement>(null);
+  const keysMenuRef = useRef<HTMLDivElement>(null);
   const currentCodeRef = useRef(''); // Track current code for refinement
   const attemptRef = useRef(0); // Track current refinement attempt
   const selectedModelRef = useRef(selectedModel);
@@ -430,9 +488,167 @@ export default function OverlayUI() {
   const pendingRefinementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const awaitingCompileRef = useRef(false); // Track if we're waiting for background to compile
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Success timeout handle
-  const widgetSyncDebounceRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map()); // Debounce widget layer sync
+  const widgetSyncFrameRef = useRef<Map<string, number>>(new Map()); // Throttle widget sync to animation frames
+  const widgetSyncLatestRef = useRef<Map<string, WidgetGlyph>>(new Map()); // Track latest widget state per id for syncing
+  const zStackCounterRef = useRef(2000);
+  const [loomPanelZ, setLoomPanelZ] = useState(() => zStackCounterRef.current++);
   const summonBarRef = useRef<HTMLDivElement>(null); // Reference to summon bar for animation
   const editorOpenedForStreamRef = useRef(false); // Track if we've opened editor for current stream session
+  const [storedPanelState, setStoredPanelState] = useState<LoomPanelState | undefined>(undefined);
+  const [storedEditorState, setStoredEditorState] = useState<CodeEditorState | undefined>(undefined);
+  const hasHydratedStateRef = useRef(false);
+  
+  // Auto-updater state
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
+
+  const persistOverlayState = useCallback((patch: Partial<OverlayUiState>) => {
+    if (!hasHydratedStateRef.current) {
+      return;
+    }
+    queueUiStatePatch({ overlay: patch });
+  }, []);
+
+  const allocateZIndex = useCallback(() => {
+    const next = zStackCounterRef.current++;
+    persistOverlayState({ zIndexCounter: zStackCounterRef.current });
+    return next;
+  }, [persistOverlayState]);
+
+  const handlePanelStateChange = useCallback(
+    (state: LoomPanelState) => {
+      setStoredPanelState(state);
+      persistOverlayState({ loomPanel: state });
+    },
+    [persistOverlayState]
+  );
+
+  const handleEditorStateChange = useCallback(
+    (state: CodeEditorState) => {
+      setStoredEditorState(state);
+      persistOverlayState({ codeEditor: state });
+    },
+    [persistOverlayState]
+  );
+  const bringLoomPanelToFront = useCallback(() => {
+    setLoomPanelZ(allocateZIndex());
+  }, [allocateZIndex]);
+
+  const bringWidgetToFront = useCallback(
+    (id: string) => {
+      const nextZ = allocateZIndex();
+      setWidgets(prev => prev.map(w => (w.id === id ? { ...w, zIndex: nextZ } : w)));
+    },
+    [allocateZIndex]
+  );
+
+  useEffect(() => {
+    setWidgets(prev => prev.map(w => (w.zIndex !== undefined ? w : { ...w, zIndex: allocateZIndex() })));
+  }, [allocateZIndex]);
+
+  useEffect(() => {
+    if (showLoomPanel) {
+      bringLoomPanelToFront();
+    }
+  }, [showLoomPanel, bringLoomPanelToFront]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const storedState = await loadUiState();
+      if (!mounted) return;
+      const overlayState = storedState?.overlay;
+      if (overlayState) {
+        if (typeof overlayState.prompt === 'string') {
+          setPrompt(overlayState.prompt);
+          promptRef.current = overlayState.prompt;
+        }
+        if (overlayState.selectedModel) {
+          setSelectedModel(overlayState.selectedModel);
+          selectedModelRef.current = overlayState.selectedModel;
+        }
+        if (Array.isArray(overlayState.recentGlyphs)) {
+          setRecentGlyphs(overlayState.recentGlyphs);
+        }
+        if (typeof overlayState.showLoomPanel === 'boolean') {
+          setShowLoomPanel(overlayState.showLoomPanel);
+        }
+        if (Array.isArray(overlayState.widgets) && overlayState.widgets.length > 0) {
+          widgetCountRef.current = overlayState.widgets.length;
+          const rehydrated: WidgetGlyph[] = overlayState.widgets.map(widget => ({
+            ...widget,
+            createdAt: widget.createdAt || Date.now(),
+          }));
+          setWidgets(rehydrated);
+          rehydrated
+            .filter(widget => widget.layer === 'background')
+            .forEach(widget => {
+              window.loom?.sendWidgetToLayer?.(widget.id, {
+                id: widget.id,
+                glyphId: widget.glyphId,
+                x: widget.x,
+                y: widget.y,
+                width: widget.width,
+                height: widget.height,
+                prompt: widget.prompt,
+                code: widget.code,
+                layer: widget.layer,
+                inputs: widget.inputs,
+              });
+            });
+        }
+        if (typeof overlayState.zIndexCounter === 'number') {
+          zStackCounterRef.current = overlayState.zIndexCounter;
+          setLoomPanelZ(allocateZIndex());
+        }
+        if (overlayState.loomPanel) {
+          setStoredPanelState(overlayState.loomPanel);
+        }
+        if (overlayState.codeEditor) {
+          setStoredEditorState(overlayState.codeEditor);
+        }
+      }
+      hasHydratedStateRef.current = true;
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [allocateZIndex]);
+
+  useEffect(() => {
+    persistOverlayState({ prompt });
+  }, [prompt, persistOverlayState]);
+
+  useEffect(() => {
+    persistOverlayState({ selectedModel });
+  }, [selectedModel, persistOverlayState]);
+
+  useEffect(() => {
+    persistOverlayState({ recentGlyphs });
+  }, [recentGlyphs, persistOverlayState]);
+
+  useEffect(() => {
+    persistOverlayState({ showLoomPanel });
+  }, [showLoomPanel, persistOverlayState]);
+
+  useEffect(() => {
+    persistOverlayState({ widgets });
+  }, [widgets, persistOverlayState]);
+
+  // Listen for auto-update state changes
+  useEffect(() => {
+    const unsubscribe = window.loom?.onUpdaterState?.((state: { available: boolean; downloaded: boolean }) => {
+      // Auto-show dialog when update is available or downloaded
+      if (state.available || state.downloaded) {
+        setShowUpdateDialog(true);
+      }
+    });
+    
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
 
   const clearPendingRefinementTimer = useCallback(() => {
     if (pendingRefinementTimerRef.current) {
@@ -532,10 +748,32 @@ export default function OverlayUI() {
       if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
         setShowModelMenu(false);
       }
+      if (keysMenuRef.current && !keysMenuRef.current.contains(e.target as Node)) {
+        setShowKeysMenu(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Load available keys on mount and when keys menu opens
+  useEffect(() => {
+    const loadKeys = async () => {
+      if (window.loom?.getStoredKeys) {
+        try {
+          const keys = await window.loom.getStoredKeys();
+          setAvailableKeys(keys.map((k: any) => ({ id: k.id, name: k.name, category: k.category })));
+        } catch (err) {
+          console.error('[Overlay] Failed to load keys:', err);
+        }
+      }
+    };
+    loadKeys();
+    // Refresh keys whenever keys menu opens
+    if (showKeysMenu) {
+      loadKeys();
+    }
+  }, [showKeysMenu]);
 
   useEffect(() => {
     return () => {
@@ -619,6 +857,21 @@ export default function OverlayUI() {
       setSummonState(s => ({ ...s, phase: 'compiling', attempt: data.attempt || s.attempt }));
       console.log('[Overlay] ⚙️ State → compiling');
       
+      // Always clean up and reset to idle - don't leave in a stuck state
+      const cleanupAndReset = (delay: number = 500) => {
+        setTimeout(() => {
+          setPrompt('');
+          console.log('[Overlay] 🧹 Clearing state and resetting to idle');
+          originalPromptRef.current = '';
+          setLastError(null);
+          setCanCancel(false);
+          attemptRef.current = 0;
+          clearPendingRefinementTimer();
+          pendingRefinementRef.current = null;
+          setSummonState({ phase: 'idle', attempt: 0 });
+        }, delay);
+      };
+      
       if (data.manifest) {
         console.log(`[Overlay] 📦 Bundle: ${data.manifest.name} (${data.manifest.type})`);
       }
@@ -634,88 +887,15 @@ export default function OverlayUI() {
         // Clean up summon state (panel is already open from streaming)
         console.log('[Overlay] ✨ Streaming complete, finalizing editor...');
         setRecentGlyphs(p => [currentPrompt, ...p.slice(0, 4)]);
-        setLastError(null);
-        setCanCancel(false);
-        attemptRef.current = 0;
-        clearPendingRefinementTimer();
-        pendingRefinementRef.current = null;
         
-        setTimeout(() => {
-          setPrompt('');
-          console.log('[Overlay] 🧹 Clearing originalPromptRef (success cleanup)');
-          originalPromptRef.current = '';
-          setSummonState({ phase: 'idle', attempt: 0 });
-        }, 500);
-        
+        cleanupAndReset(500);
         return; // Skip the old injection flow
       }
       
-      // Fallback: If no bundle, use old injection flow
-      setTimeout(() => {
-        setSummonState(s => ({ ...s, phase: 'injecting' }));
-        console.log('[Overlay] 💉 Preparing injection payload', {
-          promptPreview: currentPrompt?.slice(0, 80),
-          codeLength: data.code?.length,
-        });
-        
-        awaitingCompileRef.current = true;
-        console.log('[Overlay] 🕰️ Awaiting background compile...', {
-          attempt: data.attempt || 1,
-        });
-        
-        if (window.loom?.summonInject) {
-          console.log('[Overlay] 💉 summonInject() dispatch', {
-            promptPreview: currentPrompt?.slice(0, 80),
-            codeLength: data.code?.length,
-          });
-          window.loom.summonInject({
-            code: data.code,
-            prompt: currentPrompt,
-          });
-        } else {
-          console.error('[Overlay] ❌ window.loom.summonInject NOT AVAILABLE!');
-        }
-        
-        if (successTimeoutRef.current) {
-          clearTimeout(successTimeoutRef.current);
-        }
-        
-        successTimeoutRef.current = setTimeout(() => {
-          console.log(`[Overlay] ⏰ 1500ms timeout fired - awaitingCompile: ${awaitingCompileRef.current}`);
-          
-          if (!awaitingCompileRef.current) {
-            console.log('[Overlay] ⏰ Background already reported an error - timeout exiting cleanly');
-            return;
-          }
-          
-          setSummonState(prev => {
-            console.log(`[Overlay] ⏰ Current phase: ${prev.phase}`);
-            if (prev.phase === 'injecting') {
-              console.log('[Overlay] ✅ No error reported from background - marking summon complete');
-              awaitingCompileRef.current = false;
-              setRecentGlyphs(p => [currentPrompt, ...p.slice(0, 4)]);
-              setLastError(null);
-              setCanCancel(false);
-              attemptRef.current = 0;
-              clearPendingRefinementTimer();
-              pendingRefinementRef.current = null;
-              isStreamingRef.current = false;
-              
-              setTimeout(() => {
-                setPrompt('');
-                setStreamingCode('');
-                console.log('[Overlay] 🧹 Clearing originalPromptRef (success cleanup)');
-                originalPromptRef.current = '';
-                setSummonState({ phase: 'idle', attempt: 0 });
-              }, 2000);
-              
-              return { phase: 'complete', attempt: 0 };
-            }
-            console.log(`[Overlay] ⏰ Phase changed to ${prev.phase} - NOT marking complete`);
-            return prev;
-          });
-        }, 1500);
-      }, 300);
+      // No bundle - still clean up after a timeout to prevent stuck state
+      console.log('[Overlay] ⚠️ No bundle received, cleaning up');
+      setRecentGlyphs(p => [currentPrompt, ...p.slice(0, 4)]);
+      cleanupAndReset(1000);
     }));
 
     // Error handling - THIS IS WHERE REFINEMENT KICKS IN
@@ -776,7 +956,7 @@ export default function OverlayUI() {
     if (!widgetListenerRegistered.current) {
       widgetListenerRegistered.current = true;
       
-      window.loom.onWidgetInject?.((data: { code: string; prompt: string; glyphId: string }) => {
+      window.loom.onWidgetInject?.((data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => {
         console.log('[Overlay] 🔮 Widget inject received:', data.prompt);
         
         // Prevent duplicate injections within 1000ms (double-click / StrictMode protection)
@@ -802,34 +982,62 @@ export default function OverlayUI() {
           prompt: data.prompt,
           code: data.code,
           createdAt: Date.now(),
-          layer: 'background', // Default: behind desktop icons
+          layer: 'foreground', // Default: overlay layer (interactive, above desktop)
+          zIndex: allocateZIndex(),
+          inputs: data.inputs, // Include resolved inputs (API keys, etc.)
         };
         
-        // Immediately sync to background window (since default layer is 'background')
-        const widgetSyncData = {
-          id: newWidget.id,
-          glyphId: newWidget.glyphId,
-          x: newWidget.x,
-          y: newWidget.y,
-          width: newWidget.width,
-          height: newWidget.height,
-          prompt: newWidget.prompt,
-          code: newWidget.code,
-          layer: newWidget.layer,
-        };
-        console.log('[Overlay] 📤 Sending widget to background:', JSON.stringify({
-          id: widgetSyncData.id,
-          x: widgetSyncData.x,
-          y: widgetSyncData.y,
-          width: widgetSyncData.width,
-          height: widgetSyncData.height,
-          layer: widgetSyncData.layer,
-          codeLength: widgetSyncData.code?.length,
-        }, null, 2));
-        window.loom?.sendWidgetToLayer?.(newWidget.id, widgetSyncData);
+        // No need to sync to background window since default layer is 'foreground'
+        // Widget renders in the overlay layer by default
         
         setWidgets(prev => [...prev, newWidget]);
-        console.log('[Overlay] ✨ Widget created:', newWidget.id, '(background layer)');
+        console.log('[Overlay] ✨ Widget created:', newWidget.id, '(overlay layer)');
+      });
+      
+      // Listen for glyph code updates - auto-refresh widgets when glyph is saved
+      window.loom.onGlyphUpdated?.((data: { 
+        glyphId: string; 
+        code: string; 
+        inputs?: Record<string, unknown>;
+        changedFile: string;
+      }) => {
+        console.log('[Overlay] 🔄 Glyph updated:', data.glyphId, data.changedFile);
+        
+        // Update all widgets that use this glyph
+        setWidgets(prev => {
+          const hasMatchingWidget = prev.some(w => w.glyphId === data.glyphId);
+          if (!hasMatchingWidget) return prev;
+          
+          console.log('[Overlay] 🔄 Refreshing widgets for glyph:', data.glyphId);
+          return prev.map(widget => {
+            if (widget.glyphId === data.glyphId) {
+              const updatedWidget = {
+                ...widget,
+                code: data.code,
+                inputs: data.inputs ?? widget.inputs,
+              };
+              
+              // If widget is in background layer, sync the update to background window
+              if (widget.layer === 'background') {
+                window.loom?.sendWidgetToLayer?.(widget.id, {
+                  id: widget.id,
+                  glyphId: widget.glyphId,
+                  x: widget.x,
+                  y: widget.y,
+                  width: widget.width,
+                  height: widget.height,
+                  prompt: widget.prompt,
+                  code: data.code,
+                  layer: widget.layer,
+                  inputs: data.inputs ?? widget.inputs,
+                });
+              }
+              
+              return updatedWidget;
+            }
+            return widget;
+          });
+        });
       });
     }
 
@@ -924,6 +1132,38 @@ export default function OverlayUI() {
   }, []);
 
   // Widget management
+  const queueWidgetLayerSync = useCallback((widget: WidgetGlyph) => {
+    if (!window.loom?.sendWidgetToLayer) return;
+
+    widgetSyncLatestRef.current.set(widget.id, widget);
+
+    if (widgetSyncFrameRef.current.has(widget.id)) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      widgetSyncFrameRef.current.delete(widget.id);
+      const latest = widgetSyncLatestRef.current.get(widget.id);
+      if (!latest) return;
+      widgetSyncLatestRef.current.delete(widget.id);
+
+      window.loom?.sendWidgetToLayer?.(widget.id, {
+        id: latest.id,
+        glyphId: latest.glyphId,
+        x: latest.x,
+        y: latest.y,
+        width: latest.width,
+        height: latest.height,
+        prompt: latest.prompt,
+        code: latest.code,
+        layer: latest.layer,
+        inputs: latest.inputs,
+      });
+    });
+
+    widgetSyncFrameRef.current.set(widget.id, frameId);
+  }, []);
+
   const updateWidget = useCallback((id: string, updates: Partial<WidgetGlyph>) => {
     setWidgets(prev => {
       const updated = prev.map(w => {
@@ -931,38 +1171,24 @@ export default function OverlayUI() {
         const newWidget = { ...w, ...updates };
         
         // If this is a background widget and position/size changed, sync to background window
-        // DEBOUNCED to avoid spamming during drag/resize
         if (newWidget.layer === 'background' && 
             (updates.x !== undefined || updates.y !== undefined || 
              updates.width !== undefined || updates.height !== undefined)) {
-          // Clear any pending sync for this widget
-          const existingTimeout = widgetSyncDebounceRef.current.get(id);
-          if (existingTimeout) {
-            clearTimeout(existingTimeout);
-          }
-          
-          // Schedule debounced sync (100ms after last change)
-          const timeoutId = setTimeout(() => {
-            widgetSyncDebounceRef.current.delete(id);
-            window.loom?.sendWidgetToLayer?.(id, {
-              id: newWidget.id,
-              glyphId: newWidget.glyphId,
-              x: newWidget.x,
-              y: newWidget.y,
-              width: newWidget.width,
-              height: newWidget.height,
-              prompt: newWidget.prompt,
-              code: newWidget.code,
-              layer: newWidget.layer,
-            });
-          }, 100);
-          widgetSyncDebounceRef.current.set(id, timeoutId);
+          queueWidgetLayerSync(newWidget);
         }
         
         return newWidget;
       });
       return updated;
     });
+  }, [queueWidgetLayerSync]);
+
+  useEffect(() => {
+    return () => {
+      widgetSyncFrameRef.current.forEach((frameId) => cancelAnimationFrame(frameId));
+      widgetSyncFrameRef.current.clear();
+      widgetSyncLatestRef.current.clear();
+    };
   }, []);
 
   const removeWidget = useCallback((id: string) => {
@@ -983,33 +1209,39 @@ export default function OverlayUI() {
         const newLayer: WidgetLayer = w.layer === 'foreground' ? 'background' : 'foreground';
         console.log(`[Overlay] 🔄 Widget ${id} layer: ${w.layer} → ${newLayer}`);
         
-        // Notify main process to handle layer change
-        const widgetData = {
-          id: w.id,
-          glyphId: w.glyphId,
-          x: w.x,
-          y: w.y,
-          width: w.width,
-          height: w.height,
-          prompt: w.prompt,
-          code: w.code,
-          layer: newLayer,
-        };
-        window.loom?.sendWidgetToLayer?.(id, widgetData);
+        if (newLayer === 'background') {
+          window.loom?.sendWidgetToLayer?.(id, {
+            id: w.id,
+            glyphId: w.glyphId,
+            x: w.x,
+            y: w.y,
+            width: w.width,
+            height: w.height,
+            prompt: w.prompt,
+            code: w.code,
+            layer: newLayer,
+            inputs: w.inputs,
+          });
+        } else {
+          window.loom?.sendWidgetToLayer?.(id, null);
+        }
         
-        return { ...w, layer: newLayer };
+        return { 
+          ...w, 
+          layer: newLayer,
+          zIndex: newLayer === 'foreground' ? allocateZIndex() : w.zIndex,
+        };
       });
       return updated;
     });
-  }, []);
+  }, [allocateZIndex]);
 
-  const handleSubmit = useCallback((e: React.FormEvent) => {
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (prompt.trim() && summonState.phase === 'idle' && window.loom) {
       // Reset state for new summon
       attemptRef.current = 0;
       currentCodeRef.current = '';
-      originalPromptRef.current = prompt.trim(); // PRESERVE original prompt for entire session
       editorOpenedForStreamRef.current = true; // Mark as opened (we're opening NOW)
       setLastError(null);
       setCanCancel(false);
@@ -1019,7 +1251,23 @@ export default function OverlayUI() {
       setLoomStreamingCode(''); // Clear any previous streaming code
       setLoomInitialGlyphId(undefined); // Clear previous glyph selection
       
+      // Build prompt with selected key names (not values!)
+      let finalPrompt = prompt.trim();
+      if (selectedKeys.length > 0) {
+        const keyNames = selectedKeys
+          .map(keyId => availableKeys.find(k => k.id === keyId)?.name)
+          .filter(Boolean);
+        if (keyNames.length > 0) {
+          finalPrompt += `\n\n[User has provided these credentials/keys: ${keyNames.join(', ')}. Use window.GLYPH_INPUTS to access them by their input ID.]`;
+        }
+      }
+      
+      originalPromptRef.current = finalPrompt; // PRESERVE original prompt for entire session
+      
       console.log('[Overlay] 🚀 Starting summon with prompt:', originalPromptRef.current);
+      if (selectedKeys.length > 0) {
+        console.log('[Overlay] 🔑 Selected keys:', selectedKeys.map(id => availableKeys.find(k => k.id === id)?.name));
+      }
       
       // IMMEDIATELY open the editor with goopy animation - don't wait for first chunk
       console.log('[Overlay] 🌊 Opening editor IMMEDIATELY on submit...');
@@ -1034,15 +1282,29 @@ export default function OverlayUI() {
       }, 300); // Faster transition since user is waiting
       
       // Start secure summon via main process with selected model
-      window.loom.summonRequest(prompt.trim(), selectedModel);
+      // Pass selectedKeys so they get linked to the glyph when it's created
+      const keysToLink = selectedKeys.length > 0 ? [...selectedKeys] : undefined;
+      window.loom.summonRequest(finalPrompt, selectedModel, keysToLink);
       setSummonState({ phase: 'streaming', attempt: 1 });
       setShowModelMenu(false);
+      setShowKeysMenu(false);
+      
+      // Clear selected keys after generation starts so they don't persist to future generations
+      setSelectedKeys([]);
     }
-  }, [prompt, summonState.phase, selectedModel, clearPendingRefinementTimer]);
+  }, [prompt, summonState.phase, selectedModel, selectedKeys, availableKeys, clearPendingRefinementTimer]);
 
   const handleModelSelect = useCallback((modelId: string) => {
     setSelectedModel(modelId);
     setShowModelMenu(false);
+  }, []);
+
+  const handleKeyToggle = useCallback((keyId: string) => {
+    setSelectedKeys(prev => 
+      prev.includes(keyId) 
+        ? prev.filter(k => k !== keyId)
+        : [...prev, keyId]
+    );
   }, []);
 
   const getCurrentModel = useCallback(() => {
@@ -1107,6 +1369,7 @@ export default function OverlayUI() {
           onUpdate={updateWidget}
           onRemove={removeWidget}
           onLayerToggle={toggleWidgetLayer}
+          onFocus={bringWidgetToFront}
         />
       ))}
 
@@ -1114,12 +1377,78 @@ export default function OverlayUI() {
       {showLoomPanel && (
         <LoomPanel 
           onClose={handleCloseLoomPanel}
-          initialSection={loomIsStreaming || loomInitialGlyphId ? 'editor' : 'chat'}
+          // Only force editor when opening panel from summon bar (morphing transition)
+          // If panel is already open (e.g. user summoning from chat), stay in current section
+          initialSection={
+            (loomTransition === 'morphing' || loomTransition === 'complete') && (loomIsStreaming || loomInitialGlyphId) 
+              ? 'editor' 
+              : 'chat'
+          }
           initialGlyphId={loomInitialGlyphId}
           streamingCode={loomStreamingCode}
           isStreaming={loomIsStreaming}
           transitionFromSummonBar={loomTransition === 'morphing' || loomTransition === 'complete'}
+          zIndex={loomPanelZ}
+          onRequestFront={bringLoomPanelToFront}
+          initialState={storedPanelState}
+          onStateChange={handlePanelStateChange}
+          editorState={storedEditorState}
+          onEditorStateChange={handleEditorStateChange}
         />
+      )}
+
+      {/* Auto-Update Dialog - Goopy changelog viewer */}
+      {showUpdateDialog && (
+        <div 
+          className="ui-interactive"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.7)',
+            backdropFilter: 'none',
+            animation: 'fadeIn 0.3s ease',
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowUpdateDialog(false);
+            }
+          }}
+        >
+          <div style={{
+            width: 'min(90vw, 540px)',
+            height: 'min(85vh, 680px)',
+            animation: 'goopyModalIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+          }}>
+            <UpdaterView onClose={() => setShowUpdateDialog(false)} />
+          </div>
+          <style>{`
+            @keyframes fadeIn {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+            @keyframes goopyModalIn {
+              0% {
+                transform: scale(0.5) translateY(100px);
+                opacity: 0;
+                filter: blur(20px);
+              }
+              50% {
+                transform: scale(1.05) translateY(-10px);
+                opacity: 0.9;
+                filter: blur(2px);
+              }
+              100% {
+                transform: scale(1) translateY(0);
+                opacity: 1;
+                filter: blur(0);
+              }
+            }
+          `}</style>
+        </div>
       )}
 
       {/* Summon Bar UI - with goopy morph transition */}
@@ -1186,18 +1515,39 @@ export default function OverlayUI() {
             </span>
             
             {/* Input */}
-            <input
+            <textarea
               ref={inputRef}
-              type="text"
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(e) => {
+                setPrompt(e.target.value);
+                // Auto-resize textarea
+                const textarea = e.target;
+                textarea.style.height = 'auto';
+                const maxHeight = e.target.value.length > 600 ? 180 : 120;
+                textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
+                textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+              }}
+              onKeyDown={(e) => {
+                // Submit on Enter (without Shift), new line on Shift+Enter
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (prompt.trim() && !isActive) {
+                    handleSubmit(e as unknown as React.FormEvent);
+                  }
+                }
+              }}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
               placeholder={isActive ? getPhaseMessage() : 'Summon anything into existence...'}
               disabled={isActive}
-              style={styles.input}
+              style={{
+                ...styles.input,
+                resize: 'none',
+                overflowY: prompt.length > 600 ? 'auto' : 'hidden',
+              }}
               autoComplete="off"
               spellCheck={false}
+              rows={1}
             />
             
             {/* Clear button */}
@@ -1225,6 +1575,95 @@ export default function OverlayUI() {
             </button>
           </div>
           
+          {/* Key selector - Select credentials to provide to AI */}
+          <div style={styles.keySelectorWrapper} ref={keysMenuRef}>
+            <button 
+              type="button" 
+              onClick={() => setShowKeysMenu(!showKeysMenu)}
+              style={{
+                ...styles.keyBtn,
+                borderColor: showKeysMenu || selectedKeys.length > 0 
+                  ? 'rgba(0, 255, 200, 0.6)' 
+                  : 'rgba(0, 255, 200, 0.25)',
+                background: showKeysMenu || selectedKeys.length > 0 
+                  ? 'rgba(0, 255, 200, 0.15)' 
+                  : 'rgba(0, 255, 200, 0.05)',
+              }}
+              title={selectedKeys.length > 0 
+                ? `${selectedKeys.length} key(s) selected` 
+                : 'Select keys to provide'}
+            >
+              <span style={styles.keyIcon}>🔑</span>
+              {selectedKeys.length > 0 && (
+                <span style={styles.keyBadge}>{selectedKeys.length}</span>
+              )}
+            </button>
+            
+            {/* Keys dropdown menu - opens UPWARD */}
+            {showKeysMenu && (
+              <div style={styles.keysMenu}>
+                <div style={styles.keysMenuTitle}>PROVIDE KEYS TO AI</div>
+                <div style={styles.keysMenuDescription}>
+                  Select credentials to include. Only names are shared with AI.
+                </div>
+                <div style={styles.keysMenuScroll}>
+                  {availableKeys.length === 0 ? (
+                    <div style={styles.keysEmpty}>
+                      <span style={styles.keysEmptyIcon}>🔐</span>
+                      <span style={styles.keysEmptyText}>No keys stored</span>
+                      <span style={styles.keysEmptyHint}>Add keys in Settings → Keys</span>
+                    </div>
+                  ) : (
+                    availableKeys.map((key) => (
+                      <button
+                        key={key.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleKeyToggle(key.id);
+                        }}
+                        style={{
+                          ...styles.keyMenuItem,
+                          background: selectedKeys.includes(key.id)
+                            ? 'rgba(0, 255, 200, 0.15)'
+                            : 'transparent',
+                          borderColor: selectedKeys.includes(key.id)
+                            ? 'rgba(0, 255, 200, 0.4)'
+                            : 'rgba(255, 255, 255, 0.08)',
+                        }}
+                      >
+                        <span style={styles.keyMenuIcon}>
+                          {key.category === 'api' ? '🔑' : 
+                           key.category === 'token' ? '🎫' :
+                           key.category === 'password' ? '🔒' :
+                           key.category === 'credential' ? '👤' : '📦'}
+                        </span>
+                        <span style={styles.keyMenuName}>{key.name}</span>
+                        {selectedKeys.includes(key.id) && (
+                          <span style={styles.keyMenuCheck}>✓</span>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+                {selectedKeys.length > 0 && (
+                  <button 
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSelectedKeys([]);
+                    }}
+                    style={styles.clearKeysBtn}
+                  >
+                    Clear selection
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Model selector - OUTSIDE input wrapper */}
           <div style={styles.modelSelectorWrapper} ref={modelMenuRef}>
             <button 
@@ -1445,7 +1884,7 @@ const styles: Record<string, any> = {
     flex: 1,
     position: 'relative',
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: '14px',
     padding: '18px 22px',
     background: 'rgba(8, 8, 18, 0.92)',
@@ -1480,6 +1919,8 @@ const styles: Record<string, any> = {
     fontSize: '22px',
     zIndex: 1,
     filter: 'drop-shadow(0 0 8px currentColor)',
+    paddingTop: '2px',
+    flexShrink: 0,
   },
   input: {
     flex: 1,
@@ -1491,6 +1932,10 @@ const styles: Record<string, any> = {
     fontFamily: 'inherit',
     zIndex: 1,
     letterSpacing: '0.3px',
+    resize: 'none',
+    minHeight: '24px',
+    maxHeight: '180px',
+    lineHeight: '1.4',
   },
   clearBtn: {
     background: 'transparent',
@@ -1646,6 +2091,146 @@ const styles: Record<string, any> = {
     transition: 'all 0.2s ease',
     fontFamily: 'inherit',
   },
+  // Key selector styles - positioned outside input container
+  keySelectorWrapper: {
+    position: 'relative',
+    zIndex: 101,
+    flexShrink: 0,
+  },
+  keyBtn: {
+    background: 'rgba(8, 8, 18, 0.92)',
+    backdropFilter: 'blur(24px)',
+    border: '1px solid rgba(0, 255, 200, 0.25)',
+    borderRadius: '14px',
+    width: '56px',
+    height: '56px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+    position: 'relative',
+  },
+  keyIcon: {
+    fontSize: '24px',
+    filter: 'drop-shadow(0 0 6px rgba(0, 255, 200, 0.5))',
+  },
+  keyBadge: {
+    position: 'absolute',
+    top: '-4px',
+    right: '-4px',
+    width: '20px',
+    height: '20px',
+    background: 'linear-gradient(135deg, #00ffc8, #00cc99)',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '11px',
+    fontWeight: 700,
+    color: '#000',
+    boxShadow: '0 2px 8px rgba(0, 255, 200, 0.4)',
+  },
+  keysMenu: {
+    position: 'absolute',
+    bottom: '65px',
+    right: '0',
+    background: 'rgba(12, 12, 24, 0.98)',
+    backdropFilter: 'blur(24px)',
+    borderRadius: '14px',
+    border: '1px solid rgba(0, 255, 200, 0.4)',
+    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), 0 0 60px rgba(0, 255, 200, 0.1)',
+    padding: '12px',
+    minWidth: '260px',
+    animation: 'fadeIn 0.2s ease',
+  },
+  keysMenuTitle: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: '10px',
+    fontWeight: 700,
+    letterSpacing: '1px',
+    textTransform: 'uppercase',
+    marginBottom: '4px',
+  },
+  keysMenuDescription: {
+    color: 'rgba(255, 255, 255, 0.35)',
+    fontSize: '11px',
+    lineHeight: 1.4,
+    marginBottom: '12px',
+    paddingBottom: '10px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+  },
+  keysMenuScroll: {
+    maxHeight: '250px',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  keysEmpty: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    padding: '20px',
+    gap: '8px',
+  },
+  keysEmptyIcon: {
+    fontSize: '28px',
+    opacity: 0.4,
+  },
+  keysEmptyText: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: '13px',
+    fontWeight: 500,
+  },
+  keysEmptyHint: {
+    color: 'rgba(255, 255, 255, 0.3)',
+    fontSize: '11px',
+  },
+  keyMenuItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    width: '100%',
+    padding: '10px 12px',
+    background: 'transparent',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: '10px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    fontFamily: 'inherit',
+    textAlign: 'left',
+  },
+  keyMenuIcon: {
+    fontSize: '16px',
+  },
+  keyMenuName: {
+    color: '#ffffff',
+    fontSize: '13px',
+    fontWeight: 500,
+    flex: 1,
+  },
+  keyMenuCheck: {
+    color: '#00ffc8',
+    fontSize: '14px',
+    fontWeight: 'bold',
+  },
+  clearKeysBtn: {
+    marginTop: '10px',
+    padding: '8px 12px',
+    background: 'transparent',
+    border: '1px solid rgba(255, 100, 100, 0.3)',
+    borderRadius: '8px',
+    color: 'rgba(255, 100, 100, 0.7)',
+    fontSize: '11px',
+    cursor: 'pointer',
+    width: '100%',
+    fontFamily: 'inherit',
+    transition: 'all 0.2s ease',
+  },
+
   // Model selector styles - positioned outside input container
   modelSelectorWrapper: {
     position: 'relative',

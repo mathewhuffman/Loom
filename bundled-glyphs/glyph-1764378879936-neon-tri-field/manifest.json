@@ -1,0 +1,53 @@
+{
+  "id": "glyph-1764378879936-neon-tri-field",
+  "name": "Neon Tri-Field",
+  "prompt": "generate a triangle 3d particle field",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-29T01:15:00.340Z",
+  "inputs": [
+    {
+      "id": "particleCount",
+      "type": "range",
+      "label": "Triangle Count",
+      "min": 100,
+      "max": 5000,
+      "defaultValue": 800
+    },
+    {
+      "id": "speed",
+      "type": "range",
+      "label": "Flow Speed",
+      "min": 0,
+      "max": 200,
+      "defaultValue": 40
+    },
+    {
+      "id": "size",
+      "type": "range",
+      "label": "Size",
+      "min": 1,
+      "max": 50,
+      "defaultValue": 15
+    },
+    {
+      "id": "primaryColor",
+      "type": "color",
+      "label": "Primary Color",
+      "defaultValue": "#00ffff"
+    },
+    {
+      "id": "secondaryColor",
+      "type": "color",
+      "label": "Secondary Color",
+      "defaultValue": "#ff00ff"
+    }
+  ],
+  "icon": "🔺",
+  "bundled": true,
+  "version": "1.0.0"
+}

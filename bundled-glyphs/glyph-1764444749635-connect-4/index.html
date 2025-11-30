@@ -1,0 +1,636 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Connect 4</title>
+  <style>
+    :root {
+      --p1-color: #ff4757;
+      --p2-color: #eccc68;
+      --board-color: #3742fa;
+      --bg-color: #1e272e;
+      --text-color: #ffffff;
+      --cell-size: 12vmin; /* Responsive unit */
+      --gap: 1vmin;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100vh;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    #game-ui {
+      display: flex;
+      justify-content: space-between;
+      width: calc(7 * var(--cell-size) + 8 * var(--gap));
+      margin-bottom: 20px;
+      align-items: center;
+    }
+
+    .turn-indicator {
+      font-size: 1.5rem;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .turn-dot {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background-color: var(--p1-color);
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+    }
+
+    button {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    /* The Game Container */
+    #game-board {
+      position: relative;
+      width: calc(7 * var(--cell-size) + 8 * var(--gap));
+      height: calc(6 * var(--cell-size) + 7 * var(--gap));
+      background-color: var(--board-color);
+      border-radius: 10px;
+      padding: var(--gap);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      /* Use a mask to create holes */
+      /* We will build the visual board with SVG to get true transparency */
+      display: none; /* We use a different structure for layering */
+    }
+
+    /* Layered Approach */
+    .game-wrapper {
+      position: relative;
+      width: calc(7 * var(--cell-size) + 8 * var(--gap));
+      height: calc(6 * var(--cell-size) + 7 * var(--gap));
+    }
+
+    /* Layer 1: The Slots (Chips go here) */
+    .slots-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      padding: var(--gap);
+      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      grid-template-rows: repeat(6, 1fr);
+      gap: var(--gap);
+      z-index: 1;
+    }
+
+    .slot {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    .chip {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      position: absolute;
+      top: 0; /* Final position is top:0 relative to slot */
+      left: 0;
+      transform: translateY(-600%); /* Start above screen */
+      transition: transform 0.5s cubic-bezier(0.5, 0, 0.5, 1);
+      box-shadow: inset 0 0 10px rgba(0,0,0,0.3);
+    }
+    
+    .chip.p1 { background: radial-gradient(circle at 30% 30%, #ff7675, var(--p1-color)); }
+    .chip.p2 { background: radial-gradient(circle at 30% 30%, #ffeaa7, var(--p2-color)); }
+
+    /* Layer 2: The Board Mask (Blue with holes) */
+    .board-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none; /* Let clicks pass through */
+    }
+
+    /* Layer 3: Interaction Layer (Columns) */
+    .interaction-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 3;
+      display: flex;
+      padding: var(--gap);
+      box-sizing: border-box;
+      gap: var(--gap);
+    }
+
+    .col-trigger {
+      flex: 1;
+      height: 100%;
+      cursor: pointer;
+      background: transparent;
+      transition: background 0.1s;
+      border-radius: 5px;
+    }
+
+    .col-trigger:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    /* SVG for the board mask */
+    svg.board-svg {
+      width: 100%;
+      height: 100%;
+      filter: drop-shadow(0 5px 10px rgba(0,0,0,0.4));
+    }
+    
+    .board-shape {
+      fill: var(--board-color);
+    }
+
+    /* Winner Overlay */
+    #winner-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.7);
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      backdrop-filter: blur(5px);
+    }
+
+    #winner-overlay.visible {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    .winner-text {
+      font-size: 3rem;
+      font-weight: 800;
+      margin-bottom: 20px;
+      text-transform: uppercase;
+      text-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    }
+
+    .play-again-btn {
+      padding: 15px 30px;
+      font-size: 1.2rem;
+      background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+      border: none;
+      color: white;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(108, 92, 231, 0.4);
+      transform: scale(1);
+      transition: transform 0.2s;
+    }
+
+    .play-again-btn:hover {
+      transform: scale(1.05);
+    }
+
+    /* Highlight winning chips */
+    .chip.winner {
+      filter: brightness(1.5);
+      box-shadow: 0 0 20px white;
+      z-index: 5; /* Pop slightly */
+    }
+
+  </style>
+</head>
+<body>
+
+  <div id="game-ui">
+    <div class="turn-indicator">
+      <div class="turn-dot" id="turn-dot"></div>
+      <span id="turn-text">Player 1's Turn</span>
+    </div>
+    <button id="reset-btn">Reset</button>
+  </div>
+
+  <div class="game-wrapper">
+    <!-- Layer 1: Chips -->
+    <div class="slots-layer" id="slots-grid">
+      <!-- Generated by JS -->
+    </div>
+
+    <!-- Layer 2: Board Visual -->
+    <div class="board-layer">
+      <svg class="board-svg" viewBox="0 0 720 620" preserveAspectRatio="none">
+        <defs>
+          <mask id="holes-mask">
+            <rect x="0" y="0" width="720" height="620" fill="white" />
+            <!-- Holes will be generated by JS to match grid perfectly -->
+            <g id="mask-circles"></g>
+          </mask>
+        </defs>
+        <rect x="0" y="0" width="720" height="620" mask="url(#holes-mask)" class="board-shape" />
+      </svg>
+    </div>
+
+    <!-- Layer 3: Clicks -->
+    <div class="interaction-layer" id="click-layer">
+      <!-- 7 Columns -->
+      <div class="col-trigger" data-col="0"></div>
+      <div class="col-trigger" data-col="1"></div>
+      <div class="col-trigger" data-col="2"></div>
+      <div class="col-trigger" data-col="3"></div>
+      <div class="col-trigger" data-col="4"></div>
+      <div class="col-trigger" data-col="5"></div>
+      <div class="col-trigger" data-col="6"></div>
+    </div>
+    
+    <!-- Winner Overlay -->
+    <div id="winner-overlay">
+      <div class="winner-text" id="winner-msg">PLAYER 1 WINS!</div>
+      <button class="play-again-btn" id="play-again-btn">Play Again</button>
+    </div>
+  </div>
+
+<script>
+  // --- CONFIGURATION ---
+  const inputs = window.GLYPH_INPUTS || {};
+  const CONFIG = {
+    p1Color: inputs.p1Color || '#ff4757',
+    p2Color: inputs.p2Color || '#eccc68',
+    boardColor: inputs.boardColor || '#3742fa',
+    mode: inputs.mode || 'cpu', // 'human' or 'cpu'
+    rows: 6,
+    cols: 7
+  };
+
+  // Apply colors
+  const root = document.documentElement;
+  root.style.setProperty('--p1-color', CONFIG.p1Color);
+  root.style.setProperty('--p2-color', CONFIG.p2Color);
+  root.style.setProperty('--board-color', CONFIG.boardColor);
+
+  // --- STATE ---
+  let board = []; // 6x7 array: 0=empty, 1=p1, 2=p2
+  let currentPlayer = 1; // 1 or 2
+  let isGameOver = false;
+  let isAnimating = false;
+
+  // --- DOM ELEMENTS ---
+  const slotsGrid = document.getElementById('slots-grid');
+  const maskCircles = document.getElementById('mask-circles');
+  const turnDot = document.getElementById('turn-dot');
+  const turnText = document.getElementById('turn-text');
+  const winnerOverlay = document.getElementById('winner-overlay');
+  const winnerMsg = document.getElementById('winner-msg');
+  const clickLayer = document.getElementById('click-layer');
+
+  // --- INITIALIZATION ---
+  function init() {
+    // Generate SVG Mask holes dynamically to match CSS grid
+    // The SVG viewBox is 720x620.
+    // 7 cols + 8 gaps. 6 rows + 7 gaps.
+    // Let's assume a coordinate system where gap=10, cell=90.
+    // Total W = 7*90 + 8*10 = 630 + 80 = 710 (close enough to 720 for math ease)
+    // Actually, let's just use percentages for the SVG circles to be responsive within the SVG coordinate space.
+    
+    // Better: Use fixed units in SVG and let the SVG scale.
+    // 7 cols, 6 rows.
+    // Let cell diameter = 80, gap = 10.
+    // Width = 7*80 + 8*10 = 560 + 80 = 640.
+    // Height = 6*80 + 7*10 = 480 + 70 = 550.
+    // Update viewBox to "0 0 640 550"
+    document.querySelector('.board-svg').setAttribute('viewBox', '0 0 640 550');
+    document.querySelector('rect[mask]').setAttribute('width', '640');
+    document.querySelector('rect[mask]').setAttribute('height', '550');
+    document.querySelector('#holes-mask rect').setAttribute('width', '640');
+    document.querySelector('#holes-mask rect').setAttribute('height', '550');
+
+    let svgContent = '';
+    const d = 80; // diameter
+    const g = 10; // gap
+    const r = d/2;
+
+    for (let row = 0; row < CONFIG.rows; row++) {
+      for (let col = 0; col < CONFIG.cols; col++) {
+        const cx = g + r + (col * (d + g));
+        const cy = g + r + (row * (d + g));
+        svgContent += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="black" />`;
+      }
+    }
+    maskCircles.innerHTML = svgContent;
+
+    resetGame();
+  }
+
+  function resetGame() {
+    board = Array(CONFIG.rows).fill().map(() => Array(CONFIG.cols).fill(0));
+    currentPlayer = 1;
+    isGameOver = false;
+    isAnimating = false;
+    
+    // Clear chips
+    slotsGrid.innerHTML = '';
+    // Re-create empty slots grid structure (purely for positioning if needed, 
+    // but actually we just append chips absolutely positioned within slots?
+    // The CSS grid defines the slots. We will append chips to specific grid items.)
+    
+    // To make animations easier, let's create a flat list of slots in the DOM
+    // matching the grid order.
+    for (let r = 0; r < CONFIG.rows; r++) {
+      for (let c = 0; c < CONFIG.cols; c++) {
+        const slot = document.createElement('div');
+        slot.className = 'slot';
+        slot.dataset.r = r;
+        slot.dataset.c = c;
+        slotsGrid.appendChild(slot);
+      }
+    }
+
+    winnerOverlay.classList.remove('visible');
+    updateUI();
+  }
+
+  // --- GAME LOGIC ---
+
+  function updateUI() {
+    turnDot.style.backgroundColor = currentPlayer === 1 ? CONFIG.p1Color : CONFIG.p2Color;
+    turnText.textContent = currentPlayer === 1 ? "Player 1's Turn" : (CONFIG.mode === 'cpu' ? "CPU Thinking..." : "Player 2's Turn");
+    turnText.style.color = currentPlayer === 1 ? CONFIG.p1Color : CONFIG.p2Color;
+  }
+
+  function getLowestEmptyRow(col) {
+    for (let r = CONFIG.rows - 1; r >= 0; r--) {
+      if (board[r][col] === 0) return r;
+    }
+    return -1;
+  }
+
+  async function dropPiece(col) {
+    if (isGameOver || isAnimating) return;
+
+    const row = getLowestEmptyRow(col);
+    if (row === -1) return; // Column full
+
+    isAnimating = true;
+
+    // Visual Drop
+    const slotIndex = row * CONFIG.cols + col;
+    const slotEl = slotsGrid.children[slotIndex];
+    
+    const chip = document.createElement('div');
+    chip.className = `chip p${currentPlayer}`;
+    // Start position: We need to calculate how far it falls.
+    // The chip is inside the slot div.
+    // `transform: translateY(-X%)` where X is based on row number.
+    // Actually, simpler: Put chip in slot. Start it at translateY(- (row * 100% + some offset)).
+    // Row 0 is top. Row 5 is bottom.
+    // If we are at Row 5, we are at the bottom.
+    // CSS Grid places the slot in the correct position.
+    // So relative to the slot, 0,0 is the final position.
+    // We want to start ABOVE the board.
+    // The board height is roughly 600%.
+    // So start at -((row + 1) * 110%). 
+    
+    const dropDistancePercent = (row + 1) * 120 + 50; 
+    chip.style.transform = `translateY(-${dropDistancePercent}%)`;
+    
+    slotEl.appendChild(chip);
+
+    // Trigger reflow
+    chip.getBoundingClientRect();
+
+    // Animate to 0
+    chip.style.transform = 'translateY(0)';
+
+    // Play sound (simple oscillator)
+    playSound(currentPlayer === 1 ? 400 : 300);
+
+    // Update State after animation starts
+    board[row][col] = currentPlayer;
+
+    await new Promise(r => setTimeout(r, 500)); // Wait for drop animation
+    isAnimating = false;
+
+    // Check Win
+    const winningCells = checkWin(currentPlayer);
+    if (winningCells) {
+      endGame(currentPlayer, winningCells);
+      return;
+    }
+
+    // Check Draw
+    if (board.every(row => row.every(cell => cell !== 0))) {
+      endGame(0);
+      return;
+    }
+
+    // Switch Turn
+    currentPlayer = currentPlayer === 1 ? 2 : 1;
+    updateUI();
+
+    // CPU Turn
+    if (CONFIG.mode === 'cpu' && currentPlayer === 2) {
+      setTimeout(cpuMove, 600);
+    }
+  }
+
+  function cpuMove() {
+    if (isGameOver) return;
+    
+    // Simple AI
+    // 1. Check if can win now
+    // 2. Check if opponent can win next, block them
+    // 3. Pick center if available
+    // 4. Pick random valid
+    
+    let move = -1;
+
+    // Helper to simulate board
+    const canWin = (player) => {
+      for (let c = 0; c < CONFIG.cols; c++) {
+        const r = getLowestEmptyRow(c);
+        if (r !== -1) {
+          board[r][c] = player;
+          if (checkWin(player)) {
+            board[r][c] = 0;
+            return c;
+          }
+          board[r][c] = 0;
+        }
+      }
+      return -1;
+    };
+
+    // 1. Win?
+    move = canWin(2);
+    
+    // 2. Block?
+    if (move === -1) move = canWin(1);
+
+    // 3. Center logic (prefer col 3)
+    if (move === -1) {
+      if (getLowestEmptyRow(3) !== -1) move = 3;
+    }
+
+    // 4. Random valid
+    if (move === -1) {
+      const validCols = [];
+      for (let c = 0; c < CONFIG.cols; c++) {
+        if (getLowestEmptyRow(c) !== -1) validCols.push(c);
+      }
+      if (validCols.length > 0) {
+        move = validCols[Math.floor(Math.random() * validCols.length)];
+      }
+    }
+
+    if (move !== -1) {
+      dropPiece(move);
+    }
+  }
+
+  function checkWin(player) {
+    // Horizontal
+    for (let r = 0; r < CONFIG.rows; r++) {
+      for (let c = 0; c < CONFIG.cols - 3; c++) {
+        if (board[r][c] === player && board[r][c+1] === player && board[r][c+2] === player && board[r][c+3] === player) {
+          return [[r,c], [r,c+1], [r,c+2], [r,c+3]];
+        }
+      }
+    }
+    // Vertical
+    for (let r = 0; r < CONFIG.rows - 3; r++) {
+      for (let c = 0; c < CONFIG.cols; c++) {
+        if (board[r][c] === player && board[r+1][c] === player && board[r+2][c] === player && board[r+3][c] === player) {
+          return [[r,c], [r+1,c], [r+2,c], [r+3,c]];
+        }
+      }
+    }
+    // Diagonal Down-Right
+    for (let r = 0; r < CONFIG.rows - 3; r++) {
+      for (let c = 0; c < CONFIG.cols - 3; c++) {
+        if (board[r][c] === player && board[r+1][c+1] === player && board[r+2][c+2] === player && board[r+3][c+3] === player) {
+          return [[r,c], [r+1,c+1], [r+2,c+2], [r+3,c+3]];
+        }
+      }
+    }
+    // Diagonal Up-Right
+    for (let r = 3; r < CONFIG.rows; r++) {
+      for (let c = 0; c < CONFIG.cols - 3; c++) {
+        if (board[r][c] === player && board[r-1][c+1] === player && board[r-2][c+2] === player && board[r-3][c+3] === player) {
+          return [[r,c], [r-1,c+1], [r-2,c+2], [r-3,c+3]];
+        }
+      }
+    }
+    return null;
+  }
+
+  function endGame(winner, winningCells) {
+    isGameOver = true;
+    
+    if (winner !== 0 && winningCells) {
+      // Highlight winning chips
+      winningCells.forEach(([r, c]) => {
+        const idx = r * CONFIG.cols + c;
+        const chip = slotsGrid.children[idx].querySelector('.chip');
+        if (chip) chip.classList.add('winner');
+      });
+      winnerMsg.textContent = winner === 1 ? "PLAYER 1 WINS!" : (CONFIG.mode === 'cpu' ? "CPU WINS!" : "PLAYER 2 WINS!");
+      winnerMsg.style.color = winner === 1 ? CONFIG.p1Color : CONFIG.p2Color;
+      playSound(winner === 1 ? 600 : 200, 'square', 0.5);
+    } else {
+      winnerMsg.textContent = "DRAW!";
+      winnerMsg.style.color = "white";
+    }
+
+    setTimeout(() => {
+      winnerOverlay.classList.add('visible');
+    }, 1000);
+  }
+
+  function playSound(freq, type = 'sine', duration = 0.1) {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+    } catch(e) {
+      // Audio might be blocked
+    }
+  }
+
+  // --- EVENTS ---
+  clickLayer.addEventListener('click', (e) => {
+    if (e.target.classList.contains('col-trigger')) {
+      const col = parseInt(e.target.dataset.col);
+      // Human turn only
+      if (CONFIG.mode === 'cpu' && currentPlayer === 2) return;
+      dropPiece(col);
+    }
+  });
+
+  document.getElementById('reset-btn').addEventListener('click', resetGame);
+  document.getElementById('play-again-btn').addEventListener('click', resetGame);
+
+  // Keyboard support
+  window.addEventListener('keydown', (e) => {
+    if (isGameOver) return;
+    if (CONFIG.mode === 'cpu' && currentPlayer === 2) return;
+
+    const key = parseInt(e.key);
+    if (key >= 1 && key <= 7) {
+      dropPiece(key - 1);
+    }
+  });
+
+  // Start
+  init();
+
+</script>
+</body>
+</html>

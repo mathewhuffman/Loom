@@ -3,10 +3,19 @@
 // API keys NEVER leave the main process
 
 import { contextBridge, ipcRenderer } from 'electron';
+import type { LoomUiStatePatch, ChatMessage } from './src/types/ui-state';
 
 // Detect which layer we're in
 const params = new URLSearchParams(window.location.search);
 const layer = params.get('layer') || 'background';
+
+// Detect if running in dev mode (check URL - dev uses localhost)
+const isDev = window.location.protocol === 'http:' || window.location.hostname === 'localhost';
+
+type BackgroundInteractionConfig = {
+  enabled: boolean;
+  toggleKey: string;
+};
 
 console.log(`🔮 Loom preload ready [${layer}]`);
 console.log('⌨️  Press Ctrl+Alt+S to toggle Summoner');
@@ -44,17 +53,98 @@ contextBridge.exposeInMainWorld('electronAPI', {
 // Expose typed API to renderer
 contextBridge.exposeInMainWorld('loom', {
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🔧 ENVIRONMENT INFO
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Whether running in development mode (npm run dev)
+  isDev,
+  
+  // ═══════════════════════════════════════════════════════════════════════════
   // 🧙 SUMMONER v1 — Secure LLM streaming (keys in main process)
   // ═══════════════════════════════════════════════════════════════════════════
   
   // Request a summon from main process (secure, keys never exposed)
-  summonRequest: (prompt: string, model?: string) => {
-    console.log(`[${layer}] 📤 IPC SEND: summon-request`, prompt, model ? `(model: ${model})` : '(auto)');
-    ipcRenderer.send('summon-request', { prompt, model });
+  summonRequest: (prompt: string, model?: string, linkedKeys?: string[]) => {
+    console.log(`[${layer}] 📤 IPC SEND: summon-request`, prompt, model ? `(model: ${model})` : '(auto)', linkedKeys?.length ? `(${linkedKeys.length} linked keys)` : '');
+    ipcRenderer.send('summon-request', { prompt, model, linkedKeys });
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 💬 CHAT — Conversational mode (no glyph generation)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Request a chat response from main process (no glyph creation)
+  chatRequest: (message: string, model?: string, history?: ChatMessage[]) => {
+    console.log(
+      `[${layer}] 📤 IPC SEND: chat-request`,
+      message.slice(0, 50),
+      model ? `(model: ${model})` : '(auto)',
+      history?.length ? `(+${history.length} history msgs)` : ''
+    );
+    ipcRenderer.send('chat-request', { message, model, history });
+  },
+  
+  // Listen for chat streaming chunks
+  onChatChunk: (callback: (data: { chunk: string; fullResponse: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { chunk: string; fullResponse: string }) => {
+      callback(data);
+    };
+    ipcRenderer.on('chat-chunk', listener);
+    return () => ipcRenderer.removeListener('chat-chunk', listener);
+  },
+  
+  // Listen for chat completion
+  onChatComplete: (callback: (data: { response: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { response: string }) => {
+      console.log(`[${layer}] 📥 IPC RECEIVED: chat-complete`, data?.response?.length + ' chars');
+      callback(data);
+    };
+    ipcRenderer.on('chat-complete', listener);
+    return () => ipcRenderer.removeListener('chat-complete', listener);
+  },
+  
+  // Listen for chat errors
+  onChatError: (callback: (data: { error: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { error: string }) => {
+      console.log(`[${layer}] 📥 IPC RECEIVED: chat-error`, data?.error);
+      callback(data);
+    };
+    ipcRenderer.on('chat-error', listener);
+    return () => ipcRenderer.removeListener('chat-error', listener);
   },
   
   // Get available AI models
   getAvailableModels: () => ipcRenderer.invoke('get-available-models'),
+  loadUIState: () => ipcRenderer.invoke('ui-state:load'),
+  saveUIState: (patch: LoomUiStatePatch) => ipcRenderer.invoke('ui-state:save', patch),
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 💬 CHAT HISTORY — Persistent conversation storage
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Load all chat conversations
+  loadChatHistory: () => ipcRenderer.invoke('chat-history:load'),
+  
+  // Create a new conversation
+  createConversation: (title?: string) => ipcRenderer.invoke('chat-history:create', title),
+  
+  // Update a conversation
+  updateConversation: (conversationId: string, updates: Record<string, unknown>) => 
+    ipcRenderer.invoke('chat-history:update', conversationId, updates),
+  
+  // Add a message to a conversation
+  addMessageToConversation: (conversationId: string, message: ChatMessage) =>
+    ipcRenderer.invoke('chat-history:add-message', conversationId, message),
+  
+  // Update a specific message in a conversation
+  updateMessage: (conversationId: string, messageId: string, updates: Record<string, unknown>) => 
+    ipcRenderer.invoke('chat-history:update-message', conversationId, messageId, updates),
+  
+  // Delete a conversation
+  deleteConversation: (conversationId: string) => ipcRenderer.invoke('chat-history:delete', conversationId),
+  
+  // Set active conversation
+  setActiveConversation: (conversationId: string) => ipcRenderer.invoke('chat-history:set-active', conversationId),
   
   // Inject compiled glyph into background
   summonInject: (
@@ -174,17 +264,37 @@ contextBridge.exposeInMainWorld('loom', {
     ipcRenderer.on('summon-inject', listener);
     return () => ipcRenderer.removeListener('summon-inject', listener);
   },
+  
+  // Listen for summon clear (background clears glyph)
+  onSummonClear: (callback: () => void) => {
+    console.log(`[${layer}] 🎧 Registering listener: summon-clear`);
+    const listener = () => {
+      console.log(`[${layer}] 📥 CALLBACK: summon-clear`);
+      callback();
+    };
+    ipcRenderer.on('summon-clear', listener);
+    return () => ipcRenderer.removeListener('summon-clear', listener);
+  },
 
   // Listen for widget injection (overlay renders draggable widgets)
-  onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string }) => void) => {
+  onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => void) => {
     console.log(`[${layer}] 🎧 Registering listener: widget-inject`);
-    const listener = (_event: Electron.IpcRendererEvent, data: { code: string; prompt: string; glyphId: string }) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => {
       console.log(`[${layer}] 📥 CALLBACK: widget-inject`, data?.prompt);
       callback(data);
     };
     ipcRenderer.on('widget-inject', listener);
     return () => ipcRenderer.removeListener('widget-inject', listener);
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🪟 WINDOW CONTROLS — Mac-style minimize, maximize, close
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  windowControl: (action: 'close' | 'minimize' | 'maximize') => 
+    ipcRenderer.invoke('window-control', action),
+  
+  windowIsMaximized: () => ipcRenderer.invoke('window-is-maximized'),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // 🖱️ MOUSE CAPTURE — Toggle click-through for UI hover
@@ -196,6 +306,17 @@ contextBridge.exposeInMainWorld('loom', {
   
   mouseLeaveUI: () => {
     ipcRenderer.send('overlay-mouse-leave');
+  },
+
+  getBackgroundInteraction: () => ipcRenderer.invoke('background-interaction:get'),
+
+  toggleBackgroundInteraction: (reason?: string) =>
+    ipcRenderer.invoke('background-interaction:toggle', { reason: reason || 'renderer-request' }),
+
+  onBackgroundInteractionUpdate: (callback: (data: BackgroundInteractionConfig) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: BackgroundInteractionConfig) => callback(data);
+    ipcRenderer.on('background-interaction-update', listener);
+    return () => ipcRenderer.removeListener('background-interaction-update', listener);
   },
   
   // Background window mouse capture (for interactive glyphs)
@@ -339,6 +460,7 @@ contextBridge.exposeInMainWorld('loom', {
     prompt: string;
     code: string;
     layer: 'foreground' | 'background';
+    inputs?: Record<string, unknown>;
   } | null) => {
     console.log(`[${layer}] 📤 IPC SEND: widget-layer-change`, widgetId, widgetData?.layer || 'remove');
     ipcRenderer.send('widget-layer-change', { widgetId, widgetData });
@@ -347,18 +469,52 @@ contextBridge.exposeInMainWorld('loom', {
   // Listen for widget layer updates (background window receives this)
   onWidgetLayerUpdate: (callback: (data: { 
     widgetId: string; 
-    widgetData: { id: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background' } | null 
+    widgetData: { id: string; glyphId: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background'; inputs?: Record<string, unknown> } | null 
   }) => void) => {
     console.log(`[${layer}] 🎧 Registering listener: widget-layer-update`);
     const listener = (_event: Electron.IpcRendererEvent, data: { 
       widgetId: string; 
-      widgetData: { id: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background' } | null 
+      widgetData: { id: string; glyphId: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background'; inputs?: Record<string, unknown> } | null 
     }) => {
       console.log(`[${layer}] 📥 CALLBACK: widget-layer-update`, data?.widgetId, data?.widgetData?.layer || 'remove');
       callback(data);
     };
     ipcRenderer.on('widget-layer-update', listener);
     return () => ipcRenderer.removeListener('widget-layer-update', listener);
+  },
+  
+  // Listen for glyph code updates (auto-refresh when glyph is saved)
+  onGlyphUpdated: (callback: (data: { 
+    glyphId: string; 
+    code: string; 
+    inputs?: Record<string, unknown>;
+    changedFile: string;
+    manifest?: { name: string; prompt?: string };
+  }) => void) => {
+    console.log(`[${layer}] 🎧 Registering listener: glyph-updated`);
+    const listener = (_event: Electron.IpcRendererEvent, data: { 
+      glyphId: string; 
+      code: string; 
+      inputs?: Record<string, unknown>;
+      changedFile: string;
+      manifest?: { name: string; prompt?: string };
+    }) => {
+      console.log(`[${layer}] 📥 CALLBACK: glyph-updated`, data?.glyphId, data?.changedFile);
+      callback(data);
+    };
+    ipcRenderer.on('glyph-updated', listener);
+    return () => ipcRenderer.removeListener('glyph-updated', listener);
+  },
+  
+  // Listen for glyph list changes (new glyph created)
+  onGlyphListChanged: (callback: (data: { glyphId: string }) => void) => {
+    console.log(`[${layer}] 🎧 Registering listener: glyph-list-changed`);
+    const listener = (_event: Electron.IpcRendererEvent, data: { glyphId: string }) => {
+      console.log(`[${layer}] 📥 CALLBACK: glyph-list-changed`, data?.glyphId);
+      callback(data);
+    };
+    ipcRenderer.on('glyph-list-changed', listener);
+    return () => ipcRenderer.removeListener('glyph-list-changed', listener);
   },
   
   // Delete a glyph
@@ -442,6 +598,192 @@ contextBridge.exposeInMainWorld('loom', {
     ipcRenderer.invoke('delete-glyph-api-key', glyphId, keyName),
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 🔐 SECURE USER KEY STORAGE — Windows DPAPI encrypted
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get all stored keys (metadata only, no values)
+  getStoredKeys: () => ipcRenderer.invoke('get-stored-keys'),
+  
+  // Save a secure key (name, value, description, category)
+  saveSecureKey: (keyId: string, keyData: {
+    name: string;
+    value: string;
+    description?: string;
+    category?: string;
+  }) => ipcRenderer.invoke('save-secure-key', keyId, keyData),
+  
+  // Get a specific key value (decrypted) - USE WITH CAUTION
+  getSecureKeyValue: (keyId: string) => ipcRenderer.invoke('get-secure-key-value', keyId),
+  
+  // Get multiple key values at once (for prompt context)
+  getSecureKeyValuesBatch: (keyIds: string[]) => ipcRenderer.invoke('get-secure-key-values-batch', keyIds),
+  
+  // Delete a secure key
+  deleteSecureKey: (keyId: string) => ipcRenderer.invoke('delete-secure-key', keyId),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔑 LLM API KEY MANAGEMENT — Grok, Gemini, OpenAI
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get LLM API key status (configured/not, masked values)
+  getLlmApiKeysStatus: () => ipcRenderer.invoke('get-llm-api-keys-status'),
+  
+  // Save an LLM API key (encrypts with Windows DPAPI)
+  saveLlmApiKey: (provider: 'grok' | 'gemini' | 'openai', apiKey: string) =>
+    ipcRenderer.invoke('save-llm-api-key', provider, apiKey),
+  
+  // Delete an LLM API key
+  deleteLlmApiKey: (provider: 'grok' | 'gemini' | 'openai') =>
+    ipcRenderer.invoke('delete-llm-api-key', provider),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔄 AUTO-UPDATER — Check for updates and manage installation
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Check for updates
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  
+  // Download available update
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  
+  // Install downloaded update (quits app and installs)
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  
+  // Get current updater state
+  getUpdaterState: () => ipcRenderer.invoke('updater:get-state'),
+  
+  // Get changelog only
+  getChangelog: () => ipcRenderer.invoke('updater:get-changelog'),
+  
+  // Dismiss update notification
+  dismissUpdate: () => ipcRenderer.invoke('updater:dismiss'),
+  
+  // Listen for updater state changes
+  onUpdaterState: (callback: (state: {
+    checking: boolean;
+    available: boolean;
+    downloading: boolean;
+    downloaded: boolean;
+    progress: number;
+    error: string | null;
+    currentVersion: string;
+    updateInfo: {
+      version: string;
+      releaseDate?: string;
+      releaseNotes?: string;
+    } | null;
+    changelog: Array<{
+      version: string;
+      date: string;
+      sections: Array<{
+        type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+        icon: string;
+        title: string;
+        items: string[];
+      }>;
+    }>;
+  }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: any) => {
+      callback(state);
+    };
+    ipcRenderer.on('updater-state', listener);
+    return () => ipcRenderer.removeListener('updater-state', listener);
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🚀 AUTO-START ON LOGIN
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  getAutoLaunchStatus: () => ipcRenderer.invoke('auto-launch:get-state'),
+  setAutoLaunchStatus: (enabled: boolean) => ipcRenderer.invoke('auto-launch:set-state', enabled),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🧠 MEMORY PROFILER — Deep RAM analysis tool
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get detailed memory snapshot with all processes
+  getMemorySnapshot: () => ipcRenderer.invoke('memory-profiler:get-snapshot'),
+  
+  // Force garbage collection (requires --expose-gc flag)
+  forceGarbageCollection: () => ipcRenderer.invoke('memory-profiler:force-gc'),
+  
+  // Get V8 heap statistics for deeper analysis
+  getHeapStats: () => ipcRenderer.invoke('memory-profiler:get-heap-stats'),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🖥️ MULTI-MONITOR MANAGEMENT — Set backgrounds per monitor
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get all connected displays with metadata
+  getAllDisplays: () => ipcRenderer.invoke('get-all-displays'),
+  
+  // Get primary display info
+  getPrimaryDisplay: () => ipcRenderer.invoke('get-primary-display'),
+  
+  // Move background window to specific display
+  setBackgroundDisplay: (displayId: string) => ipcRenderer.invoke('set-background-display', displayId),
+  
+  // Get current background display info
+  getBackgroundDisplay: () => ipcRenderer.invoke('get-background-display'),
+  
+  // Get saved backgrounds for all monitors
+  getMonitorBackgrounds: () => ipcRenderer.invoke('get-monitor-backgrounds'),
+  
+  // Set background glyph for specific monitor
+  setMonitorBackground: (config: {
+    displayId: string;
+    glyphId?: string;
+    code?: string;
+    prompt?: string;
+    type?: string;
+  }) => ipcRenderer.invoke('set-monitor-background', config),
+  
+  // Clear background for specific monitor
+  clearMonitorBackground: (displayId: string) => ipcRenderer.invoke('clear-monitor-background', displayId),
+  
+  // Clear ALL monitor backgrounds
+  clearAllMonitorBackgrounds: () => ipcRenderer.invoke('clear-all-monitor-backgrounds'),
+  
+  // Get total bounds spanning all displays (for overlay coordinate system)
+  getAllDisplaysBounds: () => ipcRenderer.invoke('get-all-displays-bounds'),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 📦 BUNDLED GLYPHS — Mark glyphs to include in app distribution
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Check if a glyph is marked for bundling
+  isGlyphBundled: (glyphId: string) => ipcRenderer.invoke('glyph:is-bundled', glyphId),
+  
+  // Bundle a glyph (copy to bundled-glyphs folder)
+  bundleGlyph: (glyphId: string) => ipcRenderer.invoke('glyph:bundle', glyphId),
+  
+  // Unbundle a glyph (remove from bundled-glyphs folder)
+  unbundleGlyph: (glyphId: string) => ipcRenderer.invoke('glyph:unbundle', glyphId),
+  
+  // Get list of all bundled glyph IDs
+  getBundledGlyphs: () => ipcRenderer.invoke('glyph:get-bundled-list'),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔗 GLYPH KEY LINKING — Connect vault keys to glyphs
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get linked keys for a glyph (metadata only)
+  getGlyphLinkedKeys: (glyphId: string) => 
+    ipcRenderer.invoke('get-glyph-linked-keys', glyphId),
+  
+  // Link a key from the vault to a glyph
+  linkKeyToGlyph: (glyphId: string, keyId: string) => 
+    ipcRenderer.invoke('link-key-to-glyph', glyphId, keyId),
+  
+  // Unlink a key from a glyph
+  unlinkKeyFromGlyph: (glyphId: string, keyId: string) => 
+    ipcRenderer.invoke('unlink-key-from-glyph', glyphId, keyId),
+  
+  // Get resolved key values for a glyph (used when invoking)
+  getGlyphResolvedKeys: (glyphId: string) => 
+    ipcRenderer.invoke('get-glyph-resolved-keys', glyphId),
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 📁 GLYPH FILE UPLOAD HANDLING
   // ═══════════════════════════════════════════════════════════════════════════
   
@@ -477,19 +819,26 @@ declare global {
   interface Window {
     loom: {
       // Summoner v1 (secure)
-      summonRequest: (prompt: string, model?: string) => void;
+      summonRequest: (prompt: string, model?: string, linkedKeys?: string[]) => void;
       getAvailableModels: () => Promise<Array<{ id: string; name: string; provider: string; available: boolean; icon: string }>>;
       summonInject: (payload: { code: string; prompt: string; type?: string; glyphId?: string; mode?: 'background' | 'widget' } | string, prompt?: string) => void;
-      onSummonChunk: (callback: (data: { chunk: string; fullCode: string }) => void) => void;
-      onSummonComplete: (callback: (data: { code: string; fallback?: boolean }) => void) => void;
-      onSummonError: (callback: (data: { error: string }) => void) => void;
-      onSummonProvider: (callback: (data: { provider: string }) => void) => void;
-      onSummonStart: (callback: (data: { prompt: string }) => void) => void;
-      onSummonInject: (callback: (data: { code: string; prompt: string; mode?: 'background' | 'widget'; glyphId?: string }) => void) => void;
-      onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string }) => void) => void;
+      onSummonChunk: (callback: (data: { chunk: string; fullCode: string }) => void) => (() => void) | void;
+      onSummonComplete: (callback: (data: { code: string; fallback?: boolean; bundle?: { id: string; name: string; type?: string; locations: string[] } | null }) => void) => (() => void) | void;
+      onSummonError: (callback: (data: { error: string }) => void) => (() => void) | void;
+      onSummonProvider: (callback: (data: { provider: string }) => void) => (() => void) | void;
+      onSummonStart: (callback: (data: { prompt: string }) => void) => (() => void) | void;
+      onSummonInject: (callback: (data: { code: string; prompt: string; mode?: 'background' | 'widget'; glyphId?: string }) => void) => (() => void) | void;
+      onSummonClear: (callback: () => void) => (() => void) | void;
+      onWidgetInject: (callback: (data: { code: string; prompt: string; glyphId: string; inputs?: Record<string, unknown> }) => void) => (() => void) | void;
       summonRefine: (data: { prompt: string; code: string; error: string; attempt: number; model?: string }) => void;
-      onSummonRefining: (callback: (data: { attempt: number; error: string }) => void) => void;
+      onSummonRefining: (callback: (data: { attempt: number; error: string }) => void) => (() => void) | void;
       reportGlyphError: (data: { prompt: string; code: string; error: string }) => void;
+      
+      // Chat (conversational, no glyph generation)
+      chatRequest: (message: string, model?: string, history?: ChatMessage[]) => void;
+      onChatChunk: (callback: (data: { chunk: string; fullResponse: string }) => void) => (() => void) | void;
+      onChatComplete: (callback: (data: { response: string }) => void) => (() => void) | void;
+      onChatError: (callback: (data: { error: string }) => void) => (() => void) | void;
       
       // Mouse capture (overlay)
       mouseEnterUI: () => void;
@@ -537,7 +886,7 @@ declare global {
       } | null) => void;
       onWidgetLayerUpdate: (callback: (data: { 
         widgetId: string; 
-        widgetData: { id: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background' } | null 
+        widgetData: { id: string; glyphId: string; code: string; x: number; y: number; width: number; height: number; layer: 'foreground' | 'background'; inputs?: Record<string, unknown> } | null 
       }) => void) => void;
       deleteGlyph: (glyphId: string) => Promise<{ success: boolean }>;
       openGlyphInEditor: (glyphId: string) => void;
@@ -594,6 +943,186 @@ declare global {
         documents: string;
         downloads: string;
       }>;
+      
+      // Secure user key storage
+      getStoredKeys: () => Promise<Array<{
+        id: string;
+        name: string;
+        description?: string;
+        category?: string;
+        createdAt: number;
+        updatedAt: number;
+      }>>;
+      saveSecureKey: (keyId: string, keyData: {
+        name: string;
+        value: string;
+        description?: string;
+        category?: string;
+      }) => Promise<{ success: boolean; error?: string }>;
+      getSecureKeyValue: (keyId: string) => Promise<{ success: boolean; value?: string; error?: string }>;
+      getSecureKeyValuesBatch: (keyIds: string[]) => Promise<{ 
+        success: boolean; 
+        keys?: Record<string, { name: string; value: string }>; 
+        error?: string 
+      }>;
+      deleteSecureKey: (keyId: string) => Promise<{ success: boolean; error?: string }>;
+      
+      // LLM API Key management
+      getLlmApiKeysStatus: () => Promise<{
+        success: boolean;
+        keys?: {
+          grok: { configured: boolean; masked: string | null };
+          gemini: { configured: boolean; masked: string | null };
+          openai: { configured: boolean; masked: string | null };
+        };
+        error?: string;
+      }>;
+      saveLlmApiKey: (provider: 'grok' | 'gemini' | 'openai', apiKey: string) => Promise<{ success: boolean; error?: string }>;
+      deleteLlmApiKey: (provider: 'grok' | 'gemini' | 'openai') => Promise<{ success: boolean; error?: string }>;
+      
+      // Auto-Updater
+      checkForUpdates: () => Promise<{ success: boolean; result?: unknown; error?: string }>;
+      downloadUpdate: () => Promise<{ success: boolean; error?: string }>;
+      installUpdate: () => Promise<{ success: boolean }>;
+      getUpdaterState: () => Promise<{
+        checking: boolean;
+        available: boolean;
+        downloading: boolean;
+        downloaded: boolean;
+        progress: number;
+        error: string | null;
+        currentVersion: string;
+        updateInfo: {
+          version: string;
+          releaseDate?: string;
+          releaseNotes?: string;
+        } | null;
+        changelog: Array<{
+          version: string;
+          date: string;
+          sections: Array<{
+            type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+            icon: string;
+            title: string;
+            items: string[];
+          }>;
+        }>;
+      }>;
+      getChangelog: () => Promise<{
+        changelog: Array<{
+          version: string;
+          date: string;
+          sections: Array<{
+            type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+            icon: string;
+            title: string;
+            items: string[];
+          }>;
+        }>;
+        currentVersion: string;
+      }>;
+      dismissUpdate: () => Promise<{ success: boolean }>;
+      onUpdaterState: (callback: (state: {
+        checking: boolean;
+        available: boolean;
+        downloading: boolean;
+        downloaded: boolean;
+        progress: number;
+        error: string | null;
+        currentVersion: string;
+        updateInfo: {
+          version: string;
+          releaseDate?: string;
+          releaseNotes?: string;
+        } | null;
+        changelog: Array<{
+          version: string;
+          date: string;
+          sections: Array<{
+            type: 'features' | 'improvements' | 'bugfixes' | 'breaking';
+            icon: string;
+            title: string;
+            items: string[];
+          }>;
+        }>;
+      }) => void) => (() => void) | void;
+      
+      // Memory Profiler
+      getMemorySnapshot: () => Promise<{
+        success: boolean;
+        snapshot?: {
+          timestamp: number;
+          entries: Array<{
+            id: string;
+            name: string;
+            type: 'main-process' | 'renderer' | 'webview' | 'gpu' | 'utility' | 'shared';
+            category: string;
+            heapUsed: number;
+            heapTotal: number;
+            external: number;
+            rss: number;
+            arrayBuffers: number;
+            details: string;
+            processId?: number;
+            windowTitle?: string;
+            url?: string;
+          }>;
+          totalHeap: number;
+          totalRss: number;
+          systemFreeMemory: number;
+          systemTotalMemory: number;
+        };
+        error?: string;
+      }>;
+      forceGarbageCollection: () => Promise<{ success: boolean; error?: string }>;
+      getHeapStats: () => Promise<{
+        success: boolean;
+        stats?: Record<string, number>;
+        spaces?: Array<{ space_name: string; space_size: number; space_used_size: number }>;
+        error?: string;
+      }>;
+      
+      // Multi-Monitor Management
+      getAllDisplays: () => Promise<Array<{
+        id: string;
+        label: string;
+        bounds: { x: number; y: number; width: number; height: number };
+        workArea: { x: number; y: number; width: number; height: number };
+        scaleFactor: number;
+        isPrimary: boolean;
+        rotation: number;
+      }>>;
+      getPrimaryDisplay: () => Promise<{
+        id: string;
+        label: string;
+        bounds: { x: number; y: number; width: number; height: number };
+        workArea: { x: number; y: number; width: number; height: number };
+        scaleFactor: number;
+        isPrimary: boolean;
+        rotation: number;
+      }>;
+      setBackgroundDisplay: (displayId: string) => Promise<{ success: boolean; error?: string }>;
+      getBackgroundDisplay: () => Promise<{ displayId: string | null; bounds: { x: number; y: number; width: number; height: number } | null }>;
+      getMonitorBackgrounds: () => Promise<{
+        backgrounds: Array<{
+          displayId: string;
+          glyphId?: string;
+          code?: string;
+          prompt?: string;
+          type?: string;
+        }>;
+        activeDisplayId?: string;
+      }>;
+      setMonitorBackground: (config: {
+        displayId: string;
+        glyphId?: string;
+        code?: string;
+        prompt?: string;
+        type?: string;
+      }) => Promise<{ success: boolean }>;
+      clearMonitorBackground: (displayId: string) => Promise<{ success: boolean }>;
+      clearAllMonitorBackgrounds: () => Promise<{ success: boolean }>;
+      getAllDisplaysBounds: () => Promise<{ x: number; y: number; width: number; height: number }>;
     };
   }
 }

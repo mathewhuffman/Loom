@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764443113992-user",
+    "role": "user",
+    "content": "make a super intuitive and fun etheral music widget, capable of looping, etc and modifying a ton about the widget.",
+    "timestamp": 1764443113992,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764443113992-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Ethereal Loops\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764443113993,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764443113992-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764443113994,
+    "type": "info"
+  }
+]

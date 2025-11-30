@@ -1,0 +1,537 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zen Beach</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #ui-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            text-align: center;
+            color: white;
+            pointer-events: none;
+            transition: opacity 0.5s ease;
+        }
+        #start-btn {
+            pointer-events: auto;
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            padding: 12px 24px;
+            color: white;
+            font-size: 16px;
+            border-radius: 30px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: all 0.3s ease;
+        }
+        #start-btn:hover {
+            background: rgba(255, 255, 255, 0.4);
+            transform: scale(1.05);
+        }
+        .hidden {
+            opacity: 0;
+            pointer-events: none !important;
+        }
+        #controls-hint {
+            position: absolute;
+            bottom: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 12px;
+            z-index: 5;
+            pointer-events: none;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    
+    <div id="ui-overlay">
+        <h1>Zen Beach</h1>
+        <p>Generative Audio & Visuals</p>
+        <button id="start-btn">Enter Experience</button>
+    </div>
+
+    <div id="controls-hint">
+        Move mouse to look around • Adjust inputs for time & waves
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+
+        // --- CONFIGURATION ---
+        const inputs = window.GLYPH_INPUTS || {};
+        const CONFIG = {
+            volume: (inputs.volume !== undefined ? inputs.volume : 50) / 100,
+            timeOfDay: inputs.timeOfDay !== undefined ? inputs.timeOfDay : 17, // 0-24
+            waveIntensity: (inputs.waveIntensity !== undefined ? inputs.waveIntensity : 40) / 100
+        };
+
+        // --- AUDIO ENGINE (Web Audio API) ---
+        // Synthesizing Handpan sounds: Bell-like, metallic, rich harmonics.
+        class HandpanSynth {
+            constructor() {
+                this.ctx = null;
+                this.masterGain = null;
+                this.isPlaying = false;
+                this.nextNoteTime = 0;
+                // Celtic Minor / Kurd scale in D
+                this.scale = [293.66, 329.63, 349.23, 392.00, 440.00, 523.25, 587.33, 659.25, 698.46]; 
+                this.timerID = null;
+            }
+
+            init() {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                this.ctx = new AudioContext();
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.gain.value = CONFIG.volume;
+                this.masterGain.connect(this.ctx.destination);
+                
+                // Add a compressor to glue sounds together
+                const compressor = this.ctx.createDynamicsCompressor();
+                compressor.threshold.value = -24;
+                compressor.knee.value = 30;
+                compressor.ratio.value = 12;
+                compressor.attack.value = 0.003;
+                compressor.release.value = 0.25;
+                
+                // Reverb (Convolution)
+                this.reverb = this.ctx.createConvolver();
+                this.generateReverbImpulse();
+                
+                this.masterGain.disconnect();
+                this.masterGain.connect(compressor);
+                compressor.connect(this.reverb);
+                this.reverb.connect(this.ctx.destination);
+                
+                // Dry path
+                compressor.connect(this.ctx.destination);
+            }
+
+            generateReverbImpulse() {
+                // simple noise impulse for reverb
+                const duration = 3;
+                const decay = 2.0;
+                const rate = this.ctx.sampleRate;
+                const length = rate * duration;
+                const impulse = this.ctx.createBuffer(2, length, rate);
+                const left = impulse.getChannelData(0);
+                const right = impulse.getChannelData(1);
+
+                for (let i = 0; i < length; i++) {
+                    const n = i / length;
+                    // Exponential decay noise
+                    left[i] = (Math.random() * 2 - 1) * Math.pow(1 - n, decay);
+                    right[i] = (Math.random() * 2 - 1) * Math.pow(1 - n, decay);
+                }
+                this.reverb.buffer = impulse;
+            }
+
+            playNote(freq, velocity = 1) {
+                if (!this.ctx) return;
+                
+                const t = this.ctx.currentTime;
+                const dur = 4.0; // Long decay for handpan
+
+                // Fundamental
+                const osc1 = this.ctx.createOscillator();
+                osc1.type = 'sine';
+                osc1.frequency.value = freq;
+
+                // Octave harmonic (strong in handpans)
+                const osc2 = this.ctx.createOscillator();
+                osc2.type = 'sine';
+                osc2.frequency.value = freq * 2;
+
+                // Fifth (compound fifth)
+                const osc3 = this.ctx.createOscillator();
+                osc3.type = 'triangle'; // triangle gives a bit of "metal" edge
+                osc3.frequency.value = freq * 3;
+
+                // Envelope
+                const gain = this.ctx.createGain();
+                
+                // Randomize pan slightly
+                const panner = this.ctx.createStereoPanner();
+                panner.pan.value = (Math.random() * 0.6) - 0.3;
+
+                // Connect graph
+                osc1.connect(gain);
+                osc2.connect(gain);
+                osc3.connect(gain);
+                gain.connect(panner);
+                panner.connect(this.masterGain);
+
+                // Start
+                osc1.start(t);
+                osc2.start(t);
+                osc3.start(t);
+
+                // Amplitudes (Handpan timbre ratios)
+                // Fundamental is loud, octave is warm, fifth is subtle
+                const vel = velocity * 0.3; 
+                
+                // Envelope shaping
+                gain.gain.setValueAtTime(0, t);
+                gain.gain.linearRampToValueAtTime(vel, t + 0.02); // Sharp attack
+                gain.gain.exponentialRampToValueAtTime(vel * 0.1, t + 0.5); // Initial decay
+                gain.gain.exponentialRampToValueAtTime(0.001, t + dur); // Long tail
+
+                // Stop
+                osc1.stop(t + dur);
+                osc2.stop(t + dur);
+                osc3.stop(t + dur);
+
+                // Cleanup
+                setTimeout(() => {
+                    gain.disconnect();
+                    panner.disconnect();
+                }, dur * 1000 + 100);
+            }
+
+            schedule() {
+                const lookahead = 25.0; // ms
+                const scheduleAheadTime = 0.1; // s
+
+                if (this.isPlaying) {
+                    let currentTime = this.ctx.currentTime;
+                    
+                    while (this.nextNoteTime < currentTime + scheduleAheadTime) {
+                        // Pick a random note from scale, favoring lower notes for bass
+                        const r = Math.random();
+                        let noteIdx;
+                        if (r < 0.4) noteIdx = Math.floor(Math.random() * 3); // Root/Third/Fourth
+                        else noteIdx = Math.floor(Math.random() * this.scale.length);
+                        
+                        // Humanize timing and velocity
+                        const velocity = 0.5 + Math.random() * 0.5;
+                        this.playNote(this.scale[noteIdx], velocity);
+
+                        // Next note delay (rhythmic but varying)
+                        // Either 1/8th, 1/4th, or 1/2 note equivalent at ~80BPM
+                        const beat = 60 / 80;
+                        const divisions = [0.5, 0.5, 1, 1, 2];
+                        const div = divisions[Math.floor(Math.random() * divisions.length)];
+                        
+                        this.nextNoteTime += beat * div;
+                    }
+                    
+                    this.timerID = setTimeout(() => this.schedule(), lookahead);
+                }
+            }
+
+            start() {
+                if (this.isPlaying) return;
+                this.init();
+                this.isPlaying = true;
+                this.nextNoteTime = this.ctx.currentTime + 0.1;
+                this.schedule();
+            }
+
+            setVolume(val) {
+                if (this.masterGain) {
+                    this.masterGain.gain.setTargetAtTime(val, this.ctx.currentTime, 0.1);
+                }
+            }
+        }
+
+        const audioEngine = new HandpanSynth();
+
+
+        // --- VISUALS (Three.js) ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        
+        // Camera setup
+        const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 2000);
+        camera.position.set(0, 3, 10);
+        camera.lookAt(0, 1, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        container.appendChild(renderer.domElement);
+
+        // --- SHADERS ---
+
+        // Sky Shader
+        const skyVertexShader = `
+            varying vec3 vWorldPosition;
+            void main() {
+                vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+                vWorldPosition = worldPosition.xyz;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+
+        const skyFragmentShader = `
+            uniform vec3 topColor;
+            uniform vec3 bottomColor;
+            uniform float offset;
+            uniform float exponent;
+            varying vec3 vWorldPosition;
+            void main() {
+                float h = normalize(vWorldPosition + offset).y;
+                gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0)), 1.0);
+            }
+        `;
+
+        // Water Shader
+        const waterVertexShader = `
+            uniform float uTime;
+            uniform float uSpeed;
+            uniform float uHeight;
+            varying vec2 vUv;
+            varying float vElevation;
+
+            // Simple noise function
+            float random (in vec2 st) {
+                return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+            }
+            float noise (in vec2 st) {
+                vec2 i = floor(st);
+                vec2 f = fract(st);
+                float a = random(i);
+                float b = random(i + vec2(1.0, 0.0));
+                float c = random(i + vec2(0.0, 1.0));
+                float d = random(i + vec2(1.0, 1.0));
+                vec2 u = f * f * (3.0 - 2.0 * f);
+                return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+            }
+
+            void main() {
+                vUv = uv;
+                vec3 pos = position;
+                
+                // Multiple sine waves for organic movement
+                float wave1 = sin(pos.x * 0.5 + uTime * uSpeed) * 0.5;
+                float wave2 = cos(pos.z * 0.4 + uTime * uSpeed * 0.8) * 0.5;
+                float wave3 = sin((pos.x + pos.z) * 0.2 + uTime * uSpeed * 1.5) * 0.2;
+                
+                float elevation = (wave1 + wave2 + wave3) * uHeight;
+                pos.y += elevation;
+                vElevation = elevation;
+
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+            }
+        `;
+
+        const waterFragmentShader = `
+            uniform vec3 uDepthColor;
+            uniform vec3 uSurfaceColor;
+            uniform vec3 uSunPosition;
+            varying vec2 vUv;
+            varying float vElevation;
+
+            void main() {
+                // Color mixing based on height
+                float mixStrength = (vElevation + 1.0) * 0.5;
+                vec3 color = mix(uDepthColor, uSurfaceColor, mixStrength);
+                
+                // Fake specular/sparkles
+                // Simplified for performance without full normal mapping
+                float sparkle = step(0.95, sin(vUv.x * 100.0 + vElevation * 10.0) * cos(vUv.y * 100.0));
+                
+                gl_FragColor = vec4(color + sparkle * 0.2, 0.9);
+            }
+        `;
+
+        // --- OBJECTS ---
+
+        // Sky Sphere
+        const skyGeo = new THREE.SphereGeometry(500, 32, 15);
+        const skyMat = new THREE.ShaderMaterial({
+            vertexShader: skyVertexShader,
+            fragmentShader: skyFragmentShader,
+            uniforms: {
+                topColor: { value: new THREE.Color(0x0077ff) },
+                bottomColor: { value: new THREE.Color(0xffffff) },
+                offset: { value: 33 },
+                exponent: { value: 0.6 }
+            },
+            side: THREE.BackSide
+        });
+        const sky = new THREE.Mesh(skyGeo, skyMat);
+        scene.add(sky);
+
+        // Sun
+        const sunGeo = new THREE.SphereGeometry(15, 32, 32);
+        const sunMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+        const sun = new THREE.Mesh(sunGeo, sunMat);
+        scene.add(sun);
+
+        // Water
+        const waterGeo = new THREE.PlaneGeometry(200, 200, 128, 128);
+        const waterMat = new THREE.ShaderMaterial({
+            vertexShader: waterVertexShader,
+            fragmentShader: waterFragmentShader,
+            uniforms: {
+                uTime: { value: 0 },
+                uSpeed: { value: 1.0 },
+                uHeight: { value: 1.0 },
+                uDepthColor: { value: new THREE.Color(0x186691) },
+                uSurfaceColor: { value: new THREE.Color(0x9bd8ff) },
+                uSunPosition: { value: new THREE.Vector3(0, 10, -50) }
+            },
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+        const water = new THREE.Mesh(waterGeo, waterMat);
+        water.rotation.x = -Math.PI / 2;
+        scene.add(water);
+
+        // --- LIGHTING & ENVIRONMENT UPDATER ---
+        
+        function updateEnvironment(time) {
+            // Normalize time 0-24
+            const t = time % 24;
+            
+            // Calculate Sun Position
+            // Simple arc: rises at 6, sets at 18
+            const angle = ((t - 6) / 12) * Math.PI; // 0 to PI during day
+            
+            let sunY, sunZ;
+            
+            if (t >= 6 && t <= 18) {
+                // Day
+                sunY = Math.sin(angle) * 100;
+                sunZ = -Math.cos(angle) * 100 - 50;
+                sun.visible = true;
+            } else {
+                // Night
+                sunY = -50; 
+                sunZ = -100;
+                sun.visible = false;
+            }
+            
+            sun.position.set(0, sunY, sunZ);
+            waterMat.uniforms.uSunPosition.value.copy(sun.position);
+
+            // Colors
+            if (t < 5 || t > 19) {
+                // Night
+                skyMat.uniforms.topColor.value.setHSL(0.6, 0.7, 0.1); // Dark blue
+                skyMat.uniforms.bottomColor.value.setHSL(0.6, 0.3, 0.1);
+                waterMat.uniforms.uDepthColor.value.setHSL(0.6, 0.8, 0.1);
+                waterMat.uniforms.uSurfaceColor.value.setHSL(0.6, 0.5, 0.2);
+                sunMat.color.setHSL(0.1, 1, 0.5);
+            } else if (t < 7 || t > 17) {
+                // Sunrise/Sunset
+                skyMat.uniforms.topColor.value.setHSL(0.6, 0.5, 0.3);
+                skyMat.uniforms.bottomColor.value.setHSL(0.05, 0.8, 0.6); // Orange/Pink
+                waterMat.uniforms.uDepthColor.value.setHSL(0.6, 0.8, 0.2);
+                waterMat.uniforms.uSurfaceColor.value.setHSL(0.05, 0.8, 0.6); // Reflecting sunset
+                sunMat.color.setHSL(0.05, 1, 0.6);
+            } else {
+                // Day
+                skyMat.uniforms.topColor.value.setHSL(0.6, 0.6, 0.6);
+                skyMat.uniforms.bottomColor.value.setHSL(0.55, 0.3, 0.9);
+                waterMat.uniforms.uDepthColor.value.setHSL(0.6, 0.8, 0.3);
+                waterMat.uniforms.uSurfaceColor.value.setHSL(0.5, 0.4, 0.8);
+                sunMat.color.setHSL(0.12, 1, 0.8);
+            }
+        }
+
+        // --- INPUT HANDLING ---
+
+        let mouseX = 0;
+        let mouseY = 0;
+        let targetRotationX = 0;
+        let targetRotationY = 0;
+
+        window.addEventListener('mousemove', (e) => {
+            // Normalized coordinates -1 to 1
+            mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+            mouseY = (e.clientY / window.innerHeight) * 2 - 1;
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start Button
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.getElementById('ui-overlay').classList.add('hidden');
+            audioEngine.start();
+        });
+
+        // Watch for config changes in real-time if the environment supports it
+        // Or just poll them in the loop if they are updated on window
+        
+        // --- ANIMATION LOOP ---
+        
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const elapsedTime = clock.getElapsedTime();
+
+            // Update Config from Inputs (in case they change)
+            const newInputs = window.GLYPH_INPUTS || {};
+            const timeVal = newInputs.timeOfDay !== undefined ? newInputs.timeOfDay : 17;
+            const waveVal = newInputs.waveIntensity !== undefined ? newInputs.waveIntensity : 40;
+            const volVal = newInputs.volume !== undefined ? newInputs.volume : 50;
+
+            // Update Audio Volume
+            audioEngine.setVolume(volVal / 100);
+
+            // Update Environment
+            updateEnvironment(timeVal);
+
+            // Update Water
+            waterMat.uniforms.uTime.value = elapsedTime;
+            waterMat.uniforms.uSpeed.value = 0.5 + (waveVal / 100) * 2.0;
+            waterMat.uniforms.uHeight.value = 0.5 + (waveVal / 100) * 1.5;
+
+            // Camera Parallax
+            targetRotationY = mouseX * 0.5; // Look left/right
+            targetRotationX = mouseY * 0.2; // Look up/down
+
+            camera.rotation.y += (targetRotationY - camera.rotation.y) * 0.05;
+            camera.rotation.x += (targetRotationX - camera.rotation.x) * 0.05;
+
+            // Gentle float for camera
+            camera.position.y = 3 + Math.sin(elapsedTime * 0.5) * 0.2;
+
+            renderer.render(scene, camera);
+        }
+
+        // Initial render
+        updateEnvironment(CONFIG.timeOfDay);
+        animate();
+
+    </script>
+</body>
+</html>

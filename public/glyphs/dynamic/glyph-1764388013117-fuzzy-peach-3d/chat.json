@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764388038360-user",
+    "role": "user",
+    "content": "generate a fuzzy peach rendered in realistic 3d",
+    "timestamp": 1764388038360,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764388038360-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Fuzzy Peach 3D\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764388038361,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764388038360-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764388038362,
+    "type": "info"
+  }
+]

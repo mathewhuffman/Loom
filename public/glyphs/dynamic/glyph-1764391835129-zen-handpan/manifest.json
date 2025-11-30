@@ -1,0 +1,57 @@
+{
+  "id": "glyph-1764391835129-zen-handpan",
+  "name": "Zen Handpan",
+  "prompt": "make a super intuitive and fun handpan music widget, capable of looping, etc",
+  "entry": "index.html",
+  "bundled": true,
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-29T04:51:28.763Z",
+  "inputs": [
+    {
+      "id": "scaleType",
+      "type": "select",
+      "label": "Tuning Scale",
+      "options": [
+        {
+          "value": "kurd",
+          "label": "D Kurd (Melancholic)"
+        },
+        {
+          "value": "celtic",
+          "label": "Celtic Minor (Mystical)"
+        },
+        {
+          "value": "hijaz",
+          "label": "C# Hijaz (Exotic)"
+        },
+        {
+          "value": "akebono",
+          "label": "Akebono (Japanese)"
+        }
+      ],
+      "defaultValue": "kurd",
+      "value": "akebono"
+    },
+    {
+      "id": "reverbAmt",
+      "type": "range",
+      "label": "Reverb Atmosphere",
+      "min": 0,
+      "max": 100,
+      "defaultValue": 50,
+      "value": 100
+    },
+    {
+      "id": "colorTheme",
+      "type": "color",
+      "label": "Instrument Color",
+      "defaultValue": "#4a5568",
+      "value": "#edbd0c"
+    }
+  ],
+  "icon": "🛸"
+}

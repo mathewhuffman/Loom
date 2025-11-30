@@ -1,0 +1,60 @@
+{
+  "id": "glyph-1764394587634-neon-loop-piano",
+  "name": "Neon Loop Piano",
+  "prompt": "ake a super intuitive and fun piano music widget, capable of looping, etc",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-29T05:37:32.632Z",
+  "inputs": [
+    {
+      "id": "waveform",
+      "type": "select",
+      "label": "Synth Tone",
+      "options": [
+        {
+          "value": "triangle",
+          "label": "Smooth (Triangle)"
+        },
+        {
+          "value": "sine",
+          "label": "Pure (Sine)"
+        },
+        {
+          "value": "square",
+          "label": "Retro (Square)"
+        },
+        {
+          "value": "sawtooth",
+          "label": "Sharp (Sawtooth)"
+        }
+      ],
+      "defaultValue": "triangle",
+      "value": "sawtooth"
+    },
+    {
+      "id": "releaseTime",
+      "type": "range",
+      "label": "Release (Fade Out)",
+      "min": 0.1,
+      "max": 3,
+      "step": 0.1,
+      "defaultValue": 0.5,
+      "value": 1.4
+    },
+    {
+      "id": "delayAmt",
+      "type": "range",
+      "label": "Echo Amount",
+      "min": 0,
+      "max": 0.8,
+      "step": 0.05,
+      "defaultValue": 0.3,
+      "value": 0.25
+    }
+  ],
+  "icon": "🎹"
+}

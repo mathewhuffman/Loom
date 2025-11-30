@@ -56,40 +56,42 @@ class Summoner {
   <head>
     <meta charset="UTF-8" />
     <style>
-      html, body { margin:0; height:100%; background:transparent; font-family:'JetBrains Mono','Fira Code',monospace; }
+      html, body { margin:0; height:100%; background:transparent; font-family:'Inter','Helvetica Neue',sans-serif; }
       .wrapper {
         position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-        background: radial-gradient(circle at top, rgba(15,0,40,0.8), rgba(0,0,12,0.95));
+        background: radial-gradient(ellipse at center, rgba(30,30,45,0.9), rgba(15,15,25,0.98));
       }
       .glyph {
         width: min(70vw, 480px);
         height: min(70vw, 480px);
         border-radius: 50%;
-        border: 3px solid rgba(0,255,255,0.4);
-        box-shadow: 0 0 45px rgba(255,0,255,0.45);
+        border: 2px solid rgba(100, 149, 237, 0.5);
+        box-shadow: 0 0 60px rgba(100, 149, 237, 0.2);
         position: relative;
-        animation: spin 16s linear infinite;
+        animation: spin 20s linear infinite;
       }
       .glyph::after {
         content: '${words}';
         position: absolute;
         top: 50%; left: 50%;
         transform: translate(-50%, -50%);
-        letter-spacing: 0.4em;
-        color: #00ffff;
-        text-shadow: 0 0 15px rgba(0,255,255,0.75);
+        letter-spacing: 0.3em;
+        font-size: 0.9em;
+        font-weight: 300;
+        color: rgba(255,255,255,0.85);
+        text-shadow: 0 2px 20px rgba(100, 149, 237, 0.5);
       }
       .pulse {
         position:absolute; inset:10%;
-        border: 1px dashed rgba(255,0,255,0.4);
+        border: 1px solid rgba(255,255,255,0.15);
         border-radius:50%;
         animation: pulse 4s ease-in-out infinite;
       }
       @keyframes spin { to { transform: rotate(360deg); } }
       @keyframes pulse {
-        0% { transform: scale(0.9); opacity:0.4; }
-        50% { transform: scale(1.1); opacity:0.9; }
-        100% { transform: scale(0.9); opacity:0.4; }
+        0% { transform: scale(0.9); opacity:0.3; }
+        50% { transform: scale(1.1); opacity:0.7; }
+        100% { transform: scale(0.9); opacity:0.3; }
       }
     </style>
   </head>

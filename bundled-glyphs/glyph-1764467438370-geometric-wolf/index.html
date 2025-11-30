@@ -1,0 +1,264 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geometric Wolf</title>
+    <style>
+        :root {
+            --primary: #3b4d61;
+            --secondary: #1f2a36;
+            --eyes: #00ffd5;
+            --bg: #0d0d12;
+            --anim-speed: 3s;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg);
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: sans-serif;
+            transition: background-color 0.5s ease;
+        }
+
+        #scene {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        svg {
+            width: 80vmin;
+            height: 80vmin;
+            filter: drop-shadow(0 0 20px rgba(0,0,0,0.5));
+            transition: transform 0.1s ease-out;
+        }
+
+        /* Polygon Styles */
+        .poly-base {
+            fill: var(--secondary);
+            stroke: rgba(255,255,255,0.05);
+            stroke-width: 0.5;
+            transition: fill 0.5s ease;
+        }
+
+        .poly-light {
+            fill: var(--primary);
+            stroke: rgba(255,255,255,0.05);
+            stroke-width: 0.5;
+            transition: fill 0.5s ease;
+        }
+
+        .poly-dark {
+            fill: rgba(0,0,0,0.3);
+        }
+
+        .eye {
+            fill: var(--eyes);
+            filter: drop-shadow(0 0 5px var(--eyes));
+            transition: fill 0.3s ease;
+            animation: blink 4s infinite ease-in-out;
+        }
+
+        .nose {
+            fill: #000;
+        }
+
+        /* Animations */
+        @keyframes breathe {
+            0%, 100% { transform: scale(1) translateY(0); }
+            50% { transform: scale(1.02) translateY(-5px); }
+        }
+
+        @keyframes blink {
+            0%, 45%, 55%, 100% { opacity: 1; transform: scaleY(1); }
+            50% { opacity: 0.1; transform: scaleY(0.1); }
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        #wolf-group {
+            transform-origin: center;
+            /* Animation duration set by JS */
+            animation: breathe var(--anim-speed) infinite ease-in-out;
+        }
+
+        /* Particle Dust */
+        .particle {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            opacity: 0.1;
+            pointer-events: none;
+            animation: float-particle 10s linear infinite;
+        }
+
+        @keyframes float-particle {
+            0% { transform: translateY(100vh) translateX(0); opacity: 0; }
+            50% { opacity: 0.3; }
+            100% { transform: translateY(-100px) translateX(20px); opacity: 0; }
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="scene">
+        <!-- Particles container -->
+        <div id="particles"></div>
+
+        <svg viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">
+            <defs>
+                <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:var(--primary);stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:var(--secondary);stop-opacity:1" />
+                </linearGradient>
+            </defs>
+            
+            <g id="wolf-group">
+                <!-- Ears -->
+                <path class="poly-base" d="M-30 -50 L-50 -90 L-70 -40 Z" /> <!-- Left Ear Back -->
+                <path class="poly-light" d="M-30 -50 L-50 -90 L-40 -30 Z" /> <!-- Left Ear Front -->
+                <path class="poly-base" d="M30 -50 L50 -90 L70 -40 Z" />   <!-- Right Ear Back -->
+                <path class="poly-light" d="M30 -50 L50 -90 L40 -30 Z" />   <!-- Right Ear Front -->
+
+                <!-- Neck / Mane Background -->
+                <path class="poly-base" d="M-40 20 L-60 60 L-20 70 Z" />
+                <path class="poly-base" d="M40 20 L60 60 L20 70 Z" />
+                <path class="poly-dark" d="M-20 70 L0 80 L20 70 L0 50 Z" />
+
+                <!-- Main Face Structure -->
+                <!-- Forehead -->
+                <path class="poly-light" d="M0 -50 L-30 -50 L0 -20 Z" />
+                <path class="poly-light" d="M0 -50 L30 -50 L0 -20 Z" />
+                
+                <!-- Cheeks -->
+                <path class="poly-base" d="M-30 -50 L-60 -20 L-30 -10 Z" />
+                <path class="poly-base" d="M30 -50 L60 -20 L30 -10 Z" />
+                <path class="poly-light" d="M-60 -20 L-50 20 L-30 -10 Z" />
+                <path class="poly-light" d="M60 -20 L50 20 L30 -10 Z" />
+
+                <!-- Snout Bridge -->
+                <path class="poly-light" d="M0 -20 L-15 10 L0 30 Z" />
+                <path class="poly-light" d="M0 -20 L15 10 L0 30 Z" />
+                
+                <!-- Snout Sides -->
+                <path class="poly-base" d="M-15 10 L-30 -10 L-25 30 Z" />
+                <path class="poly-base" d="M15 10 L30 -10 L25 30 Z" />
+
+                <!-- Jaw -->
+                <path class="poly-light" d="M-25 30 L-10 50 L0 30 Z" />
+                <path class="poly-light" d="M25 30 L10 50 L0 30 Z" />
+                <path class="poly-base" d="M-50 20 L-25 30 L-10 50 Z" />
+                <path class="poly-base" d="M50 20 L25 30 L10 50 Z" />
+                
+                <!-- Chin -->
+                <path class="poly-dark" d="M-10 50 L0 65 L10 50 Z" />
+
+                <!-- Nose -->
+                <path class="nose" d="M-8 32 L8 32 L0 42 Z" />
+
+                <!-- Eyes -->
+                <g class="eyes-group">
+                    <!-- Sclera/Socket -->
+                    <path class="poly-dark" d="M-30 -10 L-15 10 L-10 0 Z" />
+                    <path class="poly-dark" d="M30 -10 L15 10 L10 0 Z" />
+                    
+                    <!-- Actual Eyes -->
+                    <path class="eye" d="M-28 -5 L-15 2 L-18 -8 Z" />
+                    <path class="eye" d="M28 -5 L15 2 L18 -8 Z" />
+                </g>
+            </g>
+        </svg>
+    </div>
+
+    <script type="module">
+        const root = document.documentElement;
+        const wolfGroup = document.getElementById('wolf-group');
+        const particleContainer = document.getElementById('particles');
+
+        // Input Handling
+        function updateInputs() {
+            const inputs = window.GLYPH_INPUTS || {};
+            
+            // Colors
+            root.style.setProperty('--primary', inputs.primaryColor || '#3b4d61');
+            root.style.setProperty('--secondary', inputs.secondaryColor || '#1f2a36');
+            root.style.setProperty('--eyes', inputs.eyeColor || '#00ffd5');
+            root.style.setProperty('--bg', inputs.bgColor || '#0d0d12');
+
+            // Speed
+            const speed = inputs.breathSpeed !== undefined ? inputs.breathSpeed : 2;
+            const duration = speed > 0 ? (6 / speed) + 's' : '0s';
+            root.style.setProperty('--anim-speed', duration);
+        }
+
+        // Initialize inputs
+        updateInputs();
+
+        // Listen for updates (mocking a listener pattern if the environment supports it, 
+        // otherwise it just runs once on load. In a real loom environment, we might poll or use an event)
+        // For this standalone, we'll set up a poller just in case inputs change dynamically
+        setInterval(updateInputs, 1000);
+
+
+        // Mouse Parallax Effect
+        document.addEventListener('mousemove', (e) => {
+            const x = (e.clientX - window.innerWidth / 2) / window.innerWidth;
+            const y = (e.clientY - window.innerHeight / 2) / window.innerHeight;
+
+            // Move the whole head slightly
+            const moveX = x * 10;
+            const moveY = y * 10;
+            
+            // Rotate slightly
+            const rotX = -y * 10;
+            const rotY = x * 10;
+
+            wolfGroup.style.transform = `translate(${moveX}px, ${moveY}px) rotateX(${rotX}deg) rotateY(${rotY}deg)`;
+        });
+
+        // Reset on mouse leave
+        document.addEventListener('mouseleave', () => {
+            wolfGroup.style.transform = 'translate(0,0) rotateX(0) rotateY(0)';
+        });
+
+
+        // Particle System
+        function createParticles() {
+            const count = 30;
+            for (let i = 0; i < count; i++) {
+                const p = document.createElement('div');
+                p.classList.add('particle');
+                resetParticle(p);
+                particleContainer.appendChild(p);
+            }
+        }
+
+        function resetParticle(p) {
+            const size = Math.random() * 3 + 1;
+            p.style.width = `${size}px`;
+            p.style.height = `${size}px`;
+            p.style.left = `${Math.random() * 100}%`;
+            p.style.animationDuration = `${Math.random() * 10 + 5}s`;
+            p.style.animationDelay = `-${Math.random() * 10}s`;
+        }
+
+        createParticles();
+
+    </script>
+</body>
+</html>

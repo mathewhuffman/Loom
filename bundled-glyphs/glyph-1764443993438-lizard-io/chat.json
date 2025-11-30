@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764444061483-user",
+    "role": "user",
+    "content": "Make me slither.io app but instead of snakes it's lizards. Include inputs to change aspects of the game that is useful. Have ambient music and sound effects.",
+    "timestamp": 1764444061483,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764444061483-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Lizard.io\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764444061484,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764444061483-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764444061485,
+    "type": "info"
+  }
+]

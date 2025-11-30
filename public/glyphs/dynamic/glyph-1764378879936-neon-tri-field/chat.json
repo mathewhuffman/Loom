@@ -1,0 +1,23 @@
+[
+  {
+    "id": "msg-1764378900340-user",
+    "role": "user",
+    "content": "generate a triangle 3d particle field",
+    "timestamp": 1764378900340,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764378900340-assistant",
+    "role": "assistant",
+    "content": "✨ Created \"Neon Tri-Field\"\n\nGenerated 1 file(s): index.html",
+    "timestamp": 1764378900341,
+    "type": "generation"
+  },
+  {
+    "id": "msg-1764378900340-system",
+    "role": "system",
+    "content": "Model: Gemini 3 Pro",
+    "timestamp": 1764378900342,
+    "type": "info"
+  }
+]

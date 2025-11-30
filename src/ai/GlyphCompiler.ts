@@ -12,6 +12,65 @@ const THREE_CDN = 'https://esm.sh/three@0.168.0';
 const R3F_CDN = 'https://esm.sh/@react-three/fiber@8.15.15';
 const DREI_CDN = 'https://esm.sh/@react-three/drei@9.88.18';
 
+const LOOM_BRIDGE_SCRIPT = `<script>
+(function() {
+  // Create a bridge to parent window's loom API via postMessage
+  const pendingRequests = new Map();
+  let requestId = 0;
+  
+  // Listen for responses from parent
+  window.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'loom-response') {
+      const { id, result } = event.data;
+      const resolver = pendingRequests.get(id);
+      if (resolver) {
+        resolver(result);
+        pendingRequests.delete(id);
+      }
+    }
+  });
+  
+  // Helper to send request to parent and wait for response
+  function sendRequest(method, args) {
+    return new Promise((resolve) => {
+      const id = ++requestId;
+      pendingRequests.set(id, resolve);
+      window.parent.postMessage({
+        type: 'loom-request',
+        id,
+        method,
+        args
+      }, '*');
+      // Timeout after 30s
+      setTimeout(() => {
+        if (pendingRequests.has(id)) {
+          pendingRequests.delete(id);
+          resolve({ success: false, error: 'Request timed out' });
+        }
+      }, 30000);
+    });
+  }
+  
+  // Create window.loom API that mirrors the real one
+  window.loom = {
+    readLocalFile: (path) => sendRequest('readLocalFile', [path]),
+    listDirectory: (path) => sendRequest('listDirectory', [path]),
+    getSystemPaths: () => sendRequest('getSystemPaths', []),
+    // Stub other methods that might be called
+    readGlyphFile: (glyphId, fileName) => sendRequest('readGlyphFile', [glyphId, fileName]),
+    saveGlyphFile: (glyphId, fileName, content) => sendRequest('saveGlyphFile', [glyphId, fileName, content]),
+  };
+  
+  console.log('[Glyph] 🔮 Loom bridge initialized');
+})();
+</script>`;
+
+function buildInputsScript(inputs?: Record<string, unknown>): string {
+  if (!inputs) return '';
+  const serialized = JSON.stringify(inputs).replace(/<\/(script)/gi, '<\\/$1');
+  return `<script>window.GLYPH_INPUTS = ${serialized};</script>`;
+}
+
 export interface GlyphIframeOptions {
   glyphId?: string;
   glyphType?: string;
@@ -154,69 +213,12 @@ function ensureHtmlDocument(code: string, options?: GlyphIframeOptions): string 
     * { box-sizing: border-box; }
   `;
 
-  // Inject GLYPH_INPUTS as a global variable for the glyph to access
-  const inputsScript = options?.inputs 
-    ? `<script>window.GLYPH_INPUTS = ${JSON.stringify(options.inputs)};</script>`
-    : '';
-  
-  // Bridge script that creates window.loom API for iframes via postMessage
-  const loomBridgeScript = `<script>
-(function() {
-  // Create a bridge to parent window's loom API via postMessage
-  const pendingRequests = new Map();
-  let requestId = 0;
-  
-  // Listen for responses from parent
-  window.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'loom-response') {
-      const { id, result } = event.data;
-      const resolver = pendingRequests.get(id);
-      if (resolver) {
-        resolver(result);
-        pendingRequests.delete(id);
-      }
-    }
-  });
-  
-  // Helper to send request to parent and wait for response
-  function sendRequest(method, args) {
-    return new Promise((resolve) => {
-      const id = ++requestId;
-      pendingRequests.set(id, resolve);
-      window.parent.postMessage({
-        type: 'loom-request',
-        id,
-        method,
-        args
-      }, '*');
-      // Timeout after 30s
-      setTimeout(() => {
-        if (pendingRequests.has(id)) {
-          pendingRequests.delete(id);
-          resolve({ success: false, error: 'Request timed out' });
-        }
-      }, 30000);
-    });
-  }
-  
-  // Create window.loom API that mirrors the real one
-  window.loom = {
-    readLocalFile: (path) => sendRequest('readLocalFile', [path]),
-    listDirectory: (path) => sendRequest('listDirectory', [path]),
-    getSystemPaths: () => sendRequest('getSystemPaths', []),
-    // Stub other methods that might be called
-    readGlyphFile: (glyphId, fileName) => sendRequest('readGlyphFile', [glyphId, fileName]),
-    saveGlyphFile: (glyphId, fileName, content) => sendRequest('saveGlyphFile', [glyphId, fileName, content]),
-  };
-  
-  console.log('[Glyph] 🔮 Loom bridge initialized');
-})();
-</script>`;
+  const inputsScript = buildInputsScript(options?.inputs);
 
   if (/<!doctype/i.test(code) || /<html/i.test(code)) {
     // Insert inputs script and loom bridge right after <head> or before first <script>
     let result = code;
-    const injectScripts = loomBridgeScript + inputsScript;
+    const injectScripts = LOOM_BRIDGE_SCRIPT + inputsScript;
     if (result.includes('<head>')) {
       result = result.replace('<head>', `<head>${injectScripts}`);
     } else if (result.includes('<body>')) {
@@ -233,7 +235,7 @@ function ensureHtmlDocument(code: string, options?: GlyphIframeOptions): string 
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    ${loomBridgeScript}
+    ${LOOM_BRIDGE_SCRIPT}
     ${inputsScript}
     <style>${baseStyles}</style>
   </head>
@@ -270,12 +272,15 @@ function buildTsxHtmlDocument(functionBody: string, options?: GlyphIframeOptions
     glyphId: options?.glyphId || '',
     glyphType: options?.glyphType || 'object',
   });
+  const inputsScript = buildInputsScript(options?.inputs);
 
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    ${LOOM_BRIDGE_SCRIPT}
+    ${inputsScript}
     <style>
       html, body, #root {
         margin: 0;
@@ -305,7 +310,8 @@ function buildTsxHtmlDocument(functionBody: string, options?: GlyphIframeOptions
       const factory = new Function('React', 'ReactThreeFiber', 'ThreeJS', 'Drei', functionBody);
       const Component = factory(React, { useFrame, useThree }, ThreeJS, Drei);
       const glyphMeta = ${glyphProps};
-      const defaultProps = Object.assign({ position: [0, 0, 0], scale: 1 }, glyphMeta);
+      const glyphInputs = window.GLYPH_INPUTS || {};
+      const defaultProps = Object.assign({ position: [0, 0, 0], scale: 1 }, glyphMeta, { inputs: glyphInputs });
 
       const root = createRoot(document.getElementById('root'));
       root.render(

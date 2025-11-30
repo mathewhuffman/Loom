@@ -1,0 +1,45 @@
+{
+  "id": "glyph-1764388013117-fuzzy-peach-3d",
+  "name": "Fuzzy Peach 3D",
+  "prompt": "generate a fuzzy peach rendered in realistic 3d",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-29T03:47:18.359Z",
+  "inputs": [
+    {
+      "id": "rotationSpeed",
+      "type": "range",
+      "label": "Rotation Speed",
+      "min": 0,
+      "max": 2,
+      "step": 0.1,
+      "defaultValue": 0.5
+    },
+    {
+      "id": "fuzzStrength",
+      "type": "range",
+      "label": "Fuzz Intensity",
+      "min": 0,
+      "max": 2,
+      "step": 0.1,
+      "defaultValue": 1
+    },
+    {
+      "id": "baseColor",
+      "type": "color",
+      "label": "Base Color",
+      "defaultValue": "#ffcc66"
+    },
+    {
+      "id": "blushColor",
+      "type": "color",
+      "label": "Blush Color",
+      "defaultValue": "#ff4444"
+    }
+  ],
+  "icon": "🍑"
+}

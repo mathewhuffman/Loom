@@ -1,0 +1,14 @@
+{
+  "id": "glyph-1764271181990-neon-file-deck",
+  "name": "Neon File Deck",
+  "prompt": "a file view/editor widget where I can input what file I want it to open and viewed on, or I can drag in another file to open it in the widget.. Also, have a modern design.",
+  "entry": "index.html",
+  "files": [
+    "manifest.json",
+    "index.html"
+  ],
+  "model": "Gemini 3 Pro",
+  "savedAt": "2025-11-27T19:19:41.990Z",
+  "bundled": true,
+  "version": "1.0.0"
+}

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synthwave Ocean</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #050011;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, transparent 50%, rgba(0,0,0,0.8) 100%);
+            pointer-events: none;
+            z-index: 1;
+        }
+        /* CRT Scanline effect */
+        .scanlines {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            z-index: 2;
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.2) 50%,
+                rgba(0,0,0,0.2)
+            );
+            background-size: 100% 4px;
+            animation: scroll 10s linear infinite;
+        }
+        @keyframes scroll {
+            0% { background-position: 0 0; }
+            100% { background-position: 0 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="scanlines"></div>
+    <div id="overlay"></div>
+    <canvas id="scene"></canvas>
+
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.168.0';
+
+        // --- Configuration ---
+        const COLORS = {
+            background: 0x050011,
+            grid: 0xff00ff,      // Neon Pink
+            grid2: 0x00ffff,     // Cyan
+            sunTop: new THREE.Color(0xffff00), // Yellow
+            sunBot: new THREE.Color(0xff0066)  // Red/Pink
+        };
+
+        // --- Scene Setup ---
+        const canvas = document.getElementById('scene');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(COLORS.background);
+        // Fog to fade the grid into the horizon
+        scene.fog = new THREE.FogExp2(COLORS.background, 0.015);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 5, 20);
+        camera.lookAt(0, 2, 0);
+
+        // --- The Retro Sun ---
+        // Using a custom shader to create the horizontal stripes effect
+        const sunGeometry = new THREE.CircleGeometry(25, 64);
+        const sunMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                colorTop: { value: COLORS.sunTop },
+                colorBot: { value: COLORS.sunBot }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 colorTop;
+                uniform vec3 colorBot;
+                varying vec2 vUv;
+                void main() {
+                    // Gradient
+                    vec3 color = mix(colorBot, colorTop, vUv.y);
+                    
+                    // Stripes logic
+                    float y = vUv.y;
+                    float stripe = sin(y * 80.0);
+                    // Cutout bands, getting thicker towards bottom
+                    float threshold = 0.8 - (y * 0.6);
+                    if (stripe > threshold && y < 0.6) discard;
+
+                    gl_FragColor = vec4(color, 1.0);
+                }
+            `,
+            transparent: true
+        });
+        const sun = new THREE.Mesh(sunGeometry, sunMaterial);
+        sun.position.z = -80;
+        sun.position.y = 10;
+        scene.add(sun);
+
+        // --- The Synthwave Ocean (Moving Grid) ---
+        // We use two planes: one filled black to block view, one wireframe on top
+        const planeWidth = 200;
+        const planeHeight = 200;
+        const planeSegments = 60;
+        
+        const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight, planeSegments, planeSegments);
+        
+        // Displace vertices to create "waves" or "mountains"
+        // We will animate this in the loop by shifting the offset
+        const basePositionAttribute = geometry.attributes.position.clone();
+
+        const wireframeMaterial = new THREE.MeshBasicMaterial({
+            color: COLORS.grid,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.5
+        });
+
+        const solidMaterial = new THREE.MeshBasicMaterial({
+            color: 0x0a001a
+        });
+
+        const terrain = new THREE.Mesh(geometry, wireframeMaterial);
+        const terrainSolid = new THREE.Mesh(geometry, solidMaterial);
+        
+        terrain.rotation.x = -Math.PI / 2;
+        terrainSolid.rotation.x = -Math.PI / 2;
+        
+        // Shift slightly to avoid z-fighting
+        terrainSolid.position.y = -0.1;
+
+        scene.add(terrain);
+        scene.add(terrainSolid);
+
+        // --- Stars ---
+        const starsGeometry = new THREE.BufferGeometry();
+        const starsCount = 1000;
+        const posArray = new Float32Array(starsCount * 3);
+        
+        for(let i = 0; i < starsCount * 3; i++) {
+            posArray[i] = (Math.random() - 0.5) * 400;
+        }
+        
+        starsGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        const starsMaterial = new THREE.PointsMaterial({
+            size: 0.5,
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.8
+        });
+        const stars = new THREE.Points(starsGeometry, starsMaterial);
+        stars.position.y = 20;
+        stars.position.z = -50;
+        scene.add(stars);
+
+        // --- Animation Loop ---
+        let time = 0;
+        const speed = 0.15;
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            time += 0.01;
+
+            // Animate Terrain
+            // We manually update vertex Z positions based on sine waves to create rolling hills
+            const positions = terrain.geometry.attributes.position;
+            const basePositions = basePositionAttribute;
+            
+            for (let i = 0; i < positions.count; i++) {
+                const x = basePositions.getX(i);
+                const y = basePositions.getY(i); // This is actually Z in world space due to rotation
+                
+                // Create a moving wave effect
+                // y + time * speed makes it move towards camera
+                const v = (y + time * 20.0) % 50.0;
+                
+                // Combine sine waves for "terrain" feel
+                // We add the movement to the input of the sine function
+                const waveX = Math.sin(x * 0.1) * 2.0;
+                const waveY = Math.cos((y - time * 10.0) * 0.15) * 4.0;
+                
+                // Create a "valley" in the middle
+                const valley = Math.abs(x) < 20 ? Math.abs(x) * 0.1 : 1.0;
+                
+                // Calculate height
+                let z = (waveX + waveY) * valley;
+                
+                // Flatten the horizon slightly
+                if (y > 60) z *= 0.5;
+
+                positions.setZ(i, z);
+            }
+            positions.needsUpdate = true;
+
+            // Sync solid terrain with wireframe
+            terrainSolid.geometry.attributes.position.array.set(positions.array);
+            terrainSolid.geometry.attributes.position.needsUpdate = true;
+
+            // Rotate Stars slowly
+            stars.rotation.z = time * 0.02;
+
+            // Pulse Grid Color
+            const hue = (time * 0.1) % 1;
+            const color = new THREE.Color().setHSL(0.8 + hue * 0.2, 1, 0.5);
+            terrain.material.color.lerp(color, 0.05);
+
+            renderer.render(scene, camera);
+        }
+
+        // --- Resize Handler ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
